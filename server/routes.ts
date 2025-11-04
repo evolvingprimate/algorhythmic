@@ -1,15 +1,190 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
+import { WebSocketServer, WebSocket } from "ws";
+import Stripe from "stripe";
 import { storage } from "./storage";
+import { generateArtPrompt, generateArtImage } from "./openai-service";
+import { insertArtVoteSchema, insertArtPreferenceSchema, type AudioAnalysis } from "@shared/schema";
+
+// Initialize Stripe only if keys are available (optional for MVP)
+let stripe: Stripe | null = null;
+if (process.env.STRIPE_SECRET_KEY) {
+  stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
+    apiVersion: "2023-10-16",
+  });
+} else {
+  console.warn('Stripe not configured - payment features will be unavailable');
+}
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // put application routes here
-  // prefix all routes with /api
+  
+  // Get or create user preferences
+  app.get("/api/preferences/:sessionId", async (req, res) => {
+    try {
+      const { sessionId } = req.params;
+      const preferences = await storage.getPreferencesBySession(sessionId);
+      res.json(preferences || { styles: [], artists: [] });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
 
-  // use storage to perform CRUD operations on the storage interface
-  // e.g. storage.insertUser(user) or storage.getUserByUsername(username)
+  // Save user preferences
+  app.post("/api/preferences", async (req, res) => {
+    try {
+      const validated = insertArtPreferenceSchema.parse(req.body);
+      const preferences = await storage.createOrUpdatePreferences(
+        validated.sessionId,
+        validated.styles,
+        validated.artists
+      );
+      res.json(preferences);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  // Generate art based on audio analysis
+  app.post("/api/generate-art", async (req, res) => {
+    try {
+      const { sessionId, audioAnalysis, preferences, previousVotes } = req.body;
+
+      // Validate audio analysis
+      const audio = audioAnalysis as AudioAnalysis;
+      if (!audio || typeof audio.frequency !== 'number') {
+        return res.status(400).json({ message: "Invalid audio analysis data" });
+      }
+
+      // Generate art prompt using OpenAI
+      const prompt = await generateArtPrompt({
+        audioAnalysis: audio,
+        styles: preferences?.styles || [],
+        artists: preferences?.artists || [],
+        previousVotes: previousVotes || [],
+      });
+
+      // Generate image using DALL-E
+      const imageUrl = await generateArtImage(prompt);
+
+      // Save session
+      const session = await storage.createArtSession({
+        sessionId,
+        imageUrl,
+        prompt,
+        audioFeatures: JSON.stringify(audio),
+      });
+
+      res.json({
+        imageUrl,
+        prompt,
+        session,
+      });
+    } catch (error: any) {
+      console.error("Error generating art:", error);
+      res.status(500).json({ message: "Failed to generate artwork: " + error.message });
+    }
+  });
+
+  // Submit vote
+  app.post("/api/vote", async (req, res) => {
+    try {
+      const validated = insertArtVoteSchema.parse(req.body);
+      const vote = await storage.createVote(validated);
+      res.json(vote);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  // Get voting history
+  app.get("/api/votes/:sessionId", async (req, res) => {
+    try {
+      const { sessionId } = req.params;
+      const votes = await storage.getVotesBySession(sessionId);
+      res.json(votes);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Get session history
+  app.get("/api/sessions/:sessionId", async (req, res) => {
+    try {
+      const { sessionId } = req.params;
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : 20;
+      const sessions = await storage.getSessionHistory(sessionId, limit);
+      res.json(sessions);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Stripe payment intent for subscription
+  app.post("/api/create-payment-intent", async (req, res) => {
+    if (!stripe) {
+      return res.status(503).json({ 
+        message: "Payment processing is not configured. Please contact support." 
+      });
+    }
+    
+    try {
+      const { amount } = req.body;
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: Math.round(amount * 100), // Convert to cents
+        currency: "usd",
+        metadata: {
+          product: "Algorhythmic Premium Subscription",
+        },
+      });
+      res.json({ clientSecret: paymentIntent.client_secret });
+    } catch (error: any) {
+      res.status(500).json({ message: "Error creating payment intent: " + error.message });
+    }
+  });
+
+  // Health check
+  app.get("/api/health", (req, res) => {
+    res.json({ status: "healthy", timestamp: new Date().toISOString() });
+  });
 
   const httpServer = createServer(app);
+
+  // WebSocket server for real-time audio coordination
+  const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+
+  wss.on('connection', (ws: WebSocket) => {
+    console.log('Client connected to WebSocket');
+
+    ws.on('message', async (message: string) => {
+      try {
+        const data = JSON.parse(message.toString());
+        
+        if (data.type === 'audio-analysis') {
+          // Broadcast audio analysis to all connected clients (for multi-device sync)
+          wss.clients.forEach((client) => {
+            if (client !== ws && client.readyState === WebSocket.OPEN) {
+              client.send(JSON.stringify({
+                type: 'audio-update',
+                data: data.payload,
+              }));
+            }
+          });
+        }
+      } catch (error) {
+        console.error('WebSocket message error:', error);
+      }
+    });
+
+    ws.on('close', () => {
+      console.log('Client disconnected from WebSocket');
+    });
+
+    // Send welcome message
+    ws.send(JSON.stringify({ 
+      type: 'connected', 
+      message: 'Connected to Algorhythmic WebSocket server' 
+    }));
+  });
 
   return httpServer;
 }
