@@ -60,6 +60,7 @@ export default function Display() {
   const [isIdentifyingMusic, setIsIdentifyingMusic] = useState(false);
   const [generationInterval, setGenerationInterval] = useState(1); // minutes
   const [timeUntilNext, setTimeUntilNext] = useState<number>(0); // seconds
+  const [showCountdown, setShowCountdown] = useState(true); // show countdown timer
   
   // Image history for back/forward navigation
   const [imageHistory, setImageHistory] = useState<Array<{
@@ -691,6 +692,17 @@ export default function Display() {
                   </div>
                   <span className="text-xs text-muted-foreground hidden sm:inline">Listening</span>
                 </div>
+
+                {/* Countdown Timer Toggle */}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setShowCountdown(!showCountdown)}
+                  data-testid="button-toggle-countdown"
+                  className="h-8 w-8"
+                >
+                  <Clock className={`h-4 w-4 ${showCountdown ? 'text-primary' : 'text-muted-foreground'}`} />
+                </Button>
               </>
             )}
             <ThemeToggle />
@@ -874,7 +886,7 @@ export default function Display() {
       )}
 
       {/* Countdown Timer Overlay */}
-      {isPlaying && timeUntilNext > 0 && currentImage && (
+      {isPlaying && showCountdown && timeUntilNext > 0 && currentImage && (
         <div className="fixed top-4 right-4 z-40">
           <div className="bg-background/80 backdrop-blur-md rounded-md px-3 py-2 flex items-center gap-2">
             <Clock className="h-4 w-4 text-muted-foreground" />
