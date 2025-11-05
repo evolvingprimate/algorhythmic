@@ -210,6 +210,20 @@ npm run dev
 - Test Stripe payments using test mode keys
 
 ## Recent Changes
+- **November 2025**: ACRCloud Music Identification & Audio/Timing Improvements
+  - **Music Service Migration**: Replaced AudD with ACRCloud for superior noisy audio recognition
+    - ACRCloud optimized for "Recorded Audio" mode (speaker → microphone capture)
+    - Better accuracy for music identification through phone speakers
+    - Maintains deep music-to-art integration with GPT-5 prompt analysis
+  - **Audio Mood Detection**: Enhanced genre classification accuracy
+    - Bass-heavy music (rap/hip-hop) now correctly classified as "energetic" or "dramatic"
+    - Lowered amplitude thresholds to recognize moderate-volume music
+    - Improved mood detection: energetic (bass >40 & amplitude >25), dramatic (bass >45)
+  - **Generation Timing Fix**: Precise 30-second lead time for image readiness
+    - Triggers generation at 0:30 countdown (30 seconds before interval)
+    - New image ready and displays exactly when countdown hits 0:00
+    - Lead time clamped to prevent issues with short intervals (<30s)
+    - Timing now measures display-to-display (not start-to-start)
 - **November 2025**: Landing Page Abstract Art Background - "Art That Dances to Your World"
   - Dynamic abstract animated background showcasing the platform's artistic vision
   - **Spinning Kaleidoscope**: Rotating conic gradient with pink, purple, cyan segments (20s rotation)
