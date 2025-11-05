@@ -198,7 +198,7 @@ export default function Display() {
         setCurrentArtworkSaved(data.session.isSaved || false);
       }
       setIsGenerating(false);
-      lastGenerationTime.current = Date.now();
+      // Note: lastGenerationTime is set before mutation starts in handleAudioAnalysis
     },
     onError: (error: any) => {
       toast({
@@ -370,7 +370,7 @@ export default function Display() {
       return;
     }
 
-    // Check minimum time between generations
+    // Check minimum time between generations using the ref
     const now = Date.now();
     const minInterval = currentImage ? generationInterval * 60000 : 0;
     const timeSinceLastGen = now - lastGenerationTime.current;
@@ -379,6 +379,9 @@ export default function Display() {
       return; // Too soon
     }
 
+    // Mark the generation time NOW to prevent race conditions
+    lastGenerationTime.current = now;
+    
     // Schedule new generation
     setIsGenerating(true);
     generationTimeoutRef.current = window.setTimeout(async () => {
@@ -386,7 +389,7 @@ export default function Display() {
       const musicInfo = await identifyMusic();
       generateArtMutation.mutate({ audioAnalysis: analysis, musicInfo });
       generationTimeoutRef.current = undefined;
-    }, 0); // Execute immediately since we've already waited
+    }, 0);
   };
 
   const handleStartListening = () => {
@@ -454,33 +457,41 @@ export default function Display() {
 
   // Navigation functions
   const goBack = () => {
-    if (historyIndex > 0) {
-      const newIndex = historyIndex - 1;
-      const historyItem = imageHistory[newIndex];
-      setHistoryIndex(newIndex);
-      setCurrentImage(historyItem.imageUrl);
-      setCurrentPrompt(historyItem.prompt);
-      setCurrentExplanation(historyItem.explanation);
-      setCurrentMusicInfo(historyItem.musicInfo);
-      setCurrentAudioAnalysis(historyItem.audioAnalysis);
-      setCurrentArtworkId(historyItem.artworkId);
-      setCurrentArtworkSaved(historyItem.isSaved);
-    }
+    setHistoryIndex(prevIndex => {
+      const newIndex = prevIndex - 1;
+      if (newIndex >= 0 && newIndex < imageHistory.length) {
+        const historyItem = imageHistory[newIndex];
+        // Batch all state updates
+        setCurrentImage(historyItem.imageUrl);
+        setCurrentPrompt(historyItem.prompt);
+        setCurrentExplanation(historyItem.explanation);
+        setCurrentMusicInfo(historyItem.musicInfo);
+        setCurrentAudioAnalysis(historyItem.audioAnalysis);
+        setCurrentArtworkId(historyItem.artworkId);
+        setCurrentArtworkSaved(historyItem.isSaved);
+        return newIndex;
+      }
+      return prevIndex;
+    });
   };
 
   const goForward = () => {
-    if (historyIndex < imageHistory.length - 1) {
-      const newIndex = historyIndex + 1;
-      const historyItem = imageHistory[newIndex];
-      setHistoryIndex(newIndex);
-      setCurrentImage(historyItem.imageUrl);
-      setCurrentPrompt(historyItem.prompt);
-      setCurrentExplanation(historyItem.explanation);
-      setCurrentMusicInfo(historyItem.musicInfo);
-      setCurrentAudioAnalysis(historyItem.audioAnalysis);
-      setCurrentArtworkId(historyItem.artworkId);
-      setCurrentArtworkSaved(historyItem.isSaved);
-    }
+    setHistoryIndex(prevIndex => {
+      const newIndex = prevIndex + 1;
+      if (newIndex >= 0 && newIndex < imageHistory.length) {
+        const historyItem = imageHistory[newIndex];
+        // Batch all state updates
+        setCurrentImage(historyItem.imageUrl);
+        setCurrentPrompt(historyItem.prompt);
+        setCurrentExplanation(historyItem.explanation);
+        setCurrentMusicInfo(historyItem.musicInfo);
+        setCurrentAudioAnalysis(historyItem.audioAnalysis);
+        setCurrentArtworkId(historyItem.artworkId);
+        setCurrentArtworkSaved(historyItem.isSaved);
+        return newIndex;
+      }
+      return prevIndex;
+    });
   };
 
   const canGoBack = historyIndex > 0;
