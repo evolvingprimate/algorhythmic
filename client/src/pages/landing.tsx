@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Badge } from "@/components/ui/badge";
 import { Check, Music, Sparkles, TrendingUp, Zap, Palette, Heart, Volume2 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { AnimatedBackground } from "@/components/animated-background";
 import heroImage from "@assets/generated_images/Surreal_flowing_abstract_art_0d26abec.png";
 import cubistImage from "@assets/generated_images/Cubist_geometric_composition_aa773ee7.png";
 import pointillistImage from "@assets/generated_images/Pointillist_dotted_landscape_16a33696.png";
@@ -105,7 +106,10 @@ export default function Landing() {
   const [hoveredStyle, setHoveredStyle] = useState<number | null>(null);
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background relative">
+      {/* Animated Background */}
+      <AnimatedBackground />
+      
       {/* Navigation */}
       <nav className="fixed top-0 left-0 right-0 z-50 border-b bg-background/80 backdrop-blur-xl">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -139,15 +143,6 @@ export default function Landing() {
 
       {/* Hero Section */}
       <section className="relative h-screen flex items-center justify-center overflow-hidden">
-        <div className="absolute inset-0 z-0">
-          <img 
-            src={heroImage} 
-            alt="Abstract audio visualization" 
-            className="w-full h-full object-cover"
-          />
-          <div className="absolute inset-0 bg-gradient-to-b from-background/60 via-background/70 to-background/90" />
-        </div>
-        
         <div className="relative z-10 max-w-5xl mx-auto px-4 text-center">
           <h1 className="text-5xl md:text-7xl font-bold mb-6 text-foreground">
             Your Soundtrack, Visualized
