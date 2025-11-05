@@ -23,7 +23,8 @@ import {
   ArrowLeft,
   Heart,
   Info,
-  Music
+  Music,
+  Brain
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { StyleSelector } from "@/components/style-selector";
@@ -555,21 +556,41 @@ export default function Display() {
         </div>
       )}
 
-      {/* Audio Level Indicator */}
+      {/* Audio Level Indicator and AI Brain */}
       {isPlaying && (
-        <div className="fixed top-20 right-4 z-40">
-          <div className="flex items-center gap-2 bg-background/60 backdrop-blur-md rounded-md px-3 py-2">
-            <div className="flex gap-1">
-              {[...Array(5)].map((_, i) => (
-                <div
-                  key={i}
-                  className={`w-1 h-6 rounded-full transition-colors ${
-                    audioLevel > i * 20 ? "bg-primary" : "bg-muted"
-                  }`}
-                />
-              ))}
+        <div className="fixed top-20 right-4 z-40 flex flex-col gap-3">
+          {/* AI Brain Indicator */}
+          <div className="flex items-center justify-end">
+            <div className="bg-background/60 backdrop-blur-md rounded-md px-3 py-2 flex items-center gap-2">
+              <Brain 
+                className={`h-5 w-5 text-primary transition-all duration-500 ${
+                  isGenerating 
+                    ? "animate-pulse scale-110" 
+                    : "opacity-60"
+                }`}
+                data-testid="icon-ai-brain"
+              />
+              <span className="text-xs text-muted-foreground">
+                {isGenerating ? "Generating..." : "AI Ready"}
+              </span>
             </div>
-            <span className="text-xs text-muted-foreground">Listening</span>
+          </div>
+
+          {/* Audio Level Indicator */}
+          <div className="flex items-center justify-end">
+            <div className="bg-background/60 backdrop-blur-md rounded-md px-3 py-2 flex items-center gap-2">
+              <div className="flex gap-1">
+                {[...Array(5)].map((_, i) => (
+                  <div
+                    key={i}
+                    className={`w-1 h-6 rounded-full transition-colors ${
+                      audioLevel > i * 20 ? "bg-primary" : "bg-muted"
+                    }`}
+                  />
+                ))}
+              </div>
+              <span className="text-xs text-muted-foreground">Listening</span>
+            </div>
           </div>
         </div>
       )}
