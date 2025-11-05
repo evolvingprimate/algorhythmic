@@ -100,11 +100,56 @@ export default function Display() {
     queryKey: [`/api/preferences/${sessionId.current}`],
   });
 
+  // Fetch most recent session to show cached image immediately
+  const { data: recentSessions } = useQuery<any[]>({
+    queryKey: [`/api/sessions/${sessionId.current}`],
+    refetchOnWindowFocus: false,
+    refetchOnMount: true,
+  });
+
   useEffect(() => {
     if (preferences?.styles?.length) {
       setSelectedStyles(preferences.styles);
     }
   }, [preferences]);
+
+  // Load most recent artwork on mount to avoid empty screen
+  useEffect(() => {
+    if (recentSessions && recentSessions.length > 0 && !currentImage) {
+      const mostRecent = recentSessions[0];
+      const audioFeatures = mostRecent.audioFeatures ? JSON.parse(mostRecent.audioFeatures) : null;
+      const musicInfo = mostRecent.musicTrack ? {
+        title: mostRecent.musicTrack,
+        artist: mostRecent.musicArtist || '',
+        album: mostRecent.musicAlbum || null,
+        release_date: null,
+        label: null,
+        timecode: null,
+        song_link: null
+      } : null;
+
+      // Add to history
+      const historyItem = {
+        imageUrl: mostRecent.imageUrl,
+        prompt: mostRecent.prompt,
+        explanation: mostRecent.explanation || '',
+        musicInfo,
+        audioAnalysis: audioFeatures,
+        artworkId: mostRecent.id,
+        isSaved: mostRecent.isSaved || false,
+      };
+
+      setImageHistory([historyItem]);
+      setHistoryIndex(0);
+      setCurrentImage(mostRecent.imageUrl);
+      setCurrentPrompt(mostRecent.prompt);
+      setCurrentExplanation(mostRecent.explanation || '');
+      setCurrentMusicInfo(musicInfo);
+      setCurrentAudioAnalysis(audioFeatures);
+      setCurrentArtworkId(mostRecent.id);
+      setCurrentArtworkSaved(mostRecent.isSaved || false);
+    }
+  }, [recentSessions]);
 
   // Fetch voting history
   const { data: votes } = useQuery<ArtVote[]>({
