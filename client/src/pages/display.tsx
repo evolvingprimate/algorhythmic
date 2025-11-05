@@ -227,7 +227,8 @@ export default function Display() {
       }
       setIsGenerating(false);
       isGeneratingRef.current = false;
-      // Note: lastGenerationTime is set before mutation starts in handleAudioAnalysis
+      // Update generation time when image is successfully displayed
+      lastGenerationTime.current = Date.now();
     },
     onError: (error: any) => {
       toast({
@@ -407,12 +408,16 @@ export default function Display() {
     const minInterval = currentImage ? generationInterval * 60000 : 0;
     const timeSinceLastGen = now - lastGenerationTime.current;
     
-    if (timeSinceLastGen < minInterval) {
+    // Start generation 30 seconds before the interval ends so the image is ready at 00:00
+    const generationLeadTime = Math.min(30000, minInterval); // Don't exceed interval
+    const triggerTime = minInterval - generationLeadTime;
+    
+    if (timeSinceLastGen < triggerTime) {
       return; // Too soon
     }
 
-    // Mark the generation time NOW and set ref flag to prevent race conditions
-    lastGenerationTime.current = now;
+    // Don't update lastGenerationTime here - let mutation success do it
+    // Just set the flag to prevent race conditions
     isGeneratingRef.current = true;
     
     // Schedule new generation

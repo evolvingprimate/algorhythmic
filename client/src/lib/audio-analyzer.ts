@@ -128,11 +128,25 @@ export class AudioAnalyzer {
     trebleLevel: number,
     tempo: number
   ): AudioAnalysis["mood"] {
-    // Simple mood classification based on audio characteristics
-    if (amplitude > 60 && tempo > 120) return "energetic";
-    if (amplitude < 30 && tempo < 90) return "calm";
-    if (bassLevel > 50 && amplitude > 40) return "dramatic";
-    if (trebleLevel > 50 && tempo > 100) return "playful";
+    // Improved mood classification for better genre detection
+    // Hip-hop/rap: High bass, moderate-to-high amplitude
+    if (bassLevel > 40 && amplitude > 25) return "energetic";
+    
+    // Very high energy music
+    if (amplitude > 50 && tempo > 120) return "energetic";
+    
+    // Bass-heavy dramatic music (electronic, dubstep, trap)
+    if (bassLevel > 45) return "dramatic";
+    
+    // Calm/quiet music
+    if (amplitude < 20 && tempo < 90) return "calm";
+    
+    // Bright, upbeat music (pop, dance)
+    if (trebleLevel > 40 && tempo > 100) return "playful";
+    
+    // Medium energy
+    if (amplitude > 30) return "energetic";
+    
     return "melancholic";
   }
 
