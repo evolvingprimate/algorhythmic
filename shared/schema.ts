@@ -9,6 +9,7 @@ export const artPreferences = pgTable("art_preferences", {
   sessionId: varchar("session_id").notNull(),
   styles: text("styles").array().notNull().default(sql`'{}'::text[]`),
   artists: text("artists").array().notNull().default(sql`'{}'::text[]`),
+  dynamicMode: boolean("dynamic_mode").notNull().default(false),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => ({
   sessionIdIdx: index("art_preferences_session_id_idx").on(table.sessionId),
