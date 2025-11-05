@@ -38,6 +38,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Daily usage tracking endpoints
+  app.get('/api/usage/check', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const usageCheck = await storage.checkDailyLimit(userId);
+      res.json(usageCheck);
+    } catch (error) {
+      console.error("Error checking usage limit:", error);
+      res.status(500).json({ message: "Failed to check usage limit" });
+    }
+  });
+
+  app.get('/api/usage/stats', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const today = new Date().toISOString().split('T')[0];
+      const usage = await storage.getDailyUsage(userId, today);
+      const limit = await storage.getUserDailyLimit(userId);
+      
+      res.json({
+        count: usage?.generationCount || 0,
+        limit,
+        remaining: limit - (usage?.generationCount || 0),
+        date: today,
+      });
+    } catch (error) {
+      console.error("Error fetching usage stats:", error);
+      res.status(500).json({ message: "Failed to fetch usage stats" });
+    }
+  });
+
   // Get or create user preferences
   app.get("/api/preferences/:sessionId", async (req, res) => {
     try {
@@ -70,6 +101,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { sessionId, audioAnalysis, musicInfo, preferences, previousVotes } = req.body;
 
+      // Get userId if authenticated
+      const userId = req.user?.claims?.sub || null;
+
+      // Check daily limit for authenticated users
+      if (userId) {
+        const usageCheck = await storage.checkDailyLimit(userId);
+        if (!usageCheck.canGenerate) {
+          return res.status(429).json({ 
+            message: "Daily generation limit reached",
+            count: usageCheck.count,
+            limit: usageCheck.limit,
+          });
+        }
+      }
+
       // Validate audio analysis
       const audio = audioAnalysis as AudioAnalysis;
       if (!audio || typeof audio.frequency !== 'number') {
@@ -92,9 +138,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Generate image using DALL-E
       const imageUrl = await generateArtImage(result.prompt);
 
-      // Get userId if authenticated
-      const userId = req.user?.claims?.sub || null;
-
       // Save session with music info and explanation
       const session = await storage.createArtSession({
         sessionId,
@@ -109,6 +152,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         generationExplanation: result.explanation,
         isSaved: false,
       });
+
+      // Increment daily usage for authenticated users
+      if (userId) {
+        const today = new Date().toISOString().split('T')[0];
+        await storage.incrementDailyUsage(userId, today);
+      }
 
       res.json({
         imageUrl,

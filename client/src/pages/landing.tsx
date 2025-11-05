@@ -47,46 +47,110 @@ const pricingTiers = [
     name: "Free",
     price: "$0",
     period: "forever",
-    description: "Try the magic of audio-reactive art",
+    description: "Get started with audio-reactive art",
     features: [
       "3 art generations per day",
-      "2 style selections",
-      "Standard quality (512x512)",
+      "All 71 artistic styles",
+      "HD quality (1024x1024)",
+      "Save favorite artworks",
       "Personal use only",
     ],
-    cta: "Start Free",
+    cta: "Sign Up Free",
     popular: false,
   },
   {
     name: "Premium",
-    price: "$9.99",
+    price: "$14.99",
     period: "per month",
     description: "For art lovers and music enthusiasts",
     features: [
-      "Unlimited art generations",
-      "All artistic styles & artists",
+      "10 art generations per day",
+      "All 71 artistic styles & artists",
       "HD quality (1024x1024)",
-      "Save favorite artworks",
+      "Save unlimited artworks",
       "Priority generation speed",
       "Commercial use rights",
+      "Cancel anytime, no fees",
     ],
-    cta: "Start 7-Day Trial",
+    cta: "Subscribe Now",
     popular: true,
   },
   {
     name: "Ultimate",
     price: "$19.99",
     period: "per month",
-    description: "Professional creators and venues",
+    description: "For professional creators",
     features: [
-      "Everything in Premium",
-      "4K quality (2048x2048)",
+      "20 art generations per day",
+      "All 71 artistic styles & artists",
+      "HD quality (1024x1024)",
+      "Save unlimited artworks",
+      "Priority generation speed",
+      "Commercial use rights",
+      "Multi-device sync",
+      "Cancel anytime, no fees",
+    ],
+    cta: "Subscribe Now",
+    popular: false,
+  },
+  {
+    name: "Enthusiast",
+    price: "$49.99",
+    period: "per month",
+    description: "For power users and content creators",
+    features: [
+      "50 art generations per day",
+      "All 71 artistic styles & artists",
+      "HD quality (1024x1024)",
+      "Save unlimited artworks",
+      "Priority generation speed",
+      "Commercial use rights",
+      "Multi-device sync",
+      "API access for integration",
+      "Cancel anytime, no fees",
+    ],
+    cta: "Subscribe Now",
+    popular: false,
+  },
+  {
+    name: "Business Basic",
+    price: "$199.99",
+    period: "per month",
+    description: "For small businesses and agencies",
+    features: [
+      "100 art generations per day",
+      "All 71 artistic styles & artists",
+      "HD quality (1024x1024)",
+      "Save unlimited artworks",
+      "Priority generation speed",
+      "Commercial use rights",
+      "Multi-device sync",
+      "API access for integration",
+      "Priority support",
+      "Cancel anytime, no fees",
+    ],
+    cta: "Subscribe Now",
+    popular: false,
+  },
+  {
+    name: "Business Premium",
+    price: "$499",
+    period: "per month",
+    description: "For large businesses and enterprises",
+    features: [
+      "300 art generations per day",
+      "All 71 artistic styles & artists",
+      "HD quality (1024x1024)",
+      "Save unlimited artworks",
+      "Priority generation speed",
+      "Commercial use rights",
       "Multi-device sync",
       "API access for integration",
       "White-label options",
-      "Priority support",
+      "Dedicated account manager",
+      "Cancel anytime, no fees",
     ],
-    cta: "Start 7-Day Trial",
+    cta: "Contact Sales",
     popular: false,
   },
 ];
@@ -133,9 +197,9 @@ export default function Landing() {
             </div>
             <div className="flex items-center gap-2">
               <ThemeToggle />
-              <Link href="/display">
-                <Button data-testid="button-get-started">Get Started</Button>
-              </Link>
+              <a href="/api/login">
+                <Button data-testid="button-get-started">Sign Up Free</Button>
+              </a>
             </div>
           </div>
         </div>
@@ -151,11 +215,11 @@ export default function Landing() {
             AI-generated art that dances to your world. Choose your favorite artists and styles, then watch as sound transforms into stunning visual masterpieces.
           </p>
           <div className="flex flex-wrap items-center justify-center gap-4">
-            <Link href="/display">
+            <a href="/api/login">
               <Button size="lg" className="text-lg px-8" data-testid="button-hero-start-trial">
-                Start Free Trial
+                Sign Up Free
               </Button>
-            </Link>
+            </a>
             <Button 
               size="lg" 
               variant="outline" 
@@ -277,11 +341,11 @@ export default function Landing() {
           <div className="text-center mb-16">
             <h2 className="text-4xl md:text-5xl font-bold mb-4">Choose Your Plan</h2>
             <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
-              Start free, upgrade when you're ready
+              Start free, upgrade as you grow. Cancel anytime, no fees.
             </p>
           </div>
 
-          <div className="grid md:grid-cols-3 gap-8">
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-8">
             {pricingTiers.map((tier, index) => (
               <Card 
                 key={index}

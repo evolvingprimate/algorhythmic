@@ -67,13 +67,24 @@ export const users = pgTable("users", {
   firstName: varchar("first_name"),
   lastName: varchar("last_name"),
   profileImageUrl: varchar("profile_image_url"),
-  subscriptionTier: text("subscription_tier").notNull().default("free"), // free, premium, ultimate
+  subscriptionTier: text("subscription_tier").notNull().default("free"), // free, premium, ultimate, enthusiast, business-basic, business-premium
   stripeCustomerId: text("stripe_customer_id"),
   stripeSubscriptionId: text("stripe_subscription_id"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
+
+// Daily usage tracking for image generations
+export const dailyUsage = pgTable("daily_usage", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  date: varchar("date").notNull(), // Format: YYYY-MM-DD
+  generationCount: integer("generation_count").notNull().default(0),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => ({
+  userDateIdx: index("daily_usage_user_date_idx").on(table.userId, table.date),
+}));
 
 // Insert schemas
 export const insertArtPreferenceSchema = createInsertSchema(artPreferences).omit({
@@ -98,6 +109,11 @@ export const insertUserSchema = createInsertSchema(users).omit({
   isActive: true,
 });
 
+export const insertDailyUsageSchema = createInsertSchema(dailyUsage).omit({
+  id: true,
+  updatedAt: true,
+});
+
 // Types
 export type ArtPreference = typeof artPreferences.$inferSelect;
 export type InsertArtPreference = z.infer<typeof insertArtPreferenceSchema>;
@@ -111,8 +127,23 @@ export type InsertArtSession = z.infer<typeof insertArtSessionSchema>;
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
 
+export type DailyUsage = typeof dailyUsage.$inferSelect;
+export type InsertDailyUsage = z.infer<typeof insertDailyUsageSchema>;
+
 // Replit Auth specific type
 export type UpsertUser = typeof users.$inferInsert;
+
+// Subscription tier configuration
+export const SUBSCRIPTION_TIERS = {
+  free: { name: "Free", dailyLimit: 3, price: 0 },
+  premium: { name: "Premium", dailyLimit: 10, price: 14.99 },
+  ultimate: { name: "Ultimate", dailyLimit: 20, price: 19.99 },
+  enthusiast: { name: "Enthusiast", dailyLimit: 50, price: 49.99 },
+  "business-basic": { name: "Business Basic", dailyLimit: 100, price: 199.99 },
+  "business-premium": { name: "Business Premium", dailyLimit: 300, price: 499 },
+} as const;
+
+export type SubscriptionTier = keyof typeof SUBSCRIPTION_TIERS;
 
 // Audio analysis result type
 export type AudioAnalysis = {

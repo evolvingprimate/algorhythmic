@@ -8,10 +8,14 @@ import {
   type User,
   type InsertUser,
   type UpsertUser,
+  type DailyUsage,
+  type InsertDailyUsage,
   artPreferences,
   artVotes,
   artSessions,
   users,
+  dailyUsage,
+  SUBSCRIPTION_TIERS,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { drizzle } from "drizzle-orm/neon-serverless";
@@ -41,6 +45,12 @@ export interface IStorage {
   createUser(user: InsertUser): Promise<User>;
   upsertUser(user: UpsertUser): Promise<User>; // For Replit Auth
   updateUserSubscription(id: string, tier: string, stripeCustomerId?: string, stripeSubscriptionId?: string): Promise<User>;
+  
+  // Daily Usage
+  getDailyUsage(userId: string, date: string): Promise<DailyUsage | undefined>;
+  incrementDailyUsage(userId: string, date: string): Promise<DailyUsage>;
+  getUserDailyLimit(userId: string): Promise<number>;
+  checkDailyLimit(userId: string): Promise<{ canGenerate: boolean; count: number; limit: number }>;
 }
 
 export class MemStorage implements IStorage {
@@ -48,12 +58,14 @@ export class MemStorage implements IStorage {
   private votes: Map<string, ArtVote>;
   private sessions: Map<string, ArtSession>;
   private users: Map<string, User>;
+  private dailyUsageMap: Map<string, DailyUsage>;
 
   constructor() {
     this.preferences = new Map();
     this.votes = new Map();
     this.sessions = new Map();
     this.users = new Map();
+    this.dailyUsageMap = new Map();
   }
 
   // Art Preferences
@@ -252,6 +264,60 @@ export class MemStorage implements IStorage {
     };
     this.users.set(id, updated);
     return updated;
+  }
+
+  // Daily Usage
+  async getDailyUsage(userId: string, date: string): Promise<DailyUsage | undefined> {
+    const key = `${userId}_${date}`;
+    return this.dailyUsageMap.get(key);
+  }
+
+  async incrementDailyUsage(userId: string, date: string): Promise<DailyUsage> {
+    const key = `${userId}_${date}`;
+    const existing = this.dailyUsageMap.get(key);
+
+    if (existing) {
+      const updated: DailyUsage = {
+        ...existing,
+        generationCount: existing.generationCount + 1,
+        updatedAt: new Date(),
+      };
+      this.dailyUsageMap.set(key, updated);
+      return updated;
+    }
+
+    const id = randomUUID();
+    const newUsage: DailyUsage = {
+      id,
+      userId,
+      date,
+      generationCount: 1,
+      updatedAt: new Date(),
+    };
+    this.dailyUsageMap.set(key, newUsage);
+    return newUsage;
+  }
+
+  async getUserDailyLimit(userId: string): Promise<number> {
+    const user = await this.getUser(userId);
+    if (!user) {
+      return SUBSCRIPTION_TIERS.free.dailyLimit;
+    }
+    const tier = user.subscriptionTier as keyof typeof SUBSCRIPTION_TIERS;
+    return SUBSCRIPTION_TIERS[tier]?.dailyLimit || SUBSCRIPTION_TIERS.free.dailyLimit;
+  }
+
+  async checkDailyLimit(userId: string): Promise<{ canGenerate: boolean; count: number; limit: number }> {
+    const today = new Date().toISOString().split('T')[0];
+    const usage = await this.getDailyUsage(userId, today);
+    const limit = await this.getUserDailyLimit(userId);
+    const count = usage?.generationCount || 0;
+
+    return {
+      canGenerate: count < limit,
+      count,
+      limit,
+    };
   }
 }
 
@@ -455,6 +521,64 @@ export class PostgresStorage implements IStorage {
       .returning();
     
     return updated[0];
+  }
+
+  // Daily Usage
+  async getDailyUsage(userId: string, date: string): Promise<DailyUsage | undefined> {
+    const results = await this.db
+      .select()
+      .from(dailyUsage)
+      .where(and(eq(dailyUsage.userId, userId), eq(dailyUsage.date, date)))
+      .limit(1);
+    return results[0];
+  }
+
+  async incrementDailyUsage(userId: string, date: string): Promise<DailyUsage> {
+    const existing = await this.getDailyUsage(userId, date);
+
+    if (existing) {
+      const updated = await this.db
+        .update(dailyUsage)
+        .set({
+          generationCount: existing.generationCount + 1,
+          updatedAt: new Date(),
+        })
+        .where(eq(dailyUsage.id, existing.id))
+        .returning();
+      return updated[0];
+    }
+
+    const created = await this.db
+      .insert(dailyUsage)
+      .values({
+        userId,
+        date,
+        generationCount: 1,
+      })
+      .returning();
+    return created[0];
+  }
+
+  async getUserDailyLimit(userId: string): Promise<number> {
+    const user = await this.getUser(userId);
+    if (!user) {
+      return SUBSCRIPTION_TIERS.free.dailyLimit;
+    }
+    const tier = user.subscriptionTier as keyof typeof SUBSCRIPTION_TIERS;
+    return SUBSCRIPTION_TIERS[tier]?.dailyLimit || SUBSCRIPTION_TIERS.free.dailyLimit;
+  }
+
+  async checkDailyLimit(userId: string): Promise<{ canGenerate: boolean; count: number; limit: number }> {
+    const today = new Date().toISOString().split('T')[0];
+    const usage = await this.getDailyUsage(userId, today);
+    const limit = await this.getUserDailyLimit(userId);
+    const count = usage?.generationCount || 0;
+
+    return {
+      canGenerate: count < limit,
+      count,
+      limit,
+    };
   }
 }
 
