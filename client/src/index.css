@@ -352,148 +352,113 @@
   }
 }
 
-/* Animated Neonwave Background Styles - Inspired by Synthwave Aesthetic */
+/* Abstract Art Background - "Art That Dances to Your World" */
 .animated-gradient-bg {
   position: absolute;
   width: 100%;
   height: 100%;
   background: linear-gradient(
-    180deg,
-    #0a0520 0%,
-    #1a0f3e 20%,
-    #2d1b5e 40%,
-    #4a2980 60%,
-    #6b3fa0 80%,
+    135deg,
+    #1a0f3e 0%,
+    #2d1b5e 25%,
+    #4a2980 50%,
+    #6b3fa0 75%,
     #8b5fc8 100%
   );
-  animation: gradientPulse 8s ease-in-out infinite;
+  animation: gradientFlow 15s ease-in-out infinite;
 }
 
 .animated-blob-1 {
   position: absolute;
-  top: -50%;
-  left: -50%;
-  width: 200%;
-  height: 200%;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
   background: 
-    radial-gradient(ellipse 1200px 800px at 25% 35%, 
-      rgba(255, 50, 150, 0.9) 0%, 
-      rgba(255, 50, 150, 0.7) 35%, 
-      rgba(255, 80, 170, 0.4) 45%, 
-      transparent 50%),
-    radial-gradient(ellipse 900px 1200px at 75% 65%, 
-      rgba(100, 80, 255, 0.8) 0%, 
-      rgba(100, 80, 255, 0.6) 35%, 
-      rgba(120, 100, 255, 0.3) 45%, 
-      transparent 50%);
-  animation: neonWave1 12s ease-in-out infinite;
-  filter: blur(20px) drop-shadow(0 0 30px rgba(255, 50, 150, 0.8));
+    conic-gradient(from 0deg at 30% 40%, 
+      rgba(255, 100, 200, 0.4) 0deg,
+      transparent 60deg,
+      rgba(138, 80, 255, 0.5) 120deg,
+      transparent 180deg,
+      rgba(0, 200, 255, 0.4) 240deg,
+      transparent 300deg,
+      rgba(255, 100, 200, 0.4) 360deg
+    );
+  animation: spinArt1 20s linear infinite;
   mix-blend-mode: screen;
 }
 
 .animated-blob-2 {
   position: absolute;
-  top: -50%;
-  left: -50%;
-  width: 200%;
-  height: 200%;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
   background: 
-    radial-gradient(ellipse 1000px 700px at 60% 40%, 
-      rgba(0, 255, 200, 0.9) 0%, 
-      rgba(0, 255, 200, 0.7) 35%, 
-      rgba(50, 255, 210, 0.4) 45%, 
-      transparent 50%),
-    radial-gradient(ellipse 700px 1000px at 30% 70%, 
-      rgba(255, 100, 200, 0.8) 0%, 
-      rgba(255, 100, 200, 0.6) 35%, 
-      rgba(255, 120, 210, 0.3) 45%, 
-      transparent 50%);
-  animation: neonWave2 10s ease-in-out infinite reverse;
-  filter: blur(20px) drop-shadow(0 0 30px rgba(0, 255, 200, 0.8));
-  mix-blend-mode: screen;
+    repeating-linear-gradient(
+      45deg,
+      transparent 0px,
+      rgba(255, 150, 100, 0.15) 100px,
+      transparent 200px,
+      rgba(100, 200, 255, 0.15) 300px,
+      transparent 400px
+    );
+  animation: flowStripes 25s linear infinite;
+  mix-blend-mode: overlay;
 }
 
 .animated-blob-3 {
   position: absolute;
-  top: -50%;
-  left: -50%;
-  width: 200%;
-  height: 200%;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
   background: 
-    radial-gradient(ellipse 1300px 600px at 50% 50%, 
-      rgba(138, 80, 255, 0.9) 0%, 
-      rgba(138, 80, 255, 0.7) 35%, 
-      rgba(158, 100, 255, 0.4) 45%, 
-      transparent 50%),
-    radial-gradient(ellipse 600px 1300px at 65% 55%, 
-      rgba(255, 150, 100, 0.8) 0%, 
-      rgba(255, 150, 100, 0.6) 35%, 
-      rgba(255, 170, 120, 0.3) 45%, 
-      transparent 50%);
-  animation: neonWave3 14s ease-in-out infinite;
-  filter: blur(20px) drop-shadow(0 0 30px rgba(138, 80, 255, 0.8));
+    radial-gradient(circle at 70% 30%, rgba(255, 80, 180, 0.6) 0%, transparent 25%),
+    radial-gradient(circle at 30% 70%, rgba(80, 180, 255, 0.5) 0%, transparent 25%),
+    radial-gradient(circle at 50% 50%, rgba(180, 100, 255, 0.4) 0%, transparent 30%);
+  animation: pulseCircles 8s ease-in-out infinite;
   mix-blend-mode: screen;
 }
 
-@keyframes gradientPulse {
+@keyframes gradientFlow {
   0%, 100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+@keyframes spinArt1 {
+  0% {
+    transform: rotate(0deg) scale(1.5);
+  }
+  100% {
+    transform: rotate(360deg) scale(1.5);
+  }
+}
+
+@keyframes flowStripes {
+  0% {
+    transform: translateX(0) translateY(0);
+  }
+  100% {
+    transform: translateX(400px) translateY(400px);
+  }
+}
+
+@keyframes pulseCircles {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.8;
+  }
+  33% {
+    transform: scale(1.3);
+    opacity: 0.6;
+  }
+  66% {
+    transform: scale(0.9);
     opacity: 1;
-  }
-  50% {
-    opacity: 0.85;
-  }
-}
-
-@keyframes neonWave1 {
-  0% {
-    transform: translate(0%, 0%) rotate(0deg) scale(1);
-  }
-  25% {
-    transform: translate(8%, -12%) rotate(15deg) scale(1.15);
-  }
-  50% {
-    transform: translate(-10%, 5%) rotate(-12deg) scale(0.9);
-  }
-  75% {
-    transform: translate(6%, -8%) rotate(10deg) scale(1.1);
-  }
-  100% {
-    transform: translate(0%, 0%) rotate(0deg) scale(1);
-  }
-}
-
-@keyframes neonWave2 {
-  0% {
-    transform: translate(0%, 0%) rotate(0deg) scale(1);
-  }
-  30% {
-    transform: translate(-12%, 10%) rotate(-18deg) scale(1.2);
-  }
-  60% {
-    transform: translate(10%, -10%) rotate(14deg) scale(0.85);
-  }
-  85% {
-    transform: translate(-6%, 6%) rotate(-10deg) scale(1.12);
-  }
-  100% {
-    transform: translate(0%, 0%) rotate(0deg) scale(1);
-  }
-}
-
-@keyframes neonWave3 {
-  0% {
-    transform: translate(0%, 0%) rotate(0deg) scale(1);
-  }
-  35% {
-    transform: translate(6%, 12%) rotate(20deg) scale(0.92);
-  }
-  65% {
-    transform: translate(-8%, -6%) rotate(-16deg) scale(1.18);
-  }
-  90% {
-    transform: translate(8%, -8%) rotate(12deg) scale(0.95);
-  }
-  100% {
-    transform: translate(0%, 0%) rotate(0deg) scale(1);
   }
 }
