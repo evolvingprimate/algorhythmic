@@ -167,32 +167,19 @@ Provide structured output with SONG INSIGHT, VISUAL LANGUAGE, and FINAL PROMPT s
       }
     }
 
-    // Generate explanation using the song insight
-    const explanationResponse = await openai.chat.completions.create({
-      model: "gpt-5",
-      messages: [
-        {
-          role: "system",
-          content: "You are an art curator explaining the creative choices behind AI-generated artwork. Be concise but insightful."
-        },
-        {
-          role: "user",
-          content: `Explain in 2-3 sentences why this specific artwork was created based on these inputs:
-          
-${musicInfo ? `Music: "${musicInfo.title}" by ${musicInfo.artist}` : "No specific music identified"}
-${songInsight ? `\nSong Analysis: ${songInsight}` : ""}
-${visualLanguage ? `\nVisual Approach: ${visualLanguage}` : ""}
-Audio mood: ${audioAnalysis.mood}
-User preferences: ${styleContext} ${artistContext}
-Generated prompt: ${artPrompt}
-
-${musicInfo ? "Explain how the song's music video aesthetic, lyrical themes, and genre influenced the visual artwork." : "Explain the creative connection between the audio mood and the visual artwork."}`
-        }
-      ],
-    });
-
-    const explanation = explanationResponse.choices[0].message.content || 
-      `This artwork was inspired by ${musicInfo ? `"${musicInfo.title}" by ${musicInfo.artist}` : "the audio's"} ${audioAnalysis.mood} mood, translated into ${styleContext}.`;
+    // Build explanation from existing insights (no second API call needed)
+    let explanation = "";
+    if (musicInfo && songInsight && visualLanguage) {
+      // Use the rich analysis we already have from the first GPT call
+      explanation = `${musicInfo.title} by ${musicInfo.artist}: ${visualLanguage}`;
+    } else if (songInsight && visualLanguage) {
+      explanation = visualLanguage;
+    } else {
+      // Fallback explanation
+      explanation = musicInfo 
+        ? `Inspired by "${musicInfo.title}" by ${musicInfo.artist}, this artwork captures the ${audioAnalysis.mood} essence of the music.`
+        : `This artwork reflects the ${audioAnalysis.mood} mood detected in the audio, expressed through ${styleContext}.`;
+    }
 
     return { prompt: artPrompt, explanation };
   } catch (error) {

@@ -408,8 +408,9 @@ export default function Display() {
     const minInterval = currentImage ? generationInterval * 60000 : 0;
     const timeSinceLastGen = now - lastGenerationTime.current;
     
-    // Start generation 30 seconds before the interval ends so the image is ready at 00:00
-    const generationLeadTime = Math.min(30000, minInterval); // Don't exceed interval
+    // Start generation 60 seconds before the interval ends so the image is ready at 00:00
+    // (GPT-5 prompt generation + DALL-E image generation takes ~45-65 seconds)
+    const generationLeadTime = Math.min(60000, minInterval); // Don't exceed interval
     const triggerTime = minInterval - generationLeadTime;
     
     if (timeSinceLastGen < triggerTime) {
