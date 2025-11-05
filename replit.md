@@ -210,7 +210,18 @@ npm run dev
 - Test Stripe payments using test mode keys
 
 ## Recent Changes
-- **November 2025**: Navigation and startup improvements
+- **November 2025**: Music-to-Art Deep Integration Enhancement
+  - **Major Enhancement**: GPT-5 now deeply analyzes identified music for artwork generation
+    - Structured prompt format: SONG INSIGHT → VISUAL LANGUAGE → FINAL PROMPT
+    - Analyzes music video aesthetics (real or imaginatively reconstructed)
+    - Incorporates lyrical themes and emotional content
+    - Applies genre-specific visual culture (hip-hop → street photography, urban landscapes, graffiti, music video cinematography)
+  - Genre visual mappings: Hip-Hop, Rock, Electronic, Pop, Jazz, Classical
+  - Robust parsing with markdown support and multiple fallback layers
+  - Prompt validation (length limits, content verification)
+  - Hip-hop track verification with warning logs for missing visual cues
+  - Music Detection section always visible in explanation dialog
+- **Navigation and startup improvements**:
   - Fixed back/forward navigation using useEffect to avoid stale closure issues
   - Added automatic loading of most recent artwork on app start (eliminates empty "Ready to Create" screen)
   - Improved generation throttling with proper ref management (isGeneratingRef, lastGenerationTime)
@@ -218,7 +229,6 @@ npm run dev
   - Disabled image cache to ensure unique images for proper navigation (cache was causing all similar-mood images to be identical)
   - Moved brain icon and listening meter to top bar for cleaner UI
   - Added countdown timer overlay on image with toggle button in top bar
-  - Music identification info (artist, track, album) already displayed in explanation dialog
 - **January 2025**: Initial MVP implementation with all core features
   - Full frontend with landing, display, and subscription pages
   - Backend with OpenAI integration and Stripe payments

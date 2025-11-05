@@ -87,7 +87,7 @@ When music is identified, you MUST analyze it thoroughly before creating the pro
 **OUTPUT FORMAT (REQUIRED):**
 
 SONG INSIGHT:
-[If music identified: Analyze the specific song's music video aesthetic (if you know it exists), lyrical themes, emotional tone, and cultural context. If music video doesn't exist, imaginatively reconstruct what it might look like based on the artist's style and the song's themes. If no music: Note genre from audio mood]
+[If music identified: First line must be "GENRE: [genre]" (e.g., "GENRE: Hip-Hop" or "GENRE: Rock"). Then analyze the specific song's music video aesthetic (if you know it exists), lyrical themes, emotional tone, and cultural context. If music video doesn't exist, imaginatively reconstruct what it might look like based on the artist's style and the song's themes. If no music: Note "GENRE: Unknown" and describe audio mood]
 
 VISUAL LANGUAGE:
 [Translate the music/audio into specific visual elements: color palettes, composition style, lighting, mood, cultural references, artistic techniques]
@@ -116,14 +116,56 @@ Provide structured output with SONG INSIGHT, VISUAL LANGUAGE, and FINAL PROMPT s
 
     const fullResponse = response.choices[0].message.content || "";
     
-    // Parse structured response (using [\s\S] for cross-line matching instead of 's' flag)
-    const finalPromptMatch = fullResponse.match(/FINAL PROMPT:\s*\n?([\s\S]+?)(?:\n\n|$)/);
-    const songInsightMatch = fullResponse.match(/SONG INSIGHT:\s*\n?([\s\S]+?)(?=\n\nVISUAL LANGUAGE:|$)/);
-    const visualLanguageMatch = fullResponse.match(/VISUAL LANGUAGE:\s*\n?([\s\S]+?)(?=\n\nFINAL PROMPT:|$)/);
+    // Parse structured response - accept markdown variants (##, **, etc.)
+    const finalPromptMatch = fullResponse.match(/(?:#+\s*)?(?:\*\*)?FINAL PROMPT:?\*?\*?\s*\n?([\s\S]+?)(?:\n\n|$)/i);
+    const songInsightMatch = fullResponse.match(/(?:#+\s*)?(?:\*\*)?SONG INSIGHT:?\*?\*?\s*\n?([\s\S]+?)(?=\n\n(?:#+\s*)?(?:\*\*)?VISUAL LANGUAGE:|$)/i);
+    const visualLanguageMatch = fullResponse.match(/(?:#+\s*)?(?:\*\*)?VISUAL LANGUAGE:?\*?\*?\s*\n?([\s\S]+?)(?=\n\n(?:#+\s*)?(?:\*\*)?FINAL PROMPT:|$)/i);
     
-    const artPrompt = finalPromptMatch?.[1]?.trim() || fullResponse.split('\n').pop()?.trim() || "Abstract dreamlike artwork with flowing colors and dynamic energy";
+    let artPrompt = finalPromptMatch?.[1]?.trim() || "";
     const songInsight = songInsightMatch?.[1]?.trim() || "";
     const visualLanguage = visualLanguageMatch?.[1]?.trim() || "";
+    
+    // Validate and clean the final prompt
+    if (!artPrompt) {
+      console.warn("GPT-5 response missing FINAL PROMPT section, using fallback parsing");
+      // Try to extract last meaningful line as fallback
+      const lines = fullResponse.split('\n').filter(l => l.trim().length > 20);
+      artPrompt = lines[lines.length - 1]?.trim() || "";
+    }
+    
+    // Enforce prompt constraints for DALL-E
+    if (artPrompt.length > 400) {
+      console.warn(`FINAL PROMPT too long (${artPrompt.length} chars), truncating to 400`);
+      artPrompt = artPrompt.substring(0, 397) + "...";
+    }
+    
+    // Final fallback if still empty
+    if (!artPrompt || artPrompt.length < 10) {
+      console.error("Could not parse valid prompt from GPT-5, using genre-aware fallback");
+      artPrompt = `${moodMapping[audioAnalysis.mood]}, ${styleContext} ${artistContext}, dreamlike artistic composition`;
+    }
+    
+    // Extract genre from SONG INSIGHT and verify genre-specific cues
+    if (musicInfo && artPrompt && songInsight) {
+      const genreMatch = songInsight.match(/GENRE:\s*([^\n]+)/i);
+      const genre = genreMatch?.[1]?.trim().toLowerCase() || "";
+      
+      const lowerPrompt = artPrompt.toLowerCase();
+      
+      // Verify hip-hop/rap tracks include expected visual cues
+      if (genre.includes('hip-hop') || genre.includes('hip hop') || genre.includes('rap')) {
+        const hasHipHopCues = lowerPrompt.includes('urban') || 
+                              lowerPrompt.includes('street') || 
+                              lowerPrompt.includes('graffiti') ||
+                              lowerPrompt.includes('neon') ||
+                              lowerPrompt.includes('city') ||
+                              lowerPrompt.includes('music video');
+        
+        if (!hasHipHopCues) {
+          console.warn(`Hip-hop track "${musicInfo.title}" by ${musicInfo.artist} missing expected visual cues (urban/street/graffiti/neon/city/music video) in prompt: ${artPrompt}`);
+        }
+      }
+    }
 
     // Generate explanation using the song insight
     const explanationResponse = await openai.chat.completions.create({
