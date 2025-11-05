@@ -122,11 +122,11 @@ export default function Display() {
       const musicInfo = mostRecent.musicTrack ? {
         title: mostRecent.musicTrack,
         artist: mostRecent.musicArtist || '',
-        album: mostRecent.musicAlbum || null,
-        release_date: null,
-        label: null,
-        timecode: null,
-        song_link: null
+        album: mostRecent.musicAlbum || undefined,
+        release_date: undefined,
+        label: undefined,
+        timecode: undefined,
+        song_link: undefined
       } : null;
 
       // Add to history
@@ -513,8 +513,10 @@ export default function Display() {
 
   // Navigation functions - only update index
   const goBack = () => {
+    console.log('goBack called, current index:', historyIndex, 'history length:', imageHistory.length);
     setHistoryIndex(prevIndex => {
       const newIndex = prevIndex - 1;
+      console.log('goBack: prevIndex=', prevIndex, 'newIndex=', newIndex);
       if (newIndex >= 0) {
         historyIndexRef.current = newIndex;
         return newIndex;
@@ -524,8 +526,10 @@ export default function Display() {
   };
 
   const goForward = () => {
+    console.log('goForward called, current index:', historyIndex, 'history length:', imageHistory.length);
     setHistoryIndex(prevIndex => {
       const newIndex = prevIndex + 1;
+      console.log('goForward: prevIndex=', prevIndex, 'newIndex=', newIndex);
       if (newIndex < imageHistory.length) {
         historyIndexRef.current = newIndex;
         return newIndex;
@@ -536,8 +540,10 @@ export default function Display() {
 
   // Update display state when history index changes
   useEffect(() => {
+    console.log('useEffect triggered - historyIndex:', historyIndex, 'imageHistory.length:', imageHistory.length);
     if (historyIndex >= 0 && historyIndex < imageHistory.length) {
       const historyItem = imageHistory[historyIndex];
+      console.log('Updating display to:', historyItem.imageUrl.substring(0, 50));
       setCurrentImage(historyItem.imageUrl);
       setCurrentPrompt(historyItem.prompt);
       setCurrentExplanation(historyItem.explanation);
@@ -654,13 +660,38 @@ export default function Display() {
                 )}
               </div>
             )}
-            {isPlaying && timeUntilNext > 0 && (
-              <div className="flex items-center gap-2 mr-2" data-testid="countdown-timer">
-                <Clock className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm font-mono text-muted-foreground">
-                  {Math.floor(timeUntilNext / 60)}:{(timeUntilNext % 60).toString().padStart(2, '0')}
-                </span>
-              </div>
+            {isPlaying && (
+              <>
+                {/* AI Brain Indicator */}
+                <div className="flex items-center gap-2 mr-2">
+                  <Brain 
+                    className={`h-4 w-4 text-primary transition-all duration-500 ${
+                      isGenerating 
+                        ? "animate-pulse scale-110" 
+                        : "opacity-60"
+                    }`}
+                    data-testid="icon-ai-brain"
+                  />
+                  <span className="text-xs text-muted-foreground hidden sm:inline">
+                    {isGenerating ? "Generating..." : "Ready"}
+                  </span>
+                </div>
+                
+                {/* Audio Level Indicator */}
+                <div className="flex items-center gap-2 mr-2">
+                  <div className="flex gap-1">
+                    {[...Array(5)].map((_, i) => (
+                      <div
+                        key={i}
+                        className={`w-1 h-4 rounded-full transition-colors ${
+                          audioLevel > i * 20 ? "bg-primary" : "bg-muted"
+                        }`}
+                      />
+                    ))}
+                  </div>
+                  <span className="text-xs text-muted-foreground hidden sm:inline">Listening</span>
+                </div>
+              </>
             )}
             <ThemeToggle />
             <Button 
@@ -842,41 +873,14 @@ export default function Display() {
         </div>
       )}
 
-      {/* Audio Level Indicator and AI Brain */}
-      {isPlaying && (
-        <div className="fixed top-20 right-4 z-40 flex flex-col gap-3">
-          {/* AI Brain Indicator */}
-          <div className="flex items-center justify-end">
-            <div className="bg-background/60 backdrop-blur-md rounded-md px-3 py-2 flex items-center gap-2">
-              <Brain 
-                className={`h-5 w-5 text-primary transition-all duration-500 ${
-                  isGenerating 
-                    ? "animate-pulse scale-110" 
-                    : "opacity-60"
-                }`}
-                data-testid="icon-ai-brain"
-              />
-              <span className="text-xs text-muted-foreground">
-                {isGenerating ? "Generating..." : "AI Ready"}
-              </span>
-            </div>
-          </div>
-
-          {/* Audio Level Indicator */}
-          <div className="flex items-center justify-end">
-            <div className="bg-background/60 backdrop-blur-md rounded-md px-3 py-2 flex items-center gap-2">
-              <div className="flex gap-1">
-                {[...Array(5)].map((_, i) => (
-                  <div
-                    key={i}
-                    className={`w-1 h-6 rounded-full transition-colors ${
-                      audioLevel > i * 20 ? "bg-primary" : "bg-muted"
-                    }`}
-                  />
-                ))}
-              </div>
-              <span className="text-xs text-muted-foreground">Listening</span>
-            </div>
+      {/* Countdown Timer Overlay */}
+      {isPlaying && timeUntilNext > 0 && currentImage && (
+        <div className="fixed top-4 right-4 z-40">
+          <div className="bg-background/80 backdrop-blur-md rounded-md px-3 py-2 flex items-center gap-2">
+            <Clock className="h-4 w-4 text-muted-foreground" />
+            <span className="text-lg font-mono text-foreground font-bold">
+              {Math.floor(timeUntilNext / 60)}:{(timeUntilNext % 60).toString().padStart(2, '0')}
+            </span>
           </div>
         </div>
       )}
