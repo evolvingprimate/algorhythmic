@@ -18,8 +18,8 @@ import {
   Sparkles,
   Volume2,
   VolumeX,
-  Pause,
-  Play,
+  Mic,
+  MicOff,
   ArrowLeft,
   Heart,
   Info,
@@ -451,9 +451,9 @@ export default function Display() {
                 data-testid="button-play-pause"
               >
                 {isPlaying ? (
-                  <Pause className="h-5 w-5" />
+                  <MicOff className="h-5 w-5" />
                 ) : (
-                  <Play className="h-5 w-5" />
+                  <Mic className="h-5 w-5" />
                 )}
               </Button>
               
