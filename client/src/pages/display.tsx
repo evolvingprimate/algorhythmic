@@ -45,6 +45,7 @@ export default function Display() {
   const [currentImage, setCurrentImage] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [audioLevel, setAudioLevel] = useState(0);
+  const [frequencyBands, setFrequencyBands] = useState({ bass: 0, mids: 0, highs: 0 });
   const [showControls, setShowControls] = useState(true);
   const [volume, setVolume] = useState([80]);
   const [selectedStyles, setSelectedStyles] = useState<string[]>([]);
@@ -400,6 +401,11 @@ export default function Display() {
   const handleAudioAnalysis = (analysis: AudioAnalysis) => {
     setCurrentAudioAnalysis(analysis);
     setAudioLevel(analysis.amplitude);
+    setFrequencyBands({
+      bass: analysis.bassLevel,
+      mids: analysis.amplitude,
+      highs: analysis.trebleLevel,
+    });
 
     // Send to WebSocket for multi-device sync
     wsClientRef.current?.send('audio-analysis', analysis);
@@ -662,19 +668,37 @@ export default function Display() {
                   </span>
                 </div>
                 
-                {/* Audio Level Indicator */}
-                <div className="flex items-center gap-2 mr-2">
-                  <div className="flex gap-1">
-                    {[...Array(5)].map((_, i) => (
-                      <div
-                        key={i}
-                        className={`w-1 h-4 rounded-full transition-colors ${
-                          audioLevel > i * 20 ? "bg-primary" : "bg-muted"
-                        }`}
+                {/* Frequency Meter */}
+                <div className="flex items-center gap-3 mr-2 px-3 py-1.5 rounded-md bg-muted/30" data-testid="frequency-meter">
+                  <div className="flex flex-col items-center gap-0.5 min-w-[32px]">
+                    <div className="h-12 w-6 bg-background/50 rounded-sm flex flex-col-reverse gap-0.5 p-0.5 overflow-hidden">
+                      <div 
+                        className="w-full bg-gradient-to-t from-blue-500 to-blue-400 rounded-sm transition-all duration-100"
+                        style={{ height: `${Math.min(frequencyBands.bass, 100)}%` }}
                       />
-                    ))}
+                    </div>
+                    <span className="text-[10px] text-muted-foreground font-medium">BASS</span>
                   </div>
-                  <span className="text-xs text-muted-foreground hidden sm:inline">Listening</span>
+                  
+                  <div className="flex flex-col items-center gap-0.5 min-w-[32px]">
+                    <div className="h-12 w-6 bg-background/50 rounded-sm flex flex-col-reverse gap-0.5 p-0.5 overflow-hidden">
+                      <div 
+                        className="w-full bg-gradient-to-t from-green-500 to-green-400 rounded-sm transition-all duration-100"
+                        style={{ height: `${Math.min(frequencyBands.mids, 100)}%` }}
+                      />
+                    </div>
+                    <span className="text-[10px] text-muted-foreground font-medium">MIDS</span>
+                  </div>
+                  
+                  <div className="flex flex-col items-center gap-0.5 min-w-[32px]">
+                    <div className="h-12 w-6 bg-background/50 rounded-sm flex flex-col-reverse gap-0.5 p-0.5 overflow-hidden">
+                      <div 
+                        className="w-full bg-gradient-to-t from-purple-500 to-purple-400 rounded-sm transition-all duration-100"
+                        style={{ height: `${Math.min(frequencyBands.highs, 100)}%` }}
+                      />
+                    </div>
+                    <span className="text-[10px] text-muted-foreground font-medium">HIGHS</span>
+                  </div>
                 </div>
 
                 {/* Countdown Timer Toggle */}
