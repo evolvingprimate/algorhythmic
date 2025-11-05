@@ -4,6 +4,13 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Slider } from "@/components/ui/slider";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { 
   ThumbsUp, 
   ThumbsDown, 
@@ -14,7 +21,9 @@ import {
   Pause,
   Play,
   ArrowLeft,
-  Heart
+  Heart,
+  Info,
+  Music
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { StyleSelector } from "@/components/style-selector";
@@ -24,7 +33,7 @@ import { AudioAnalyzer } from "@/lib/audio-analyzer";
 import { WebSocketClient } from "@/lib/websocket-client";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
-import type { AudioAnalysis, ArtVote, ArtPreference } from "@shared/schema";
+import type { AudioAnalysis, ArtVote, ArtPreference, MusicIdentification } from "@shared/schema";
 
 export default function Display() {
   const [isPlaying, setIsPlaying] = useState(false);
@@ -40,11 +49,16 @@ export default function Display() {
   const [currentAudioAnalysis, setCurrentAudioAnalysis] = useState<AudioAnalysis | null>(null);
   const [currentArtworkId, setCurrentArtworkId] = useState<string | null>(null);
   const [currentArtworkSaved, setCurrentArtworkSaved] = useState(false);
+  const [currentMusicInfo, setCurrentMusicInfo] = useState<MusicIdentification | null>(null);
+  const [currentExplanation, setCurrentExplanation] = useState<string>("");
+  const [showExplanation, setShowExplanation] = useState(false);
+  const [isIdentifyingMusic, setIsIdentifyingMusic] = useState(false);
   
   const audioAnalyzerRef = useRef<AudioAnalyzer | null>(null);
   const wsClientRef = useRef<WebSocketClient | null>(null);
   const hideControlsTimeoutRef = useRef<number>();
   const generationTimeoutRef = useRef<number>();
+  const musicIdentificationTimeoutRef = useRef<number>();
   const sessionId = useRef(crypto.randomUUID());
   
   const { toast } = useToast();
@@ -84,10 +98,11 @@ export default function Display() {
 
   // Generate art mutation
   const generateArtMutation = useMutation({
-    mutationFn: async (audioAnalysis: AudioAnalysis) => {
+    mutationFn: async ({ audioAnalysis, musicInfo }: { audioAnalysis: AudioAnalysis; musicInfo: MusicIdentification | null }) => {
       const res = await apiRequest("POST", "/api/generate-art", {
         sessionId: sessionId.current,
         audioAnalysis,
+        musicInfo,
         preferences: {
           styles: selectedStyles,
           artists: [],
@@ -99,6 +114,8 @@ export default function Display() {
     onSuccess: (data) => {
       setCurrentImage(data.imageUrl);
       setCurrentPrompt(data.prompt);
+      setCurrentExplanation(data.explanation);
+      setCurrentMusicInfo(data.musicInfo);
       setCurrentArtworkId(data.session.id);
       setCurrentArtworkSaved(data.session.isSaved || false);
       setIsGenerating(false);
@@ -197,6 +214,52 @@ export default function Display() {
     };
   }, []);
 
+  // Identify music from audio
+  const identifyMusic = async () => {
+    if (!audioAnalyzerRef.current) return null;
+    
+    try {
+      setIsIdentifyingMusic(true);
+      const audioBlob = await audioAnalyzerRef.current.captureAudioSample(5000);
+      
+      if (!audioBlob) {
+        console.warn("Could not capture audio sample for music identification");
+        return null;
+      }
+
+      const arrayBuffer = await audioBlob.arrayBuffer();
+      const res = await fetch("/api/identify-music", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/octet-stream",
+        },
+        body: arrayBuffer,
+      });
+
+      if (!res.ok) {
+        console.warn("Music identification failed:", res.statusText);
+        return null;
+      }
+
+      const data = await res.json();
+      setIsIdentifyingMusic(false);
+      
+      if (data.musicInfo) {
+        toast({
+          title: "Music Identified",
+          description: `${data.musicInfo.title} by ${data.musicInfo.artist}`,
+        });
+        return data.musicInfo;
+      }
+      
+      return null;
+    } catch (error) {
+      console.error("Error identifying music:", error);
+      setIsIdentifyingMusic(false);
+      return null;
+    }
+  };
+
   // Handle audio analysis and art generation
   const handleAudioAnalysis = (analysis: AudioAnalysis) => {
     setCurrentAudioAnalysis(analysis);
@@ -208,8 +271,10 @@ export default function Display() {
     // Generate new art every 12 seconds based on audio changes
     if (!isGenerating && !generationTimeoutRef.current) {
       setIsGenerating(true); // Set immediately to prevent duplicate requests
-      generationTimeoutRef.current = window.setTimeout(() => {
-        generateArtMutation.mutate(analysis);
+      generationTimeoutRef.current = window.setTimeout(async () => {
+        // Try to identify music before generating art
+        const musicInfo = await identifyMusic();
+        generateArtMutation.mutate({ audioAnalysis: analysis, musicInfo });
         generationTimeoutRef.current = undefined;
       }, currentImage ? 12000 : 0); // First generation immediate, then every 12s
     }
@@ -417,6 +482,17 @@ export default function Display() {
             {/* Vote and Save Buttons */}
             {currentImage && (
               <div className="flex items-center gap-3">
+                {currentExplanation && (
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-14 w-14"
+                    onClick={() => setShowExplanation(true)}
+                    data-testid="button-show-explanation"
+                  >
+                    <Info className="h-6 w-6" />
+                  </Button>
+                )}
                 <Button
                   variant="outline"
                   size="icon"
@@ -461,6 +537,14 @@ export default function Display() {
           }`}
         >
           <div className="bg-background/60 backdrop-blur-md rounded-md px-3 py-2 max-w-xs">
+            {currentMusicInfo && (
+              <div className="flex items-center gap-2 mb-1">
+                <Music className="h-4 w-4 text-primary" />
+                <p className="text-sm font-medium truncate">
+                  {currentMusicInfo.title} - {currentMusicInfo.artist}
+                </p>
+              </div>
+            )}
             <p className="text-sm font-medium">Style: {selectedStyles[0] || "Mixed"}</p>
             <p className="text-xs text-muted-foreground">
               Mood: {currentAudioAnalysis.mood} · {new Date().toLocaleTimeString()}
@@ -510,10 +594,61 @@ export default function Display() {
           <div className="flex flex-col items-center gap-4">
             <div className="animate-spin h-12 w-12 border-4 border-primary border-t-transparent rounded-full" />
             <p className="text-lg font-medium">Creating your masterpiece...</p>
-            <p className="text-sm text-muted-foreground">Analyzing audio and generating art</p>
+            <p className="text-sm text-muted-foreground">
+              {isIdentifyingMusic ? "Identifying music..." : "Analyzing audio and generating art"}
+            </p>
           </div>
         </div>
       )}
+
+      {/* Explanation Dialog */}
+      <Dialog open={showExplanation} onOpenChange={setShowExplanation}>
+        <DialogContent data-testid="dialog-explanation">
+          <DialogHeader>
+            <DialogTitle>Why This Artwork?</DialogTitle>
+            <DialogDescription>
+              Understanding the creative choices behind this generation
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            {currentMusicInfo && (
+              <div className="space-y-2">
+                <h4 className="text-sm font-medium flex items-center gap-2">
+                  <Music className="h-4 w-4 text-primary" />
+                  Identified Music
+                </h4>
+                <div className="rounded-md bg-muted p-3">
+                  <p className="text-sm font-medium">{currentMusicInfo.title}</p>
+                  <p className="text-sm text-muted-foreground">{currentMusicInfo.artist}</p>
+                  {currentMusicInfo.album && (
+                    <p className="text-xs text-muted-foreground mt-1">Album: {currentMusicInfo.album}</p>
+                  )}
+                </div>
+              </div>
+            )}
+            
+            {currentAudioAnalysis && (
+              <div className="space-y-2">
+                <h4 className="text-sm font-medium">Audio Characteristics</h4>
+                <div className="rounded-md bg-muted p-3 space-y-1">
+                  <p className="text-sm">Mood: <span className="font-medium">{currentAudioAnalysis.mood}</span></p>
+                  <p className="text-sm">Energy: <span className="font-medium">
+                    {currentAudioAnalysis.amplitude > 70 ? "High" : currentAudioAnalysis.amplitude > 40 ? "Medium" : "Low"}
+                  </span></p>
+                  <p className="text-sm">Style: <span className="font-medium">{selectedStyles.join(", ")}</span></p>
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <h4 className="text-sm font-medium">Creative Explanation</h4>
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                {currentExplanation}
+              </p>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

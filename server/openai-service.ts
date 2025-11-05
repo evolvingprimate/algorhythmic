@@ -137,7 +137,7 @@ export async function generateArtImage(prompt: string): Promise<string> {
       quality: "standard",
     });
 
-    return response.data[0].url || "";
+    return response.data?.[0]?.url || "";
   } catch (error) {
     console.error("Error generating art image:", error);
     throw new Error("Failed to generate artwork");

@@ -164,4 +164,48 @@ export class AudioAnalyzer {
     const average = this.dataArray.reduce((a, b) => a + b, 0) / this.dataArray.length;
     return (average / 255) * 100;
   }
+
+  async captureAudioSample(durationMs: number = 5000): Promise<Blob | null> {
+    if (!this.mediaStream) {
+      console.warn("No media stream available for audio capture");
+      return null;
+    }
+
+    try {
+      const mediaRecorder = new MediaRecorder(this.mediaStream, {
+        mimeType: 'audio/webm',
+      });
+
+      const chunks: Blob[] = [];
+
+      return new Promise((resolve, reject) => {
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+            chunks.push(event.data);
+          }
+        };
+
+        mediaRecorder.onstop = () => {
+          const audioBlob = new Blob(chunks, { type: 'audio/webm' });
+          resolve(audioBlob);
+        };
+
+        mediaRecorder.onerror = (error) => {
+          console.error("MediaRecorder error:", error);
+          reject(error);
+        };
+
+        mediaRecorder.start();
+
+        setTimeout(() => {
+          if (mediaRecorder.state === 'recording') {
+            mediaRecorder.stop();
+          }
+        }, durationMs);
+      });
+    } catch (error) {
+      console.error("Error capturing audio sample:", error);
+      return null;
+    }
+  }
 }
