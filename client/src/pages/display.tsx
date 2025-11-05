@@ -21,6 +21,9 @@ import {
   Mic,
   MicOff,
   ArrowLeft,
+  ArrowRight,
+  ChevronLeft,
+  ChevronRight,
   Heart,
   Info,
   Music,
@@ -56,6 +59,18 @@ export default function Display() {
   const [showExplanation, setShowExplanation] = useState(false);
   const [isIdentifyingMusic, setIsIdentifyingMusic] = useState(false);
   const [generationInterval, setGenerationInterval] = useState(1); // minutes
+  
+  // Image history for back/forward navigation
+  const [imageHistory, setImageHistory] = useState<Array<{
+    imageUrl: string;
+    prompt: string;
+    explanation: string;
+    musicInfo: MusicIdentification | null;
+    audioAnalysis: AudioAnalysis | null;
+    artworkId: string | null;
+    isSaved: boolean;
+  }>>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
   
   const audioAnalyzerRef = useRef<AudioAnalyzer | null>(null);
   const wsClientRef = useRef<WebSocketClient | null>(null);
@@ -142,11 +157,35 @@ export default function Display() {
       
       return data;
     },
-    onSuccess: (data) => {
+    onSuccess: (data, variables) => {
+      const newHistoryItem = {
+        imageUrl: data.imageUrl,
+        prompt: data.prompt,
+        explanation: data.explanation,
+        musicInfo: data.musicInfo,
+        audioAnalysis: variables.audioAnalysis,
+        artworkId: data.session?.id || null,
+        isSaved: data.session?.isSaved || false,
+      };
+      
+      // Add to history - if viewing an old image, truncate future history
+      setImageHistory(prev => {
+        const newHistory = historyIndex >= 0 && historyIndex < prev.length - 1
+          ? [...prev.slice(0, historyIndex + 1), newHistoryItem]
+          : [...prev, newHistoryItem];
+        return newHistory;
+      });
+      setHistoryIndex(prev => historyIndex >= 0 && historyIndex < imageHistory.length - 1 
+        ? historyIndex + 1 
+        : imageHistory.length
+      );
+      
+      // Update current display
       setCurrentImage(data.imageUrl);
       setCurrentPrompt(data.prompt);
       setCurrentExplanation(data.explanation);
       setCurrentMusicInfo(data.musicInfo);
+      setCurrentAudioAnalysis(variables.audioAnalysis);
       if (data.session) {
         setCurrentArtworkId(data.session.id);
         setCurrentArtworkSaved(data.session.isSaved || false);
@@ -391,6 +430,40 @@ export default function Display() {
     savePreferencesMutation.mutate(styles);
   };
 
+  // Navigation functions
+  const goBack = () => {
+    if (historyIndex > 0) {
+      const newIndex = historyIndex - 1;
+      const historyItem = imageHistory[newIndex];
+      setHistoryIndex(newIndex);
+      setCurrentImage(historyItem.imageUrl);
+      setCurrentPrompt(historyItem.prompt);
+      setCurrentExplanation(historyItem.explanation);
+      setCurrentMusicInfo(historyItem.musicInfo);
+      setCurrentAudioAnalysis(historyItem.audioAnalysis);
+      setCurrentArtworkId(historyItem.artworkId);
+      setCurrentArtworkSaved(historyItem.isSaved);
+    }
+  };
+
+  const goForward = () => {
+    if (historyIndex < imageHistory.length - 1) {
+      const newIndex = historyIndex + 1;
+      const historyItem = imageHistory[newIndex];
+      setHistoryIndex(newIndex);
+      setCurrentImage(historyItem.imageUrl);
+      setCurrentPrompt(historyItem.prompt);
+      setCurrentExplanation(historyItem.explanation);
+      setCurrentMusicInfo(historyItem.musicInfo);
+      setCurrentAudioAnalysis(historyItem.audioAnalysis);
+      setCurrentArtworkId(historyItem.artworkId);
+      setCurrentArtworkSaved(historyItem.isSaved);
+    }
+  };
+
+  const canGoBack = historyIndex > 0;
+  const canGoForward = historyIndex < imageHistory.length - 1;
+
   useEffect(() => {
     return () => {
       handleStopListening();
@@ -547,9 +620,38 @@ export default function Display() {
               )}
             </div>
 
-            {/* Vote and Save Buttons */}
+            {/* Action Buttons */}
             {currentImage && (
               <div className="flex items-center gap-3">
+                {/* History Navigation */}
+                <div className="flex items-center gap-2 border-r pr-3">
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-14 w-14"
+                    onClick={goBack}
+                    disabled={!canGoBack}
+                    data-testid="button-nav-back"
+                  >
+                    <ChevronLeft className="h-6 w-6" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-14 w-14"
+                    onClick={goForward}
+                    disabled={!canGoForward}
+                    data-testid="button-nav-forward"
+                  >
+                    <ChevronRight className="h-6 w-6" />
+                  </Button>
+                  {imageHistory.length > 0 && (
+                    <span className="text-xs text-muted-foreground hidden sm:inline">
+                      {historyIndex + 1}/{imageHistory.length}
+                    </span>
+                  )}
+                </div>
+
                 {currentExplanation && (
                   <Button
                     variant="outline"
