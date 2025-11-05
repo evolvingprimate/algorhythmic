@@ -80,7 +80,6 @@ export default function Display() {
   const generationTimeoutRef = useRef<number>();
   const musicIdentificationTimeoutRef = useRef<number>();
   const sessionId = useRef(crypto.randomUUID());
-  const imageCache = useRef<Map<string, { imageUrl: string; prompt: string; explanation: string }>>(new Map());
   const lastGenerationTime = useRef<number>(0);
   const historyIndexRef = useRef<number>(-1);
   const isGeneratingRef = useRef<boolean>(false);
@@ -177,17 +176,7 @@ export default function Display() {
   // Generate art mutation
   const generateArtMutation = useMutation({
     mutationFn: async ({ audioAnalysis, musicInfo }: { audioAnalysis: AudioAnalysis; musicInfo: MusicIdentification | null }) => {
-      // Create cache key from styles and music info
-      const cacheKey = `${selectedStyles.join(',')}-${musicInfo?.title || ''}-${musicInfo?.artist || ''}-${audioAnalysis.mood}`;
-      
-      // Check cache first
-      const cached = imageCache.current.get(cacheKey);
-      if (cached) {
-        console.log('Using cached image for:', cacheKey);
-        return { ...cached, session: { id: currentArtworkId, isSaved: currentArtworkSaved }, musicInfo };
-      }
-      
-      // Generate new artwork
+      // Generate new artwork (cache disabled to ensure unique images for navigation)
       const res = await apiRequest("POST", "/api/generate-art", {
         sessionId: sessionId.current,
         audioAnalysis,
@@ -199,19 +188,6 @@ export default function Display() {
         previousVotes: votes?.slice(0, 10) || [],
       });
       const data = await res.json();
-      
-      // Cache the result (keep last 20 images)
-      imageCache.current.set(cacheKey, {
-        imageUrl: data.imageUrl,
-        prompt: data.prompt,
-        explanation: data.explanation
-      });
-      if (imageCache.current.size > 20) {
-        const firstKey = imageCache.current.keys().next().value;
-        if (firstKey) {
-          imageCache.current.delete(firstKey);
-        }
-      }
       
       return data;
     },
@@ -514,10 +490,8 @@ export default function Display() {
 
   // Navigation functions - only update index
   const goBack = () => {
-    console.log('goBack called, current index:', historyIndex, 'history length:', imageHistory.length);
     setHistoryIndex(prevIndex => {
       const newIndex = prevIndex - 1;
-      console.log('goBack: prevIndex=', prevIndex, 'newIndex=', newIndex);
       if (newIndex >= 0) {
         historyIndexRef.current = newIndex;
         return newIndex;
@@ -527,10 +501,8 @@ export default function Display() {
   };
 
   const goForward = () => {
-    console.log('goForward called, current index:', historyIndex, 'history length:', imageHistory.length);
     setHistoryIndex(prevIndex => {
       const newIndex = prevIndex + 1;
-      console.log('goForward: prevIndex=', prevIndex, 'newIndex=', newIndex);
       if (newIndex < imageHistory.length) {
         historyIndexRef.current = newIndex;
         return newIndex;
@@ -541,10 +513,8 @@ export default function Display() {
 
   // Update display state when history index changes
   useEffect(() => {
-    console.log('useEffect triggered - historyIndex:', historyIndex, 'imageHistory.length:', imageHistory.length);
     if (historyIndex >= 0 && historyIndex < imageHistory.length) {
       const historyItem = imageHistory[historyIndex];
-      console.log('Updating display to:', historyItem.imageUrl.substring(0, 50));
       setCurrentImage(historyItem.imageUrl);
       setCurrentPrompt(historyItem.prompt);
       setCurrentExplanation(historyItem.explanation);
