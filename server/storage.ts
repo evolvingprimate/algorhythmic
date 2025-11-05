@@ -7,6 +7,7 @@ import {
   type InsertArtSession,
   type User,
   type InsertUser,
+  type UpsertUser,
   artPreferences,
   artVotes,
   artSessions,
@@ -30,10 +31,11 @@ export interface IStorage {
   createArtSession(session: InsertArtSession): Promise<ArtSession>;
   getSessionHistory(sessionId: string, limit?: number): Promise<ArtSession[]>;
   
-  // Users (for subscription management)
+  // Users (for subscription management and authentication)
   getUser(id: string): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
+  upsertUser(user: UpsertUser): Promise<User>; // For Replit Auth
   updateUserSubscription(id: string, tier: string, stripeCustomerId?: string, stripeSubscriptionId?: string): Promise<User>;
 }
 
@@ -137,14 +139,51 @@ export class MemStorage implements IStorage {
     const user: User = {
       id,
       ...insertUser,
+      email: insertUser.email || null,
+      firstName: insertUser.firstName || null,
+      lastName: insertUser.lastName || null,
+      profileImageUrl: insertUser.profileImageUrl || null,
       subscriptionTier: insertUser.subscriptionTier || "free",
       stripeCustomerId: insertUser.stripeCustomerId || null,
       stripeSubscriptionId: insertUser.stripeSubscriptionId || null,
       isActive: true,
       createdAt: new Date(),
+      updatedAt: new Date(),
     };
     this.users.set(id, user);
     return user;
+  }
+
+  async upsertUser(userData: UpsertUser): Promise<User> {
+    const existing = this.users.get(userData.id as string);
+    if (existing) {
+      const updated: User = {
+        ...existing,
+        email: userData.email ?? existing.email,
+        firstName: userData.firstName ?? existing.firstName,
+        lastName: userData.lastName ?? existing.lastName,
+        profileImageUrl: userData.profileImageUrl ?? existing.profileImageUrl,
+        updatedAt: new Date(),
+      };
+      this.users.set(existing.id, updated);
+      return updated;
+    }
+
+    const newUser: User = {
+      id: userData.id as string,
+      email: userData.email || null,
+      firstName: userData.firstName || null,
+      lastName: userData.lastName || null,
+      profileImageUrl: userData.profileImageUrl || null,
+      subscriptionTier: userData.subscriptionTier || "free",
+      stripeCustomerId: userData.stripeCustomerId || null,
+      stripeSubscriptionId: userData.stripeSubscriptionId || null,
+      isActive: userData.isActive ?? true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.users.set(newUser.id, newUser);
+    return newUser;
   }
 
   async updateUserSubscription(
@@ -272,6 +311,24 @@ export class PostgresStorage implements IStorage {
     const created = await this.db
       .insert(users)
       .values(insertUser)
+      .returning();
+    return created[0];
+  }
+
+  async upsertUser(userData: UpsertUser): Promise<User> {
+    const created = await this.db
+      .insert(users)
+      .values(userData)
+      .onConflictDoUpdate({
+        target: users.id,
+        set: {
+          email: userData.email,
+          firstName: userData.firstName,
+          lastName: userData.lastName,
+          profileImageUrl: userData.profileImageUrl,
+          updatedAt: new Date(),
+        },
+      })
       .returning();
     return created[0];
   }

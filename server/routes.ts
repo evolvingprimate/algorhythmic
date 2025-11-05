@@ -5,19 +5,37 @@ import Stripe from "stripe";
 import { storage } from "./storage";
 import { generateArtPrompt, generateArtImage } from "./openai-service";
 import { insertArtVoteSchema, insertArtPreferenceSchema, type AudioAnalysis } from "@shared/schema";
+import { setupAuth, isAuthenticated } from "./replitAuth";
 
 // Initialize Stripe only if keys are available (optional for MVP)
 let stripe: Stripe | null = null;
 if (process.env.STRIPE_SECRET_KEY) {
   stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-    apiVersion: "2023-10-16",
+    apiVersion: "2025-10-29.clover",
   });
 } else {
   console.warn('Stripe not configured - payment features will be unavailable');
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  
+  // Setup Replit Auth
+  await setupAuth(app);
+
+  // Auth endpoints
+  app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      res.json(user);
+    } catch (error) {
+      console.error("Error fetching user:", error);
+      res.status(500).json({ message: "Failed to fetch user" });
+    }
+  });
+
   // Get or create user preferences
   app.get("/api/preferences/:sessionId", async (req, res) => {
     try {
@@ -35,8 +53,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const validated = insertArtPreferenceSchema.parse(req.body);
       const preferences = await storage.createOrUpdatePreferences(
         validated.sessionId,
-        validated.styles,
-        validated.artists
+        validated.styles || [],
+        validated.artists || []
       );
       res.json(preferences);
     } catch (error: any) {
