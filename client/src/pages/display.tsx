@@ -24,7 +24,8 @@ import {
   Heart,
   Info,
   Music,
-  Brain
+  Brain,
+  Clock
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { StyleSelector } from "@/components/style-selector";
@@ -54,6 +55,7 @@ export default function Display() {
   const [currentExplanation, setCurrentExplanation] = useState<string>("");
   const [showExplanation, setShowExplanation] = useState(false);
   const [isIdentifyingMusic, setIsIdentifyingMusic] = useState(false);
+  const [generationInterval, setGenerationInterval] = useState(1); // minutes
   
   const audioAnalyzerRef = useRef<AudioAnalyzer | null>(null);
   const wsClientRef = useRef<WebSocketClient | null>(null);
@@ -271,7 +273,7 @@ export default function Display() {
     // Send to WebSocket for multi-device sync
     wsClientRef.current?.send('audio-analysis', analysis);
 
-    // Generate new art every minute based on audio changes
+    // Generate new art based on selected interval
     if (!isGenerating && !generationTimeoutRef.current) {
       setIsGenerating(true); // Set immediately to prevent duplicate requests
       generationTimeoutRef.current = window.setTimeout(async () => {
@@ -279,7 +281,7 @@ export default function Display() {
         const musicInfo = await identifyMusic();
         generateArtMutation.mutate({ audioAnalysis: analysis, musicInfo });
         generationTimeoutRef.current = undefined;
-      }, currentImage ? 60000 : 0); // First generation immediate, then every 60s (1 minute)
+      }, currentImage ? generationInterval * 60000 : 0); // First generation immediate, then every X minutes
     }
   };
 
@@ -473,8 +475,28 @@ export default function Display() {
                 <Volume2 className="h-4 w-4 text-muted-foreground" />
               </div>
 
+              {/* Generation Interval Selector */}
+              <div className="flex items-center gap-2 border-l pl-4">
+                <Clock className="h-4 w-4 text-muted-foreground" />
+                <div className="flex items-center gap-1">
+                  {[1, 2, 3, 4, 5].map((minutes) => (
+                    <Button
+                      key={minutes}
+                      variant={generationInterval === minutes ? "default" : "outline"}
+                      size="sm"
+                      className="h-7 w-8 p-0 text-xs"
+                      onClick={() => setGenerationInterval(minutes)}
+                      data-testid={`button-interval-${minutes}`}
+                    >
+                      {minutes}
+                    </Button>
+                  ))}
+                </div>
+                <span className="text-xs text-muted-foreground hidden sm:inline">min</span>
+              </div>
+
               {currentPrompt && (
-                <div className="hidden lg:block">
+                <div className="hidden xl:block">
                   <Badge variant="outline" className="text-xs max-w-[300px] truncate">
                     {currentPrompt}
                   </Badge>
