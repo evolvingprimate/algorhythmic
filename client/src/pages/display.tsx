@@ -510,20 +510,12 @@ export default function Display() {
     savePreferencesMutation.mutate(styles);
   };
 
-  // Navigation functions
+  // Navigation functions - only update index
   const goBack = () => {
     setHistoryIndex(prevIndex => {
       const newIndex = prevIndex - 1;
-      if (newIndex >= 0 && newIndex < imageHistory.length) {
-        const historyItem = imageHistory[newIndex];
-        // Batch all state updates
-        setCurrentImage(historyItem.imageUrl);
-        setCurrentPrompt(historyItem.prompt);
-        setCurrentExplanation(historyItem.explanation);
-        setCurrentMusicInfo(historyItem.musicInfo);
-        setCurrentAudioAnalysis(historyItem.audioAnalysis);
-        setCurrentArtworkId(historyItem.artworkId);
-        setCurrentArtworkSaved(historyItem.isSaved);
+      if (newIndex >= 0) {
+        historyIndexRef.current = newIndex;
         return newIndex;
       }
       return prevIndex;
@@ -533,21 +525,27 @@ export default function Display() {
   const goForward = () => {
     setHistoryIndex(prevIndex => {
       const newIndex = prevIndex + 1;
-      if (newIndex >= 0 && newIndex < imageHistory.length) {
-        const historyItem = imageHistory[newIndex];
-        // Batch all state updates
-        setCurrentImage(historyItem.imageUrl);
-        setCurrentPrompt(historyItem.prompt);
-        setCurrentExplanation(historyItem.explanation);
-        setCurrentMusicInfo(historyItem.musicInfo);
-        setCurrentAudioAnalysis(historyItem.audioAnalysis);
-        setCurrentArtworkId(historyItem.artworkId);
-        setCurrentArtworkSaved(historyItem.isSaved);
+      if (newIndex < imageHistory.length) {
+        historyIndexRef.current = newIndex;
         return newIndex;
       }
       return prevIndex;
     });
   };
+
+  // Update display state when history index changes
+  useEffect(() => {
+    if (historyIndex >= 0 && historyIndex < imageHistory.length) {
+      const historyItem = imageHistory[historyIndex];
+      setCurrentImage(historyItem.imageUrl);
+      setCurrentPrompt(historyItem.prompt);
+      setCurrentExplanation(historyItem.explanation);
+      setCurrentMusicInfo(historyItem.musicInfo);
+      setCurrentAudioAnalysis(historyItem.audioAnalysis);
+      setCurrentArtworkId(historyItem.artworkId);
+      setCurrentArtworkSaved(historyItem.isSaved);
+    }
+  }, [historyIndex, imageHistory]);
 
   const canGoBack = historyIndex > 0;
   const canGoForward = historyIndex < imageHistory.length - 1;
