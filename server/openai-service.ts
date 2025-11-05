@@ -72,24 +72,60 @@ Audio characteristics:
       messages: [
         {
           role: "system",
-          content: "You are an expert art director creating prompts for DALL-E image generation. Create vivid, detailed prompts that translate music and audio characteristics into visual art. When music is identified, incorporate the song's themes, artist's style, and emotional content. Focus on composition, color, mood, and artistic techniques. Keep prompts under 400 characters for optimal results."
+          content: `You are an expert art director creating prompts for DALL-E image generation. You deeply understand music, music videos, and visual culture across genres.
+
+When music is identified, you MUST analyze it thoroughly before creating the prompt:
+
+**GENRE VISUAL LANGUAGES:**
+- Hip-Hop/Rap: Street photography, urban landscapes, neon cityscapes, graffiti culture, music video cinematography (wide angles, dramatic lighting), luxury aesthetics, street fashion, powerful poses, bold typography
+- Rock: Concert energy, stage lighting, electric atmosphere, rebellion aesthetics, album cover art traditions
+- Electronic/EDM: Synthwave visuals, digital glitches, vibrant neon, abstract patterns, futuristic elements
+- Pop: Polished production, vibrant colors, fashion-forward, editorial photography
+- Jazz: Smoky atmospheres, vintage aesthetics, intimate club settings, noir influences
+- Classical: Grand concert halls, dramatic shadows, timeless elegance, flowing movements
+
+**OUTPUT FORMAT (REQUIRED):**
+
+SONG INSIGHT:
+[If music identified: Analyze the specific song's music video aesthetic (if you know it exists), lyrical themes, emotional tone, and cultural context. If music video doesn't exist, imaginatively reconstruct what it might look like based on the artist's style and the song's themes. If no music: Note genre from audio mood]
+
+VISUAL LANGUAGE:
+[Translate the music/audio into specific visual elements: color palettes, composition style, lighting, mood, cultural references, artistic techniques]
+
+FINAL PROMPT:
+[Concise DALL-E prompt under 400 characters incorporating all above insights]`
         },
         {
           role: "user",
-          content: `Create a detailed DALL-E prompt for generative artwork ${styleContext} ${artistContext}. ${musicContext}
+          content: `Create artwork ${styleContext} ${artistContext}. ${musicContext}
           
 ${audioDescription}
 
 ${voteContext}
 
-Generate a unique, captivating artwork prompt that captures ${musicInfo ? "the song's essence and themes" : "the audio's essence"} while matching the user's artistic preferences. Focus on visual elements, composition, and artistic technique.`
+${musicInfo ? `Deeply analyze "${musicInfo.title}" by ${musicInfo.artist}. Consider:
+- Music video aesthetic (if one exists, or imagine what it would look like)
+- Lyrical themes and emotional content
+- Genre-specific visual culture
+- The artist's creative visual identity` : "Translate the audio mood into visual art"}
+
+Provide structured output with SONG INSIGHT, VISUAL LANGUAGE, and FINAL PROMPT sections.`
         }
       ],
     });
 
-    const artPrompt = response.choices[0].message.content || "Abstract dreamlike artwork with flowing colors and dynamic energy";
+    const fullResponse = response.choices[0].message.content || "";
+    
+    // Parse structured response (using [\s\S] for cross-line matching instead of 's' flag)
+    const finalPromptMatch = fullResponse.match(/FINAL PROMPT:\s*\n?([\s\S]+?)(?:\n\n|$)/);
+    const songInsightMatch = fullResponse.match(/SONG INSIGHT:\s*\n?([\s\S]+?)(?=\n\nVISUAL LANGUAGE:|$)/);
+    const visualLanguageMatch = fullResponse.match(/VISUAL LANGUAGE:\s*\n?([\s\S]+?)(?=\n\nFINAL PROMPT:|$)/);
+    
+    const artPrompt = finalPromptMatch?.[1]?.trim() || fullResponse.split('\n').pop()?.trim() || "Abstract dreamlike artwork with flowing colors and dynamic energy";
+    const songInsight = songInsightMatch?.[1]?.trim() || "";
+    const visualLanguage = visualLanguageMatch?.[1]?.trim() || "";
 
-    // Generate explanation
+    // Generate explanation using the song insight
     const explanationResponse = await openai.chat.completions.create({
       model: "gpt-5",
       messages: [
@@ -102,11 +138,13 @@ Generate a unique, captivating artwork prompt that captures ${musicInfo ? "the s
           content: `Explain in 2-3 sentences why this specific artwork was created based on these inputs:
           
 ${musicInfo ? `Music: "${musicInfo.title}" by ${musicInfo.artist}` : "No specific music identified"}
+${songInsight ? `\nSong Analysis: ${songInsight}` : ""}
+${visualLanguage ? `\nVisual Approach: ${visualLanguage}` : ""}
 Audio mood: ${audioAnalysis.mood}
 User preferences: ${styleContext} ${artistContext}
 Generated prompt: ${artPrompt}
 
-Explain the creative connection between the music/audio and the visual artwork.`
+${musicInfo ? "Explain how the song's music video aesthetic, lyrical themes, and genre influenced the visual artwork." : "Explain the creative connection between the audio mood and the visual artwork."}`
         }
       ],
     });
