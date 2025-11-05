@@ -63,6 +63,8 @@ export default function Display() {
   const generationTimeoutRef = useRef<number>();
   const musicIdentificationTimeoutRef = useRef<number>();
   const sessionId = useRef(crypto.randomUUID());
+  const imageCache = useRef<Map<string, { imageUrl: string; prompt: string; explanation: string }>>(new Map());
+  const lastGenerationTime = useRef<number>(0);
   
   const { toast } = useToast();
   const { user, isAuthenticated } = useAuth();
@@ -102,6 +104,17 @@ export default function Display() {
   // Generate art mutation
   const generateArtMutation = useMutation({
     mutationFn: async ({ audioAnalysis, musicInfo }: { audioAnalysis: AudioAnalysis; musicInfo: MusicIdentification | null }) => {
+      // Create cache key from styles and music info
+      const cacheKey = `${selectedStyles.join(',')}-${musicInfo?.title || ''}-${musicInfo?.artist || ''}-${audioAnalysis.mood}`;
+      
+      // Check cache first
+      const cached = imageCache.current.get(cacheKey);
+      if (cached) {
+        console.log('Using cached image for:', cacheKey);
+        return { ...cached, session: { id: currentArtworkId, isSaved: currentArtworkSaved }, musicInfo };
+      }
+      
+      // Generate new artwork
       const res = await apiRequest("POST", "/api/generate-art", {
         sessionId: sessionId.current,
         audioAnalysis,
@@ -112,16 +125,32 @@ export default function Display() {
         },
         previousVotes: votes?.slice(0, 10) || [],
       });
-      return res.json();
+      const data = await res.json();
+      
+      // Cache the result (keep last 20 images)
+      imageCache.current.set(cacheKey, {
+        imageUrl: data.imageUrl,
+        prompt: data.prompt,
+        explanation: data.explanation
+      });
+      if (imageCache.current.size > 20) {
+        const firstKey = imageCache.current.keys().next().value;
+        imageCache.current.delete(firstKey);
+      }
+      
+      return data;
     },
     onSuccess: (data) => {
       setCurrentImage(data.imageUrl);
       setCurrentPrompt(data.prompt);
       setCurrentExplanation(data.explanation);
       setCurrentMusicInfo(data.musicInfo);
-      setCurrentArtworkId(data.session.id);
-      setCurrentArtworkSaved(data.session.isSaved || false);
+      if (data.session) {
+        setCurrentArtworkId(data.session.id);
+        setCurrentArtworkSaved(data.session.isSaved || false);
+      }
       setIsGenerating(false);
+      lastGenerationTime.current = Date.now();
     },
     onError: (error: any) => {
       toast({
@@ -273,16 +302,28 @@ export default function Display() {
     // Send to WebSocket for multi-device sync
     wsClientRef.current?.send('audio-analysis', analysis);
 
-    // Generate new art based on selected interval
-    if (!isGenerating && !generationTimeoutRef.current) {
-      setIsGenerating(true); // Set immediately to prevent duplicate requests
-      generationTimeoutRef.current = window.setTimeout(async () => {
-        // Try to identify music before generating art
-        const musicInfo = await identifyMusic();
-        generateArtMutation.mutate({ audioAnalysis: analysis, musicInfo });
-        generationTimeoutRef.current = undefined;
-      }, currentImage ? generationInterval * 60000 : 0); // First generation immediate, then every X minutes
+    // Prevent scheduling if already generating or timeout is pending
+    if (isGenerating || generationTimeoutRef.current) {
+      return;
     }
+
+    // Check minimum time between generations
+    const now = Date.now();
+    const minInterval = currentImage ? generationInterval * 60000 : 0;
+    const timeSinceLastGen = now - lastGenerationTime.current;
+    
+    if (timeSinceLastGen < minInterval) {
+      return; // Too soon
+    }
+
+    // Schedule new generation
+    setIsGenerating(true);
+    generationTimeoutRef.current = window.setTimeout(async () => {
+      // Try to identify music before generating art
+      const musicInfo = await identifyMusic();
+      generateArtMutation.mutate({ audioAnalysis: analysis, musicInfo });
+      generationTimeoutRef.current = undefined;
+    }, 0); // Execute immediately since we've already waited
   };
 
   const handleStartListening = () => {
@@ -632,19 +673,6 @@ export default function Display() {
         onClose={() => setShowAudioSourceSelector(false)}
         onConfirm={handleAudioSourceConfirm}
       />
-
-      {/* Loading Overlay */}
-      {isGenerating && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
-          <div className="flex flex-col items-center gap-4">
-            <div className="animate-spin h-12 w-12 border-4 border-primary border-t-transparent rounded-full" />
-            <p className="text-lg font-medium">Creating your masterpiece...</p>
-            <p className="text-sm text-muted-foreground">
-              {isIdentifyingMusic ? "Identifying music..." : "Analyzing audio and generating art"}
-            </p>
-          </div>
-        </div>
-      )}
 
       {/* Explanation Dialog */}
       <Dialog open={showExplanation} onOpenChange={setShowExplanation}>
