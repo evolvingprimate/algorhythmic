@@ -376,10 +376,18 @@
   width: 200%;
   height: 200%;
   background: 
-    radial-gradient(ellipse 1200px 800px at 25% 35%, rgba(255, 50, 150, 0.6) 0%, transparent 55%),
-    radial-gradient(ellipse 900px 1200px at 75% 65%, rgba(100, 80, 255, 0.5) 0%, transparent 55%);
+    radial-gradient(ellipse 1200px 800px at 25% 35%, 
+      rgba(255, 50, 150, 0.9) 0%, 
+      rgba(255, 50, 150, 0.7) 35%, 
+      rgba(255, 80, 170, 0.4) 45%, 
+      transparent 50%),
+    radial-gradient(ellipse 900px 1200px at 75% 65%, 
+      rgba(100, 80, 255, 0.8) 0%, 
+      rgba(100, 80, 255, 0.6) 35%, 
+      rgba(120, 100, 255, 0.3) 45%, 
+      transparent 50%);
   animation: neonWave1 12s ease-in-out infinite;
-  filter: blur(50px);
+  filter: blur(20px) drop-shadow(0 0 30px rgba(255, 50, 150, 0.8));
   mix-blend-mode: screen;
 }
 
@@ -390,10 +398,18 @@
   width: 200%;
   height: 200%;
   background: 
-    radial-gradient(ellipse 1000px 700px at 60% 40%, rgba(0, 255, 200, 0.5) 0%, transparent 55%),
-    radial-gradient(ellipse 700px 1000px at 30% 70%, rgba(255, 100, 200, 0.4) 0%, transparent 55%);
+    radial-gradient(ellipse 1000px 700px at 60% 40%, 
+      rgba(0, 255, 200, 0.9) 0%, 
+      rgba(0, 255, 200, 0.7) 35%, 
+      rgba(50, 255, 210, 0.4) 45%, 
+      transparent 50%),
+    radial-gradient(ellipse 700px 1000px at 30% 70%, 
+      rgba(255, 100, 200, 0.8) 0%, 
+      rgba(255, 100, 200, 0.6) 35%, 
+      rgba(255, 120, 210, 0.3) 45%, 
+      transparent 50%);
   animation: neonWave2 10s ease-in-out infinite reverse;
-  filter: blur(60px);
+  filter: blur(20px) drop-shadow(0 0 30px rgba(0, 255, 200, 0.8));
   mix-blend-mode: screen;
 }
 
@@ -404,10 +420,18 @@
   width: 200%;
   height: 200%;
   background: 
-    radial-gradient(ellipse 1300px 600px at 50% 50%, rgba(138, 80, 255, 0.6) 0%, transparent 55%),
-    radial-gradient(ellipse 600px 1300px at 65% 55%, rgba(255, 150, 100, 0.4) 0%, transparent 55%);
+    radial-gradient(ellipse 1300px 600px at 50% 50%, 
+      rgba(138, 80, 255, 0.9) 0%, 
+      rgba(138, 80, 255, 0.7) 35%, 
+      rgba(158, 100, 255, 0.4) 45%, 
+      transparent 50%),
+    radial-gradient(ellipse 600px 1300px at 65% 55%, 
+      rgba(255, 150, 100, 0.8) 0%, 
+      rgba(255, 150, 100, 0.6) 35%, 
+      rgba(255, 170, 120, 0.3) 45%, 
+      transparent 50%);
   animation: neonWave3 14s ease-in-out infinite;
-  filter: blur(55px);
+  filter: blur(20px) drop-shadow(0 0 30px rgba(138, 80, 255, 0.8));
   mix-blend-mode: screen;
 }
 
