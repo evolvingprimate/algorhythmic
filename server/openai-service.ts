@@ -67,12 +67,11 @@ Audio characteristics:
 `;
 
   try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-5",
-      messages: [
-        {
-          role: "system",
-          content: `You are an expert art director creating prompts for DALL-E image generation. You deeply understand music, music videos, visual culture across genres, and the artistic intentions behind songs.
+    // Build messages array - use vision model if album artwork is available
+    const messages: any[] = [
+      {
+        role: "system",
+        content: `You are an expert art director creating prompts for DALL-E image generation. You deeply understand music, music videos, visual culture across genres, and the artistic intentions behind songs.
 
 When music is identified, you MUST analyze it thoroughly before creating the prompt:
 
@@ -84,26 +83,71 @@ When music is identified, you MUST analyze it thoroughly before creating the pro
 - Jazz: Smoky atmospheres, vintage aesthetics, intimate club settings, noir influences
 - Classical: Grand concert halls, dramatic shadows, timeless elegance, flowing movements
 
+**ALBUM ARTWORK ANALYSIS (when provided):**
+When an album cover image is provided, analyze it as an inspirational muse:
+• Visual Style: Color palette, composition, typography, photography/illustration style
+• Artistic Techniques: Painting style, digital art, photography, mixed media, graphic design elements
+• Mood & Atmosphere: Emotional tone conveyed through visual choices
+• Symbolic Elements: Key imagery, metaphors, cultural references
+• Use these insights to inform the DALL-E prompt while respecting user's selected art styles
+
 **OUTPUT FORMAT (REQUIRED):**
 
 ARTISTIC CONTEXT:
 [For identified music ONLY: Concisely analyze (≤40 words each):
 • Artist Intent: What was the artist trying to express? What inspired this song? (backstory, personal experience, social commentary, etc.)
 • Lyrical Themes: Extract 2-3 dominant themes/motifs from lyrics (e.g., "struggle & triumph", "lost love & nostalgia", "freedom & rebellion")
-• Visual Metaphors: Map lyrical themes to visual imagery (e.g., "chains breaking" → "shattered metal fragments", "rising from darkness" → "light piercing shadows")]
+• Visual Metaphors: Map lyrical themes to visual imagery (e.g., "chains breaking" → "shattered metal fragments", "rising from darkness" → "light piercing shadows")
+${musicInfo?.albumArtworkUrl ? '• Album Art Style: Describe the original album artwork\'s visual aesthetic, color palette, and artistic approach' : ''}]
 
 SONG INSIGHT:
 [If music identified: First line must be "GENRE: [genre]" (e.g., "GENRE: Hip-Hop" or "GENRE: Rock"). Then analyze the specific song's music video aesthetic (if you know it exists), emotional tone, and cultural context. If music video doesn't exist, imaginatively reconstruct what it might look like based on the artist's style and the song's themes. If no music: Note "GENRE: Unknown" and describe audio mood]
 
 VISUAL LANGUAGE:
-[Translate the music/audio AND lyrical themes into specific visual elements: color palettes, composition style, lighting, mood, cultural references, artistic techniques, symbolic imagery from lyrics]
+[Translate the music/audio AND lyrical themes into specific visual elements: color palettes, composition style, lighting, mood, cultural references, artistic techniques, symbolic imagery from lyrics${musicInfo?.albumArtworkUrl ? ', and references to the album artwork aesthetic' : ''}]
 
 FINAL PROMPT:
-[Concise DALL-E prompt under 400 characters incorporating artist intent, lyrical themes, and all above insights]`
-        },
-        {
-          role: "user",
-          content: `Create artwork ${styleContext} ${artistContext}. ${musicContext}
+[Concise DALL-E prompt under 400 characters incorporating artist intent, lyrical themes${musicInfo?.albumArtworkUrl ? ', and album artwork inspiration' : ''}, and all above insights]`
+      }
+    ];
+
+    // If album artwork is available, use vision-capable model with image
+    if (musicInfo?.albumArtworkUrl) {
+      messages.push({
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: `Create artwork ${styleContext} ${artistContext}. ${musicContext}
+          
+${audioDescription}
+
+${voteContext}
+
+Deeply analyze "${musicInfo.title}" by ${musicInfo.artist}. Consider:
+- Artist's intention: What inspired this song? What was the artist trying to express?
+- Lyrical meaning: Analyze the lyrics for dominant themes, motifs, symbolism, and emotional narrative
+- Visual metaphors: Translate lyrical themes into visual imagery
+- Music video aesthetic (if one exists, or imagine what it would look like)
+- Genre-specific visual culture
+- The artist's creative visual identity
+- IMPORTANT: Analyze the provided album artwork and use it as an inspirational muse for color palette, artistic style, and visual aesthetic
+
+Provide structured output with ARTISTIC CONTEXT, SONG INSIGHT, VISUAL LANGUAGE, and FINAL PROMPT sections.`
+          },
+          {
+            type: "image_url",
+            image_url: {
+              url: musicInfo.albumArtworkUrl
+            }
+          }
+        ]
+      });
+    } else {
+      // No album artwork - text only
+      messages.push({
+        role: "user",
+        content: `Create artwork ${styleContext} ${artistContext}. ${musicContext}
           
 ${audioDescription}
 
@@ -118,8 +162,12 @@ ${musicInfo ? `Deeply analyze "${musicInfo.title}" by ${musicInfo.artist}. Consi
 - The artist's creative visual identity
 
 Provide structured output with ARTISTIC CONTEXT, SONG INSIGHT, VISUAL LANGUAGE, and FINAL PROMPT sections.` : "Translate the audio mood into visual art. Provide structured output with SONG INSIGHT, VISUAL LANGUAGE, and FINAL PROMPT sections."}`
-        }
-      ],
+      });
+    }
+
+    const response = await openai.chat.completions.create({
+      model: musicInfo?.albumArtworkUrl ? "gpt-4o" : "gpt-5", // Use gpt-4o for vision, gpt-5 for text-only
+      messages,
     });
 
     const fullResponse = response.choices[0].message.content || "";

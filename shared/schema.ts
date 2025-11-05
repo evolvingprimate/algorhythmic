@@ -128,6 +128,7 @@ export type MusicIdentification = {
   title: string;
   artist: string;
   album?: string;
+  albumArtworkUrl?: string;
   release_date?: string;
   label?: string;
   timecode?: string;

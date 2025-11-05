@@ -1,4 +1,5 @@
 import type { MusicIdentification } from "@shared/schema";
+import { getAlbumArtwork } from "./spotify-service";
 
 interface ACRCloudResponse {
   status: {
@@ -63,10 +64,29 @@ export async function identifyMusic(audioBlob: Buffer): Promise<MusicIdentificat
       
       console.log(`[Music ID] ✅ Successfully identified: ${artist} - ${title}`);
       
+      // Try to fetch album artwork from Spotify if album ID is available
+      let albumArtworkUrl: string | undefined;
+      const spotifyAlbumId = track.external_metadata?.spotify?.album?.id;
+      
+      if (spotifyAlbumId) {
+        try {
+          console.log(`[Music ID] Fetching album artwork from Spotify for album ID: ${spotifyAlbumId}`);
+          albumArtworkUrl = await getAlbumArtwork(spotifyAlbumId) || undefined;
+          if (albumArtworkUrl) {
+            console.log(`[Music ID] ✅ Album artwork fetched: ${albumArtworkUrl}`);
+          } else {
+            console.log(`[Music ID] ⚠️ No album artwork found for ${spotifyAlbumId}`);
+          }
+        } catch (error) {
+          console.warn(`[Music ID] Failed to fetch album artwork:`, error);
+        }
+      }
+      
       return {
         title,
         artist,
         album: track.album?.name,
+        albumArtworkUrl,
         release_date: track.release_date,
         label: track.label,
         song_link: track.external_metadata?.youtube?.vid 
