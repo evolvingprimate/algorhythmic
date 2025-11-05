@@ -367,80 +367,95 @@
   );
 }
 
-.animated-blob-1,
-.animated-blob-2,
-.animated-blob-3 {
+.animated-blob-1 {
   position: absolute;
+  top: -50%;
+  left: -50%;
   width: 200%;
   height: 200%;
-  opacity: 0.7;
-}
-
-.animated-blob-1 {
   background: 
-    radial-gradient(ellipse 800px 600px at 20% 30%, rgba(168, 181, 255, 0.8) 0%, transparent 50%),
-    radial-gradient(ellipse 600px 800px at 80% 70%, rgba(212, 165, 217, 0.6) 0%, transparent 50%);
+    radial-gradient(ellipse 1000px 700px at 30% 40%, rgba(168, 181, 255, 0.5) 0%, transparent 60%),
+    radial-gradient(ellipse 800px 1000px at 70% 60%, rgba(212, 165, 217, 0.4) 0%, transparent 60%);
   animation: rippleWave1 15s ease-in-out infinite;
   filter: blur(40px);
 }
 
 .animated-blob-2 {
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
   background: 
-    radial-gradient(ellipse 700px 500px at 60% 40%, rgba(197, 180, 227, 0.7) 0%, transparent 50%),
-    radial-gradient(ellipse 500px 700px at 30% 80%, rgba(232, 196, 232, 0.5) 0%, transparent 50%);
-  animation: rippleWave2 18s ease-in-out infinite reverse;
+    radial-gradient(ellipse 900px 600px at 50% 30%, rgba(197, 180, 227, 0.5) 0%, transparent 60%),
+    radial-gradient(ellipse 600px 900px at 40% 70%, rgba(232, 196, 232, 0.4) 0%, transparent 60%);
+  animation: rippleWave2 18s ease-in-out infinite;
   filter: blur(50px);
 }
 
 .animated-blob-3 {
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
   background: 
-    radial-gradient(ellipse 900px 400px at 50% 50%, rgba(245, 213, 245, 0.6) 0%, transparent 50%),
-    radial-gradient(ellipse 400px 900px at 70% 60%, rgba(168, 181, 255, 0.4) 0%, transparent 50%);
+    radial-gradient(ellipse 1100px 500px at 60% 50%, rgba(245, 213, 245, 0.4) 0%, transparent 60%),
+    radial-gradient(ellipse 500px 1100px at 50% 50%, rgba(168, 181, 255, 0.3) 0%, transparent 60%);
   animation: rippleWave3 20s ease-in-out infinite;
   filter: blur(60px);
 }
 
 @keyframes rippleWave1 {
-  0%, 100% {
-    transform: translate(-10%, -10%) rotate(0deg) scale(1);
+  0% {
+    transform: translate(0%, 0%) rotate(0deg);
   }
   25% {
-    transform: translate(-5%, -15%) rotate(5deg) scale(1.05);
+    transform: translate(3%, -5%) rotate(8deg);
   }
   50% {
-    transform: translate(-15%, -5%) rotate(-3deg) scale(0.95);
+    transform: translate(-4%, 2%) rotate(-6deg);
   }
   75% {
-    transform: translate(-8%, -12%) rotate(2deg) scale(1.02);
+    transform: translate(2%, -3%) rotate(4deg);
+  }
+  100% {
+    transform: translate(0%, 0%) rotate(0deg);
   }
 }
 
 @keyframes rippleWave2 {
-  0%, 100% {
-    transform: translate(-8%, -12%) rotate(0deg) scale(1);
+  0% {
+    transform: translate(0%, 0%) rotate(0deg);
   }
   30% {
-    transform: translate(-12%, -8%) rotate(-4deg) scale(1.08);
+    transform: translate(-5%, 3%) rotate(-10deg);
   }
   60% {
-    transform: translate(-6%, -14%) rotate(3deg) scale(0.92);
+    transform: translate(4%, -4%) rotate(7deg);
   }
   85% {
-    transform: translate(-10%, -10%) rotate(-2deg) scale(1.05);
+    transform: translate(-2%, 2%) rotate(-5deg);
+  }
+  100% {
+    transform: translate(0%, 0%) rotate(0deg);
   }
 }
 
 @keyframes rippleWave3 {
-  0%, 100% {
-    transform: translate(-12%, -8%) rotate(0deg) scale(1);
+  0% {
+    transform: translate(0%, 0%) rotate(0deg);
   }
   35% {
-    transform: translate(-8%, -12%) rotate(4deg) scale(0.98);
+    transform: translate(2%, 4%) rotate(9deg);
   }
   65% {
-    transform: translate(-14%, -10%) rotate(-5deg) scale(1.06);
+    transform: translate(-3%, -2%) rotate(-8deg);
   }
   90% {
-    transform: translate(-10%, -9%) rotate(2deg) scale(0.97);
+    transform: translate(3%, -3%) rotate(5deg);
+  }
+  100% {
+    transform: translate(0%, 0%) rotate(0deg);
   }
 }
