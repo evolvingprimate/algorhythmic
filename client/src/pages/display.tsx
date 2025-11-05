@@ -80,6 +80,12 @@ export default function Display() {
   const sessionId = useRef(crypto.randomUUID());
   const imageCache = useRef<Map<string, { imageUrl: string; prompt: string; explanation: string }>>(new Map());
   const lastGenerationTime = useRef<number>(0);
+  const historyIndexRef = useRef<number>(-1);
+  
+  // Sync ref with state
+  useEffect(() => {
+    historyIndexRef.current = historyIndex;
+  }, [historyIndex]);
   
   const { toast } = useToast();
   const { user, isAuthenticated } = useAuth();
@@ -168,17 +174,18 @@ export default function Display() {
         isSaved: data.session?.isSaved || false,
       };
       
-      // Add to history - if viewing an old image, truncate future history
+      // Add to history using ref to avoid stale closure
       setImageHistory(prev => {
-        const newHistory = historyIndex >= 0 && historyIndex < prev.length - 1
-          ? [...prev.slice(0, historyIndex + 1), newHistoryItem]
+        const currentIndex = historyIndexRef.current;
+        // If viewing an old image, truncate future history
+        const newHistory = currentIndex >= 0 && currentIndex < prev.length - 1
+          ? [...prev.slice(0, currentIndex + 1), newHistoryItem]
           : [...prev, newHistoryItem];
+        
+        // Update the index to point to the newly added item
+        setHistoryIndex(newHistory.length - 1);
         return newHistory;
       });
-      setHistoryIndex(prev => historyIndex >= 0 && historyIndex < imageHistory.length - 1 
-        ? historyIndex + 1 
-        : imageHistory.length
-      );
       
       // Update current display
       setCurrentImage(data.imageUrl);
@@ -235,6 +242,21 @@ export default function Display() {
     },
     onSuccess: (data) => {
       setCurrentArtworkSaved(data.isSaved);
+      
+      // Update the history entry to reflect the new saved state
+      setImageHistory(prev => {
+        const currentIndex = historyIndexRef.current;
+        if (currentIndex >= 0 && currentIndex < prev.length) {
+          const updatedHistory = [...prev];
+          updatedHistory[currentIndex] = {
+            ...updatedHistory[currentIndex],
+            isSaved: data.isSaved,
+          };
+          return updatedHistory;
+        }
+        return prev;
+      });
+      
       toast({
         title: data.isSaved ? "Artwork saved!" : "Artwork unsaved",
         description: data.isSaved ? "Added to your gallery" : "Removed from your gallery",
