@@ -224,6 +224,7 @@ export default function Display() {
       
       if (!audioBlob) {
         console.warn("Could not capture audio sample for music identification");
+        setIsIdentifyingMusic(false);
         return null;
       }
 
@@ -238,6 +239,7 @@ export default function Display() {
 
       if (!res.ok) {
         console.warn("Music identification failed:", res.statusText);
+        setIsIdentifyingMusic(false);
         return null;
       }
 
