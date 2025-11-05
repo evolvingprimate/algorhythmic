@@ -72,7 +72,7 @@ Audio characteristics:
       messages: [
         {
           role: "system",
-          content: `You are an expert art director creating prompts for DALL-E image generation. You deeply understand music, music videos, and visual culture across genres.
+          content: `You are an expert art director creating prompts for DALL-E image generation. You deeply understand music, music videos, visual culture across genres, and the artistic intentions behind songs.
 
 When music is identified, you MUST analyze it thoroughly before creating the prompt:
 
@@ -86,14 +86,20 @@ When music is identified, you MUST analyze it thoroughly before creating the pro
 
 **OUTPUT FORMAT (REQUIRED):**
 
+ARTISTIC CONTEXT:
+[For identified music ONLY: Concisely analyze (≤40 words each):
+• Artist Intent: What was the artist trying to express? What inspired this song? (backstory, personal experience, social commentary, etc.)
+• Lyrical Themes: Extract 2-3 dominant themes/motifs from lyrics (e.g., "struggle & triumph", "lost love & nostalgia", "freedom & rebellion")
+• Visual Metaphors: Map lyrical themes to visual imagery (e.g., "chains breaking" → "shattered metal fragments", "rising from darkness" → "light piercing shadows")]
+
 SONG INSIGHT:
-[If music identified: First line must be "GENRE: [genre]" (e.g., "GENRE: Hip-Hop" or "GENRE: Rock"). Then analyze the specific song's music video aesthetic (if you know it exists), lyrical themes, emotional tone, and cultural context. If music video doesn't exist, imaginatively reconstruct what it might look like based on the artist's style and the song's themes. If no music: Note "GENRE: Unknown" and describe audio mood]
+[If music identified: First line must be "GENRE: [genre]" (e.g., "GENRE: Hip-Hop" or "GENRE: Rock"). Then analyze the specific song's music video aesthetic (if you know it exists), emotional tone, and cultural context. If music video doesn't exist, imaginatively reconstruct what it might look like based on the artist's style and the song's themes. If no music: Note "GENRE: Unknown" and describe audio mood]
 
 VISUAL LANGUAGE:
-[Translate the music/audio into specific visual elements: color palettes, composition style, lighting, mood, cultural references, artistic techniques]
+[Translate the music/audio AND lyrical themes into specific visual elements: color palettes, composition style, lighting, mood, cultural references, artistic techniques, symbolic imagery from lyrics]
 
 FINAL PROMPT:
-[Concise DALL-E prompt under 400 characters incorporating all above insights]`
+[Concise DALL-E prompt under 400 characters incorporating artist intent, lyrical themes, and all above insights]`
         },
         {
           role: "user",
@@ -104,12 +110,14 @@ ${audioDescription}
 ${voteContext}
 
 ${musicInfo ? `Deeply analyze "${musicInfo.title}" by ${musicInfo.artist}. Consider:
+- Artist's intention: What inspired this song? What was the artist trying to express?
+- Lyrical meaning: Analyze the lyrics for dominant themes, motifs, symbolism, and emotional narrative
+- Visual metaphors: Translate lyrical themes into visual imagery
 - Music video aesthetic (if one exists, or imagine what it would look like)
-- Lyrical themes and emotional content
 - Genre-specific visual culture
-- The artist's creative visual identity` : "Translate the audio mood into visual art"}
+- The artist's creative visual identity
 
-Provide structured output with SONG INSIGHT, VISUAL LANGUAGE, and FINAL PROMPT sections.`
+Provide structured output with ARTISTIC CONTEXT, SONG INSIGHT, VISUAL LANGUAGE, and FINAL PROMPT sections.` : "Translate the audio mood into visual art. Provide structured output with SONG INSIGHT, VISUAL LANGUAGE, and FINAL PROMPT sections."}`
         }
       ],
     });
@@ -117,13 +125,15 @@ Provide structured output with SONG INSIGHT, VISUAL LANGUAGE, and FINAL PROMPT s
     const fullResponse = response.choices[0].message.content || "";
     
     // Parse structured response - accept markdown variants (##, **, etc.)
-    const finalPromptMatch = fullResponse.match(/(?:#+\s*)?(?:\*\*)?FINAL PROMPT:?\*?\*?\s*\n?([\s\S]+?)(?:\n\n|$)/i);
+    const artisticContextMatch = fullResponse.match(/(?:#+\s*)?(?:\*\*)?ARTISTIC CONTEXT:?\*?\*?\s*\n?([\s\S]+?)(?=\n\n(?:#+\s*)?(?:\*\*)?SONG INSIGHT:|$)/i);
     const songInsightMatch = fullResponse.match(/(?:#+\s*)?(?:\*\*)?SONG INSIGHT:?\*?\*?\s*\n?([\s\S]+?)(?=\n\n(?:#+\s*)?(?:\*\*)?VISUAL LANGUAGE:|$)/i);
     const visualLanguageMatch = fullResponse.match(/(?:#+\s*)?(?:\*\*)?VISUAL LANGUAGE:?\*?\*?\s*\n?([\s\S]+?)(?=\n\n(?:#+\s*)?(?:\*\*)?FINAL PROMPT:|$)/i);
+    const finalPromptMatch = fullResponse.match(/(?:#+\s*)?(?:\*\*)?FINAL PROMPT:?\*?\*?\s*\n?([\s\S]+?)(?:\n\n|$)/i);
     
-    let artPrompt = finalPromptMatch?.[1]?.trim() || "";
+    const artisticContext = artisticContextMatch?.[1]?.trim() || "";
     const songInsight = songInsightMatch?.[1]?.trim() || "";
     const visualLanguage = visualLanguageMatch?.[1]?.trim() || "";
+    let artPrompt = finalPromptMatch?.[1]?.trim() || "";
     
     // Validate and clean the final prompt
     if (!artPrompt) {
@@ -169,8 +179,11 @@ Provide structured output with SONG INSIGHT, VISUAL LANGUAGE, and FINAL PROMPT s
 
     // Build explanation from existing insights (no second API call needed)
     let explanation = "";
-    if (musicInfo && songInsight && visualLanguage) {
-      // Use the rich analysis we already have from the first GPT call
+    if (musicInfo && artisticContext) {
+      // Use the rich artistic context analysis (artist intent + lyrical themes)
+      explanation = `${musicInfo.title} by ${musicInfo.artist}: ${artisticContext}`;
+    } else if (musicInfo && visualLanguage) {
+      // Fall back to visual language if artistic context not available
       explanation = `${musicInfo.title} by ${musicInfo.artist}: ${visualLanguage}`;
     } else if (songInsight && visualLanguage) {
       explanation = visualLanguage;
