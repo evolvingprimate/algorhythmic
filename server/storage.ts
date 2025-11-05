@@ -23,6 +23,19 @@ import { eq, desc, and } from "drizzle-orm";
 import { Pool, neonConfig } from "@neondatabase/serverless";
 import ws from "ws";
 
+// Helper function to normalize tier names (handles both hyphenated and underscored formats)
+function normalizeTierName(tier: string): keyof typeof SUBSCRIPTION_TIERS {
+  // Convert hyphenated to underscored format for backward compatibility
+  const normalized = tier.replace(/-/g, '_');
+  
+  // Validate it's a known tier, fallback to free if unknown
+  if (normalized in SUBSCRIPTION_TIERS) {
+    return normalized as keyof typeof SUBSCRIPTION_TIERS;
+  }
+  
+  return 'free';
+}
+
 export interface IStorage {
   // Art Preferences
   getPreferencesBySession(sessionId: string): Promise<ArtPreference | undefined>;
@@ -303,8 +316,8 @@ export class MemStorage implements IStorage {
     if (!user) {
       return SUBSCRIPTION_TIERS.free.dailyLimit;
     }
-    const tier = user.subscriptionTier as keyof typeof SUBSCRIPTION_TIERS;
-    return SUBSCRIPTION_TIERS[tier]?.dailyLimit || SUBSCRIPTION_TIERS.free.dailyLimit;
+    const tier = normalizeTierName(user.subscriptionTier);
+    return SUBSCRIPTION_TIERS[tier].dailyLimit;
   }
 
   async checkDailyLimit(userId: string): Promise<{ canGenerate: boolean; count: number; limit: number }> {
@@ -564,8 +577,8 @@ export class PostgresStorage implements IStorage {
     if (!user) {
       return SUBSCRIPTION_TIERS.free.dailyLimit;
     }
-    const tier = user.subscriptionTier as keyof typeof SUBSCRIPTION_TIERS;
-    return SUBSCRIPTION_TIERS[tier]?.dailyLimit || SUBSCRIPTION_TIERS.free.dailyLimit;
+    const tier = normalizeTierName(user.subscriptionTier);
+    return SUBSCRIPTION_TIERS[tier].dailyLimit;
   }
 
   async checkDailyLimit(userId: string): Promise<{ canGenerate: boolean; count: number; limit: number }> {

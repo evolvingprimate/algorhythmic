@@ -67,7 +67,7 @@ export const users = pgTable("users", {
   firstName: varchar("first_name"),
   lastName: varchar("last_name"),
   profileImageUrl: varchar("profile_image_url"),
-  subscriptionTier: text("subscription_tier").notNull().default("free"), // free, premium, ultimate, enthusiast, business-basic, business-premium
+  subscriptionTier: text("subscription_tier").notNull().default("free"), // free, premium, ultimate, enthusiast, business_basic, business_premium
   stripeCustomerId: text("stripe_customer_id"),
   stripeSubscriptionId: text("stripe_subscription_id"),
   isActive: boolean("is_active").notNull().default(true),
@@ -139,8 +139,8 @@ export const SUBSCRIPTION_TIERS = {
   premium: { name: "Premium", dailyLimit: 10, price: 14.99 },
   ultimate: { name: "Ultimate", dailyLimit: 20, price: 19.99 },
   enthusiast: { name: "Enthusiast", dailyLimit: 50, price: 49.99 },
-  "business-basic": { name: "Business Basic", dailyLimit: 100, price: 199.99 },
-  "business-premium": { name: "Business Premium", dailyLimit: 300, price: 499 },
+  business_basic: { name: "Business Basic", dailyLimit: 100, price: 199.99 },
+  business_premium: { name: "Business Premium", dailyLimit: 300, price: 499 },
 } as const;
 
 export type SubscriptionTier = keyof typeof SUBSCRIPTION_TIERS;
