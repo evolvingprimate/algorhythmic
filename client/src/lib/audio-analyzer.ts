@@ -104,7 +104,9 @@ export class AudioAnalyzer {
         mood,
       };
       
-      this.onAnalysis(analysis);
+      if (this.onAnalysis) {
+        this.onAnalysis(analysis);
+      }
       
       this.rafId = requestAnimationFrame(analyze);
     };
