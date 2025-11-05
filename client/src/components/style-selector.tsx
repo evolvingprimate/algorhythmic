@@ -62,6 +62,42 @@ const styles: StyleOption[] = [
     image: wireframeImage,
     description: "Neon and wireframes",
   },
+  {
+    id: "italian-brain-rot",
+    name: "Italian Brain Rot",
+    image: fluidImage,
+    description: "Chaotic viral vibes",
+  },
+  {
+    id: "cartoon",
+    name: "Cartoon",
+    image: colorFieldImage,
+    description: "Bold, animated style",
+  },
+  {
+    id: "realism",
+    name: "Realism",
+    image: vanGoghImage,
+    description: "Lifelike and detailed",
+  },
+  {
+    id: "horror",
+    name: "Horror",
+    image: daliImage,
+    description: "Dark and eerie",
+  },
+  {
+    id: "kids",
+    name: "Kids",
+    image: pointillistImage,
+    description: "Playful and colorful",
+  },
+  {
+    id: "trippy",
+    name: "Trippy",
+    image: cubistImage,
+    description: "Psychedelic patterns",
+  },
 ];
 
 const artists = [
