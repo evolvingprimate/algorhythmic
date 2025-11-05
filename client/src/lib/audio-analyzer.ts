@@ -77,12 +77,19 @@ export class AudioAnalyzer {
       const average = this.dataArray.reduce((a, b) => a + b, 0) / this.dataArray.length;
       const amplitude = (average / 255) * 100;
       
-      // Bass (low frequencies)
-      const bassRange = this.dataArray.slice(0, Math.floor(this.dataArray.length * 0.2));
+      // Bass (low frequencies: 20Hz - 250Hz, roughly first 10% of spectrum)
+      const bassRange = this.dataArray.slice(0, Math.floor(this.dataArray.length * 0.1));
       const bassLevel = (bassRange.reduce((a, b) => a + b, 0) / bassRange.length / 255) * 100;
       
-      // Treble (high frequencies)
-      const trebleRange = this.dataArray.slice(Math.floor(this.dataArray.length * 0.7));
+      // Mids (mid frequencies: 250Hz - 4000Hz, roughly 10% - 50% of spectrum)
+      const midsRange = this.dataArray.slice(
+        Math.floor(this.dataArray.length * 0.1), 
+        Math.floor(this.dataArray.length * 0.5)
+      );
+      const midsLevel = (midsRange.reduce((a, b) => a + b, 0) / midsRange.length / 255) * 100;
+      
+      // Treble/Highs (high frequencies: 4000Hz+, roughly last 50% of spectrum)
+      const trebleRange = this.dataArray.slice(Math.floor(this.dataArray.length * 0.5));
       const trebleLevel = (trebleRange.reduce((a, b) => a + b, 0) / trebleRange.length / 255) * 100;
       
       // Estimate tempo from amplitude variations
@@ -97,7 +104,7 @@ export class AudioAnalyzer {
       
       const analysis: AudioAnalysis = {
         frequency,
-        amplitude,
+        amplitude: midsLevel, // Use mids for overall amplitude
         tempo,
         bassLevel,
         trebleLevel,

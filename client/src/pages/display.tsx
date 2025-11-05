@@ -673,8 +673,8 @@ export default function Display() {
                   <div className="flex flex-col items-center gap-0.5 min-w-[32px]">
                     <div className="h-12 w-6 bg-background/50 rounded-sm flex flex-col-reverse gap-0.5 p-0.5 overflow-hidden">
                       <div 
-                        className="w-full bg-gradient-to-t from-blue-500 to-blue-400 rounded-sm transition-all duration-100"
-                        style={{ height: `${Math.min(frequencyBands.bass, 100)}%` }}
+                        className="w-full bg-gradient-to-t from-blue-500 to-blue-400 rounded-sm transition-all duration-75"
+                        style={{ height: `${Math.min(Math.max(frequencyBands.bass, 2), 100)}%` }}
                       />
                     </div>
                     <span className="text-[10px] text-muted-foreground font-medium">BASS</span>
@@ -683,8 +683,8 @@ export default function Display() {
                   <div className="flex flex-col items-center gap-0.5 min-w-[32px]">
                     <div className="h-12 w-6 bg-background/50 rounded-sm flex flex-col-reverse gap-0.5 p-0.5 overflow-hidden">
                       <div 
-                        className="w-full bg-gradient-to-t from-green-500 to-green-400 rounded-sm transition-all duration-100"
-                        style={{ height: `${Math.min(frequencyBands.mids, 100)}%` }}
+                        className="w-full bg-gradient-to-t from-green-500 to-green-400 rounded-sm transition-all duration-75"
+                        style={{ height: `${Math.min(Math.max(frequencyBands.mids, 2), 100)}%` }}
                       />
                     </div>
                     <span className="text-[10px] text-muted-foreground font-medium">MIDS</span>
@@ -693,8 +693,8 @@ export default function Display() {
                   <div className="flex flex-col items-center gap-0.5 min-w-[32px]">
                     <div className="h-12 w-6 bg-background/50 rounded-sm flex flex-col-reverse gap-0.5 p-0.5 overflow-hidden">
                       <div 
-                        className="w-full bg-gradient-to-t from-purple-500 to-purple-400 rounded-sm transition-all duration-100"
-                        style={{ height: `${Math.min(frequencyBands.highs, 100)}%` }}
+                        className="w-full bg-gradient-to-t from-purple-500 to-purple-400 rounded-sm transition-all duration-75"
+                        style={{ height: `${Math.min(Math.max(frequencyBands.highs, 2), 100)}%` }}
                       />
                     </div>
                     <span className="text-[10px] text-muted-foreground font-medium">HIGHS</span>
