@@ -1,256 +1,314 @@
-import { useState, useEffect } from "react";
 import { Link } from "wouter";
-import { useStripe, Elements, PaymentElement, useElements } from '@stripe/react-stripe-js';
-import { loadStripe } from '@stripe/stripe-js';
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Check, Sparkles } from "lucide-react";
-import { apiRequest } from "@/lib/queryClient";
-import { useToast } from "@/hooks/use-toast";
+import { ArrowLeft, Check, Sparkles, Zap, Crown, Mail } from "lucide-react";
+import { useAuth } from "@/hooks/useAuth";
+import type { User } from "@shared/schema";
 
-// Initialize Stripe only if public key is available
-const stripePromise = import.meta.env.VITE_STRIPE_PUBLIC_KEY 
-  ? loadStripe(import.meta.env.VITE_STRIPE_PUBLIC_KEY)
-  : null;
+const pricingTiers = [
+  {
+    id: "free",
+    name: "Free",
+    price: "$0",
+    period: "forever",
+    dailyLimit: 3,
+    description: "Get started with audio-reactive art",
+    features: [
+      "3 art generations per day",
+      "All 71 artistic styles",
+      "HD quality (1024x1024)",
+      "Save favorite artworks",
+      "Personal use only",
+    ],
+    cta: "Current Plan",
+    popular: false,
+  },
+  {
+    id: "premium",
+    name: "Premium",
+    price: "$14.99",
+    period: "per month",
+    dailyLimit: 10,
+    description: "For art lovers and music enthusiasts",
+    features: [
+      "10 art generations per day",
+      "All 71 artistic styles & artists",
+      "HD quality (1024x1024)",
+      "Save unlimited artworks",
+      "Priority generation speed",
+      "Commercial use rights",
+      "Cancel anytime, no fees",
+    ],
+    cta: "Upgrade to Premium",
+    popular: true,
+  },
+  {
+    id: "ultimate",
+    name: "Ultimate",
+    price: "$19.99",
+    period: "per month",
+    dailyLimit: 20,
+    description: "For professional creators",
+    features: [
+      "20 art generations per day",
+      "All 71 artistic styles & artists",
+      "HD quality (1024x1024)",
+      "Save unlimited artworks",
+      "Priority generation speed",
+      "Commercial use rights",
+      "Multi-device sync",
+      "Cancel anytime, no fees",
+    ],
+    cta: "Upgrade to Ultimate",
+    popular: false,
+  },
+  {
+    id: "enthusiast",
+    name: "Enthusiast",
+    price: "$49.99",
+    period: "per month",
+    dailyLimit: 50,
+    description: "For power users and content creators",
+    features: [
+      "50 art generations per day",
+      "All 71 artistic styles & artists",
+      "HD quality (1024x1024)",
+      "Save unlimited artworks",
+      "Priority generation speed",
+      "Commercial use rights",
+      "Multi-device sync",
+      "API access for integration",
+      "Cancel anytime, no fees",
+    ],
+    cta: "Upgrade to Enthusiast",
+    popular: false,
+  },
+  {
+    id: "business_basic",
+    name: "Business Basic",
+    price: "$199.99",
+    period: "per month",
+    dailyLimit: 100,
+    description: "For small businesses and agencies",
+    features: [
+      "100 art generations per day",
+      "All 71 artistic styles & artists",
+      "HD quality (1024x1024)",
+      "Save unlimited artworks",
+      "Priority generation speed",
+      "Commercial use rights",
+      "Multi-device sync",
+      "API access for integration",
+      "Priority support",
+      "Cancel anytime, no fees",
+    ],
+    cta: "Upgrade to Business Basic",
+    popular: false,
+  },
+  {
+    id: "business_premium",
+    name: "Business Premium",
+    price: "$499",
+    period: "per month",
+    dailyLimit: 300,
+    description: "For large businesses and enterprises",
+    features: [
+      "300 art generations per day",
+      "All 71 artistic styles & artists",
+      "HD quality (1024x1024)",
+      "Save unlimited artworks",
+      "Priority generation speed",
+      "Commercial use rights",
+      "Multi-device sync",
+      "API access for integration",
+      "White-label options",
+      "Dedicated account manager",
+      "Cancel anytime, no fees",
+    ],
+    cta: "Contact Sales",
+    popular: false,
+  },
+];
 
-const SubscribeForm = () => {
-  const stripe = useStripe();
-  const elements = useElements();
-  const { toast } = useToast();
-  const [isProcessing, setIsProcessing] = useState(false);
+export default function Subscribe() {
+  const { user, isAuthenticated } = useAuth();
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Fetch user data to get current subscription tier
+  const { data: userData } = useQuery<User>({
+    queryKey: ["/api/auth/user"],
+    enabled: isAuthenticated,
+  });
 
-    if (!stripe || !elements) {
-      return;
-    }
-
-    setIsProcessing(true);
-
-    const { error } = await stripe.confirmPayment({
-      elements,
-      confirmParams: {
-        return_url: window.location.origin + "/display",
-      },
-    });
-
-    setIsProcessing(false);
-
-    if (error) {
-      toast({
-        title: "Payment Failed",
-        description: error.message,
-        variant: "destructive",
-      });
-    } else {
-      toast({
-        title: "Payment Successful",
-        description: "You are now subscribed to Premium!",
-      });
-    }
-  };
+  const currentTier = userData?.subscriptionTier || "free";
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-6">
-      <PaymentElement />
-      <Button 
-        type="submit" 
-        className="w-full" 
-        disabled={!stripe || isProcessing}
-        data-testid="button-complete-subscription"
-      >
-        {isProcessing ? "Processing..." : "Start 7-Day Free Trial"}
-      </Button>
-      <p className="text-xs text-center text-muted-foreground">
-        You won't be charged until your trial ends. Cancel anytime.
-      </p>
-    </form>
-  );
-};
+    <div className="min-h-screen bg-background">
+      {/* Header */}
+      <header className="border-b bg-background/95 backdrop-blur">
+        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <Link href="/">
+              <Button variant="ghost" size="icon" data-testid="button-back-home">
+                <ArrowLeft className="h-5 w-5" />
+              </Button>
+            </Link>
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-6 w-6 text-primary" />
+              <span className="text-lg font-bold">Algorhythmic</span>
+            </div>
+          </div>
+        </div>
+      </header>
 
-function SubscribeContent() {
-  const [clientSecret, setClientSecret] = useState("");
-  const [isLoading, setIsLoading] = useState(true);
+      {/* Main Content */}
+      <div className="max-w-7xl mx-auto px-4 py-12">
+        {/* Page Title */}
+        <div className="text-center mb-12">
+          <h1 className="text-4xl md:text-5xl font-bold mb-4">Choose Your Plan</h1>
+          <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
+            Upgrade to unlock more daily generations. Cancel anytime, no fees.
+          </p>
+          
+          {/* Current Plan Badge */}
+          {userData && (
+            <div className="mt-6 inline-flex items-center gap-2 px-4 py-2 rounded-md bg-primary/10 border border-primary/20">
+              <Crown className="h-5 w-5 text-primary" />
+              <span className="text-sm font-medium">
+                Current Plan: <span className="font-bold capitalize">{currentTier.replace('_', ' ')}</span>
+              </span>
+            </div>
+          )}
+        </div>
 
-  useEffect(() => {
-    // For demo purposes, we'll create a payment intent on the client side
-    // In production, this would be tied to user authentication
-    apiRequest("POST", "/api/create-payment-intent", { amount: 9.99 })
-      .then(async (res) => {
-        if (!res.ok) {
-          const error = await res.json();
-          throw new Error(error.message || 'Payment service unavailable');
-        }
-        return res.json();
-      })
-      .then((data) => {
-        setClientSecret(data.clientSecret);
-        setIsLoading(false);
-      })
-      .catch((error) => {
-        console.error("Error creating payment intent:", error);
-        setIsLoading(false);
-      });
-  }, []);
+        {/* Pricing Cards */}
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-8 mb-12">
+          {pricingTiers.map((tier) => {
+            const isCurrentTier = tier.id === currentTier;
+            
+            return (
+              <Card 
+                key={tier.id}
+                className={`relative ${tier.popular ? 'border-primary shadow-lg' : ''} ${isCurrentTier ? 'border-primary/50 bg-primary/5' : ''}`}
+                data-testid={`pricing-card-${tier.id}`}
+              >
+                {tier.popular && !isCurrentTier && (
+                  <div className="absolute -top-4 left-1/2 -translate-x-1/2">
+                    <Badge className="text-xs px-3 py-1">Most Popular</Badge>
+                  </div>
+                )}
+                {isCurrentTier && (
+                  <div className="absolute -top-4 left-1/2 -translate-x-1/2">
+                    <Badge variant="outline" className="text-xs px-3 py-1 bg-background">
+                      Current Plan
+                    </Badge>
+                  </div>
+                )}
+                <CardHeader>
+                  <CardTitle className="text-2xl">{tier.name}</CardTitle>
+                  <CardDescription>{tier.description}</CardDescription>
+                  <div className="mt-4">
+                    <span className="text-4xl font-bold">{tier.price}</span>
+                    <span className="text-muted-foreground ml-2">{tier.period}</span>
+                  </div>
+                  <div className="mt-2 flex items-center gap-2 text-sm">
+                    <Zap className="h-4 w-4 text-primary" />
+                    <span className="font-medium">{tier.dailyLimit} generations/day</span>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <ul className="space-y-3">
+                    {tier.features.map((feature, featureIndex) => (
+                      <li key={featureIndex} className="flex items-start gap-2">
+                        <Check className="h-5 w-5 text-primary flex-shrink-0 mt-0.5" />
+                        <span className="text-sm">{feature}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </CardContent>
+                <CardFooter>
+                  {tier.id === "business_premium" ? (
+                    <a href="mailto:support@algorhythmic.art" className="w-full">
+                      <Button 
+                        className="w-full" 
+                        variant="outline"
+                        data-testid={`button-subscribe-${tier.id}`}
+                      >
+                        <Mail className="h-4 w-4 mr-2" />
+                        Contact Sales
+                      </Button>
+                    </a>
+                  ) : isCurrentTier ? (
+                    <Button 
+                      className="w-full" 
+                      variant="outline"
+                      disabled
+                      data-testid={`button-subscribe-${tier.id}`}
+                    >
+                      Current Plan
+                    </Button>
+                  ) : (
+                    <a href={`mailto:support@algorhythmic.art?subject=Upgrade to ${tier.name}&body=I would like to upgrade my account to the ${tier.name} plan ($${tier.price.replace('$', '')} ${tier.period}).`} className="w-full">
+                      <Button 
+                        className="w-full" 
+                        variant={tier.popular ? "default" : "outline"}
+                        data-testid={`button-subscribe-${tier.id}`}
+                      >
+                        <Mail className="h-4 w-4 mr-2" />
+                        Request Upgrade
+                      </Button>
+                    </a>
+                  )}
+                </CardFooter>
+              </Card>
+            );
+          })}
+        </div>
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" aria-label="Loading"/>
-      </div>
-    );
-  }
-
-  if (!clientSecret) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <Card className="max-w-md">
+        {/* Info Section */}
+        <Card className="bg-muted/30">
           <CardHeader>
-            <CardTitle>Payment Service Unavailable</CardTitle>
-            <CardDescription>
-              Payment processing is currently not configured. This is a demo environment.
-              In production, you would be able to subscribe here.
-            </CardDescription>
+            <CardTitle className="text-xl">Subscription Management</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              For now, you can explore all the features for free by starting the art display.
+              <strong>How to Upgrade:</strong> Click "Request Upgrade" on any plan above to email support@algorhythmic.art. 
+              Include your user ID and desired plan in the email.
             </p>
-            <div className="flex gap-2">
-              <Link href="/display">
-                <Button className="flex-1">Try Art Display</Button>
-              </Link>
-              <Link href="/">
-                <Button variant="outline" className="flex-1">Return Home</Button>
-              </Link>
+            <p className="text-sm text-muted-foreground">
+              <strong>Payment & Activation:</strong> Our team will send you a secure Stripe payment link. 
+              After payment confirmation, your account will be upgraded and your new daily generation limit activates immediately.
+            </p>
+            <ul className="space-y-2 text-sm text-muted-foreground">
+              <li className="flex items-start gap-2">
+                <Check className="h-4 w-4 text-primary flex-shrink-0 mt-0.5" />
+                <span>All plans are month-to-month with no long-term commitment</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <Check className="h-4 w-4 text-primary flex-shrink-0 mt-0.5" />
+                <span>Cancel anytime with no fees or penalties</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <Check className="h-4 w-4 text-primary flex-shrink-0 mt-0.5" />
+                <span>Upgrade or downgrade plans anytime - just email us</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <Check className="h-4 w-4 text-primary flex-shrink-0 mt-0.5" />
+                <span>Secure payments processed through Stripe</span>
+              </li>
+            </ul>
+            <div className="pt-4 border-t">
+              <p className="text-sm text-muted-foreground">
+                Questions? Contact us at{" "}
+                <a href="mailto:support@algorhythmic.art" className="text-primary hover:underline">
+                  support@algorhythmic.art
+                </a>
+              </p>
             </div>
           </CardContent>
         </Card>
       </div>
-    );
-  }
-
-  return (
-    <div className="min-h-screen bg-background py-12">
-      <div className="max-w-6xl mx-auto px-4">
-        <div className="mb-8">
-          <Link href="/">
-            <Button variant="ghost" data-testid="button-back-home-subscribe">
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Back to Home
-            </Button>
-          </Link>
-        </div>
-
-        <div className="grid lg:grid-cols-2 gap-8 items-start">
-          {/* Plan Details */}
-          <div>
-            <div className="flex items-center gap-2 mb-6">
-              <Sparkles className="h-8 w-8 text-primary" />
-              <h1 className="text-3xl font-bold">Subscribe to Premium</h1>
-            </div>
-
-            <Card className="mb-6">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-2xl">Premium Plan</CardTitle>
-                  <Badge>Most Popular</Badge>
-                </div>
-                <div className="mt-4">
-                  <span className="text-4xl font-bold">$9.99</span>
-                  <span className="text-muted-foreground ml-2">per month</span>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <ul className="space-y-3">
-                  <li className="flex items-start gap-2">
-                    <Check className="h-5 w-5 text-primary flex-shrink-0 mt-0.5" />
-                    <span>Unlimited art generations</span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <Check className="h-5 w-5 text-primary flex-shrink-0 mt-0.5" />
-                    <span>All artistic styles & artists</span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <Check className="h-5 w-5 text-primary flex-shrink-0 mt-0.5" />
-                    <span>HD quality (1024x1024)</span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <Check className="h-5 w-5 text-primary flex-shrink-0 mt-0.5" />
-                    <span>Save favorite artworks</span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <Check className="h-5 w-5 text-primary flex-shrink-0 mt-0.5" />
-                    <span>Priority generation speed</span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <Check className="h-5 w-5 text-primary flex-shrink-0 mt-0.5" />
-                    <span>Commercial use rights</span>
-                  </li>
-                </ul>
-              </CardContent>
-            </Card>
-
-            <Card className="bg-primary/5 border-primary/20">
-              <CardHeader>
-                <CardTitle className="text-lg">7-Day Free Trial</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm text-muted-foreground">
-                  Try Premium free for 7 days. No commitment required. Cancel anytime during your trial 
-                  and you won't be charged. After your trial, your subscription will automatically renew 
-                  at $9.99/month until you cancel.
-                </p>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Payment Form */}
-          <div>
-            <Card>
-              <CardHeader>
-                <CardTitle>Payment Details</CardTitle>
-                <CardDescription>
-                  Enter your payment information to start your free trial
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                {stripePromise ? (
-                  <Elements stripe={stripePromise} options={{ clientSecret }}>
-                    <SubscribeForm />
-                  </Elements>
-                ) : (
-                  <div className="text-center py-8">
-                    <p className="text-sm text-muted-foreground">
-                      Payment processing unavailable in demo mode
-                    </p>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            <div className="mt-6 text-center text-sm text-muted-foreground">
-              <p>Secure payment powered by Stripe</p>
-              <p className="mt-2">
-                By subscribing, you agree to our{" "}
-                <a href="#" className="underline hover-elevate px-1 py-0.5 rounded-sm inline-block">
-                  Terms of Service
-                </a>{" "}
-                and{" "}
-                <a href="#" className="underline hover-elevate px-1 py-0.5 rounded-sm inline-block">
-                  Privacy Policy
-                </a>
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
     </div>
   );
-}
-
-export default function Subscribe() {
-  return <SubscribeContent />;
 }

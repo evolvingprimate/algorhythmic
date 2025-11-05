@@ -69,6 +69,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Admin endpoint to update user subscription tier
+  // For MVP: Admin authorization via direct database update
+  // Production: This endpoint is disabled. Admins should update tiers directly in database
+  app.post('/api/admin/update-tier', isAuthenticated, async (req: any, res) => {
+    try {
+      // For MVP, this endpoint is documentation only
+      // In practice, admins should run: UPDATE users SET subscription_tier = 'premium' WHERE id = 'user_id';
+      return res.status(501).json({ 
+        message: "For MVP, tier updates must be performed directly in the database. Use: UPDATE users SET subscription_tier = 'desired_tier' WHERE id = 'user_id';",
+        validTiers: ['free', 'premium', 'ultimate', 'enthusiast', 'business_basic', 'business_premium']
+      });
+    } catch (error: any) {
+      console.error("Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // Get or create user preferences
   app.get("/api/preferences/:sessionId", async (req, res) => {
     try {
@@ -96,24 +113,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Generate art based on audio analysis
-  app.post("/api/generate-art", async (req: any, res) => {
+  // Generate art based on audio analysis - REQUIRES AUTHENTICATION
+  app.post("/api/generate-art", isAuthenticated, async (req: any, res) => {
     try {
       const { sessionId, audioAnalysis, musicInfo, preferences, previousVotes } = req.body;
 
-      // Get userId if authenticated
-      const userId = req.user?.claims?.sub || null;
+      // Get userId from authenticated user
+      const userId = req.user.claims.sub;
 
-      // Check daily limit for authenticated users
-      if (userId) {
-        const usageCheck = await storage.checkDailyLimit(userId);
-        if (!usageCheck.canGenerate) {
-          return res.status(429).json({ 
-            message: "Daily generation limit reached",
-            count: usageCheck.count,
-            limit: usageCheck.limit,
-          });
-        }
+      // Check daily limit
+      const usageCheck = await storage.checkDailyLimit(userId);
+      if (!usageCheck.canGenerate) {
+        return res.status(429).json({ 
+          message: "Daily generation limit reached. Upgrade your plan for more generations.",
+          count: usageCheck.count,
+          limit: usageCheck.limit,
+        });
       }
 
       // Validate audio analysis
@@ -153,11 +168,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         isSaved: false,
       });
 
-      // Increment daily usage for authenticated users
-      if (userId) {
-        const today = new Date().toISOString().split('T')[0];
-        await storage.incrementDailyUsage(userId, today);
-      }
+      // Increment daily usage (user is always authenticated here)
+      const today = new Date().toISOString().split('T')[0];
+      await storage.incrementDailyUsage(userId, today);
 
       res.json({
         imageUrl,

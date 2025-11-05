@@ -74,3 +74,81 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 - **Spotify API**: For retrieving album artwork and associated metadata.
 - **Replit Auth**: For user authentication.
 - **PostgreSQL**: Database for persistent storage.
+
+## Subscription Management
+
+### 6 Pricing Tiers
+1. **Free**: $0/month, 3 generations/day
+2. **Premium**: $14.99/month, 10 generations/day
+3. **Ultimate**: $19.99/month, 20 generations/day
+4. **Enthusiast**: $49.99/month, 50 generations/day
+5. **Business Basic**: $199.99/month, 100 generations/day
+6. **Business Premium**: $499/month, 300 generations/day
+
+### Daily Usage Tracking
+- Implemented in `dailyUsage` table
+- Tracks userId, date (YYYY-MM-DD), generationCount
+- Automatic daily reset via date comparison
+- API routes: `/api/usage/check`, `/api/usage/stats`
+
+### Manual Tier Upgrades (MVP Admin Workflow)
+
+**Important**: This process requires Replit workspace admin access. The person fulfilling upgrades must be able to access the Replit project's Database pane.
+
+**Step-by-Step Process**:
+
+1. **User Requests Upgrade**
+   - User clicks "Request Upgrade" button on /subscribe page
+   - Pre-filled email opens addressed to support@algorhythmic.art
+   - Email contains: user's request, tier name, and pricing
+
+2. **Admin Receives Request**
+   - Check user's email and verify their account exists in database
+   - To find user ID: Open Replit Database pane → Query: `SELECT id, email, subscription_tier FROM users WHERE email = 'user@example.com';`
+
+3. **Admin Sends Payment Link**
+   - Create Stripe payment link for the requested tier amount
+   - Send payment link to user via email
+   - Wait for payment confirmation from Stripe
+
+4. **Admin Updates Tier** (AFTER payment confirmed)
+   - Open Replit project
+   - Click "Database" tab in left sidebar (or Tools → Database)
+   - In the SQL query editor, run:
+   ```sql
+   UPDATE users 
+   SET subscription_tier = 'premium'  -- or ultimate, enthusiast, business_basic, business_premium
+   WHERE id = 'user-id-from-step-2';
+   ```
+   - Click "Run" to execute
+   - Verify success message
+
+5. **Verify Upgrade**
+   - User's new daily limit takes effect immediately (no restart needed)
+   - User can verify by logging in and checking usage indicator
+   - To confirm in database: `SELECT id, email, subscription_tier FROM users WHERE id = 'user-id';`
+
+**Alternative: Using psql CLI**
+```bash
+# Connect to database
+psql $DATABASE_URL
+
+# Update tier
+UPDATE users SET subscription_tier = 'premium' WHERE id = 'user-id-here';
+
+# Verify
+SELECT id, email, subscription_tier FROM users WHERE id = 'user-id-here';
+```
+
+### Valid Tier Values
+- `free` (3 generations/day)
+- `premium` (10 generations/day)
+- `ultimate` (20 generations/day)
+- `enthusiast` (50 generations/day)
+- `business_basic` (100 generations/day)
+- `business_premium` (300 generations/day)
+
+### Future Enhancements
+- Automated Stripe Checkout integration
+- Self-service subscription management portal
+- Webhook handling for automatic tier updates
