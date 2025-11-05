@@ -106,7 +106,7 @@ export default function Landing() {
   const [hoveredStyle, setHoveredStyle] = useState<number | null>(null);
 
   return (
-    <div className="min-h-screen bg-background relative">
+    <div className="min-h-screen relative">
       {/* Animated Background */}
       <AnimatedBackground />
       
