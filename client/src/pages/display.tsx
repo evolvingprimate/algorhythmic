@@ -203,10 +203,10 @@ export default function Display() {
     // Send to WebSocket for multi-device sync
     wsClientRef.current?.send('audio-analysis', analysis);
 
-    // Generate new art every 10-15 seconds based on audio changes
+    // Generate new art every 12 seconds based on audio changes
     if (!isGenerating && !generationTimeoutRef.current) {
+      setIsGenerating(true); // Set immediately to prevent duplicate requests
       generationTimeoutRef.current = window.setTimeout(() => {
-        setIsGenerating(true);
         generateArtMutation.mutate(analysis);
         generationTimeoutRef.current = undefined;
       }, currentImage ? 12000 : 0); // First generation immediate, then every 12s
