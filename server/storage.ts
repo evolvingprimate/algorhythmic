@@ -113,7 +113,9 @@ export class MemStorage implements IStorage {
     const session: ArtSession = {
       id,
       ...insertSession,
+      userId: insertSession.userId || null,
       audioFeatures: insertSession.audioFeatures || null,
+      isSaved: insertSession.isSaved || false,
       createdAt: new Date(),
     };
     this.sessions.set(id, session);
