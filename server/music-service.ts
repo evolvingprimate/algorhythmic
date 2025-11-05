@@ -28,6 +28,8 @@ export async function identifyMusic(audioBlob: Buffer): Promise<MusicIdentificat
   }
 
   try {
+    console.log(`[Music ID] Attempting to identify music from ${audioBlob.length} byte audio sample`);
+    
     const FormData = (await import("form-data")).default;
     const formData = new FormData();
     
@@ -45,14 +47,18 @@ export async function identifyMusic(audioBlob: Buffer): Promise<MusicIdentificat
     });
 
     if (!response.ok) {
-      console.error("AudD API error:", response.status, response.statusText);
+      console.error("[Music ID] AudD API error:", response.status, response.statusText);
+      const errorText = await response.text();
+      console.error("[Music ID] Error details:", errorText);
       return null;
     }
 
     const data = await response.json() as AudDResponse;
+    console.log("[Music ID] AudD API response:", JSON.stringify(data, null, 2));
 
     if (data.status === "success" && data.result) {
       const result = data.result;
+      console.log(`[Music ID] ✅ Successfully identified: ${result.artist} - ${result.title}`);
       return {
         title: result.title,
         artist: result.artist,
@@ -66,9 +72,10 @@ export async function identifyMusic(audioBlob: Buffer): Promise<MusicIdentificat
       };
     }
 
+    console.log("[Music ID] ❌ No music identified (AudD returned null result)");
     return null;
   } catch (error) {
-    console.error("Error identifying music:", error);
+    console.error("[Music ID] Error identifying music:", error);
     return null;
   }
 }
