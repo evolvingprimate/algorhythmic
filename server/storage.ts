@@ -22,7 +22,7 @@ import ws from "ws";
 export interface IStorage {
   // Art Preferences
   getPreferencesBySession(sessionId: string): Promise<ArtPreference | undefined>;
-  createOrUpdatePreferences(sessionId: string, styles: string[], artists: string[]): Promise<ArtPreference>;
+  createOrUpdatePreferences(sessionId: string, styles: string[], artists: string[], dynamicMode?: boolean): Promise<ArtPreference>;
   
   // Art Votes
   getVotesBySession(sessionId: string): Promise<ArtVote[]>;
@@ -63,7 +63,7 @@ export class MemStorage implements IStorage {
     );
   }
 
-  async createOrUpdatePreferences(sessionId: string, styles: string[], artists: string[]): Promise<ArtPreference> {
+  async createOrUpdatePreferences(sessionId: string, styles: string[], artists: string[], dynamicMode: boolean = false): Promise<ArtPreference> {
     const existing = await this.getPreferencesBySession(sessionId);
     
     if (existing) {
@@ -71,6 +71,7 @@ export class MemStorage implements IStorage {
         ...existing,
         styles,
         artists,
+        dynamicMode,
       };
       this.preferences.set(existing.id, updated);
       return updated;
@@ -82,6 +83,7 @@ export class MemStorage implements IStorage {
       sessionId,
       styles,
       artists,
+      dynamicMode,
       createdAt: new Date(),
     };
     this.preferences.set(id, preference);
@@ -280,14 +282,15 @@ export class PostgresStorage implements IStorage {
   async createOrUpdatePreferences(
     sessionId: string,
     styles: string[],
-    artists: string[]
+    artists: string[],
+    dynamicMode: boolean = false
   ): Promise<ArtPreference> {
     const existing = await this.getPreferencesBySession(sessionId);
 
     if (existing) {
       const updated = await this.db
         .update(artPreferences)
-        .set({ styles, artists })
+        .set({ styles, artists, dynamicMode })
         .where(eq(artPreferences.id, existing.id))
         .returning();
       return updated[0];
@@ -295,7 +298,7 @@ export class PostgresStorage implements IStorage {
 
     const created = await this.db
       .insert(artPreferences)
-      .values({ sessionId, styles, artists })
+      .values({ sessionId, styles, artists, dynamicMode })
       .returning();
     return created[0];
   }

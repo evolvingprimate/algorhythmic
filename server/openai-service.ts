@@ -9,6 +9,7 @@ interface ArtGenerationParams {
   musicInfo?: MusicIdentification | null;
   styles: string[];
   artists: string[];
+  dynamicMode?: boolean;
   previousVotes?: Array<{ prompt: string; vote: number }>;
 }
 
@@ -18,16 +19,26 @@ interface ArtGenerationResult {
 }
 
 export async function generateArtPrompt(params: ArtGenerationParams): Promise<ArtGenerationResult> {
-  const { audioAnalysis, musicInfo, styles, artists, previousVotes } = params;
+  const { audioAnalysis, musicInfo, styles, artists, dynamicMode = false, previousVotes } = params;
   
-  // Build context from user preferences
-  const styleContext = styles.length > 0 
-    ? `in the style of ${styles.join(", ")}` 
-    : "in an abstract artistic style";
+  // Build context from user preferences or use dynamic mode
+  let styleContext: string;
+  let artistContext: string;
   
-  const artistContext = artists.length > 0
-    ? `inspired by ${artists.join(", ")}`
-    : "";
+  if (dynamicMode) {
+    // In dynamic mode, let the AI choose the style based on genre and album artwork
+    styleContext = "";
+    artistContext = "";
+  } else {
+    // Manual mode: use user-selected styles
+    styleContext = styles.length > 0 
+      ? `in the style of ${styles.join(", ")}` 
+      : "in an abstract artistic style";
+    
+    artistContext = artists.length > 0
+      ? `inspired by ${artists.join(", ")}`
+      : "";
+  }
 
   // Analyze previous votes to understand preferences
   const likedPrompts = previousVotes?.filter(v => v.vote === 1).map(v => v.prompt) || [];
@@ -89,7 +100,10 @@ When an album cover image is provided, analyze it as an inspirational muse:
 • Artistic Techniques: Painting style, digital art, photography, mixed media, graphic design elements
 • Mood & Atmosphere: Emotional tone conveyed through visual choices
 • Symbolic Elements: Key imagery, metaphors, cultural references
-• Use these insights to inform the DALL-E prompt while respecting user's selected art styles
+${dynamicMode 
+  ? '• DYNAMIC MODE: Choose the artistic style (surrealism, impressionism, cubism, abstract, realism, cartoon, horror, kids, trippy, digital, etc.) that BEST MATCHES the genre and album artwork aesthetic. Let the music and album art naturally determine the visual style.'
+  : '• Use these insights to inform the DALL-E prompt while respecting user\'s selected art styles'
+}
 
 **OUTPUT FORMAT (REQUIRED):**
 
@@ -98,7 +112,8 @@ ARTISTIC CONTEXT:
 • Artist Intent: What was the artist trying to express? What inspired this song? (backstory, personal experience, social commentary, etc.)
 • Lyrical Themes: Extract 2-3 dominant themes/motifs from lyrics (e.g., "struggle & triumph", "lost love & nostalgia", "freedom & rebellion")
 • Visual Metaphors: Map lyrical themes to visual imagery (e.g., "chains breaking" → "shattered metal fragments", "rising from darkness" → "light piercing shadows")
-${musicInfo?.albumArtworkUrl ? '• Album Art Style: Describe the original album artwork\'s visual aesthetic, color palette, and artistic approach' : ''}]
+${musicInfo?.albumArtworkUrl ? '• Album Art Style: Describe the original album artwork\'s visual aesthetic, color palette, and artistic approach' : ''}
+${dynamicMode ? '• Chosen Art Style: Name the artistic style you\'re using and why it matches this music/genre/album art' : ''}]
 
 SONG INSIGHT:
 [If music identified: First line must be "GENRE: [genre]" (e.g., "GENRE: Hip-Hop" or "GENRE: Rock"). Then analyze the specific song's music video aesthetic (if you know it exists), emotional tone, and cultural context. If music video doesn't exist, imaginatively reconstruct what it might look like based on the artist's style and the song's themes. If no music: Note "GENRE: Unknown" and describe audio mood]
@@ -113,12 +128,25 @@ FINAL PROMPT:
 
     // If album artwork is available, use vision-capable model with image
     if (musicInfo?.albumArtworkUrl) {
-      messages.push({
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: `Create artwork ${styleContext} ${artistContext}. ${musicContext}
+      const userPrompt = dynamicMode 
+        ? `DYNAMIC MODE: Choose the artistic style that best matches the genre and album artwork. ${musicContext}
+          
+${audioDescription}
+
+${voteContext}
+
+Deeply analyze "${musicInfo.title}" by ${musicInfo.artist}. Consider:
+- Artist's intention: What inspired this song? What was the artist trying to express?
+- Lyrical meaning: Analyze the lyrics for dominant themes, motifs, symbolism, and emotional narrative
+- Visual metaphors: Translate lyrical themes into visual imagery
+- Music video aesthetic (if one exists, or imagine what it would look like)
+- Genre-specific visual culture
+- The artist's creative visual identity
+- IMPORTANT: Analyze the provided album artwork and use it as an inspirational muse for color palette, artistic style, and visual aesthetic
+- SELECT the artistic style (surrealism, impressionism, cubism, abstract, realism, cartoon, horror, kids, trippy, digital, etc.) that naturally fits the genre, mood, and album artwork
+
+Provide structured output with ARTISTIC CONTEXT (including your chosen art style), SONG INSIGHT, VISUAL LANGUAGE, and FINAL PROMPT sections.`
+        : `Create artwork ${styleContext} ${artistContext}. ${musicContext}
           
 ${audioDescription}
 
@@ -133,7 +161,14 @@ Deeply analyze "${musicInfo.title}" by ${musicInfo.artist}. Consider:
 - The artist's creative visual identity
 - IMPORTANT: Analyze the provided album artwork and use it as an inspirational muse for color palette, artistic style, and visual aesthetic
 
-Provide structured output with ARTISTIC CONTEXT, SONG INSIGHT, VISUAL LANGUAGE, and FINAL PROMPT sections.`
+Provide structured output with ARTISTIC CONTEXT, SONG INSIGHT, VISUAL LANGUAGE, and FINAL PROMPT sections.`;
+      
+      messages.push({
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: userPrompt
           },
           {
             type: "image_url",
@@ -145,9 +180,24 @@ Provide structured output with ARTISTIC CONTEXT, SONG INSIGHT, VISUAL LANGUAGE, 
       });
     } else {
       // No album artwork - text only
-      messages.push({
-        role: "user",
-        content: `Create artwork ${styleContext} ${artistContext}. ${musicContext}
+      const userPrompt = dynamicMode && musicInfo
+        ? `DYNAMIC MODE: Choose the artistic style that best matches the music genre. ${musicContext}
+          
+${audioDescription}
+
+${voteContext}
+
+Deeply analyze "${musicInfo.title}" by ${musicInfo.artist}. Consider:
+- Artist's intention: What inspired this song? What was the artist trying to express?
+- Lyrical meaning: Analyze the lyrics for dominant themes, motifs, symbolism, and emotional narrative
+- Visual metaphors: Translate lyrical themes into visual imagery
+- Music video aesthetic (if one exists, or imagine what it would look like)
+- Genre-specific visual culture
+- The artist's creative visual identity
+- SELECT the artistic style (surrealism, impressionism, cubism, abstract, realism, cartoon, horror, kids, trippy, digital, etc.) that naturally fits the genre and mood
+
+Provide structured output with ARTISTIC CONTEXT (including your chosen art style), SONG INSIGHT, VISUAL LANGUAGE, and FINAL PROMPT sections.`
+        : `Create artwork ${styleContext} ${artistContext}. ${musicContext}
           
 ${audioDescription}
 
@@ -161,7 +211,11 @@ ${musicInfo ? `Deeply analyze "${musicInfo.title}" by ${musicInfo.artist}. Consi
 - Genre-specific visual culture
 - The artist's creative visual identity
 
-Provide structured output with ARTISTIC CONTEXT, SONG INSIGHT, VISUAL LANGUAGE, and FINAL PROMPT sections.` : "Translate the audio mood into visual art. Provide structured output with SONG INSIGHT, VISUAL LANGUAGE, and FINAL PROMPT sections."}`
+Provide structured output with ARTISTIC CONTEXT, SONG INSIGHT, VISUAL LANGUAGE, and FINAL PROMPT sections.` : "Translate the audio mood into visual art. Provide structured output with SONG INSIGHT, VISUAL LANGUAGE, and FINAL PROMPT sections."}`;
+      
+      messages.push({
+        role: "user",
+        content: userPrompt
       });
     }
 

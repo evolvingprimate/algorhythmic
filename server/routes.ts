@@ -56,7 +56,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const preferences = await storage.createOrUpdatePreferences(
         validated.sessionId,
         validated.styles || [],
-        validated.artists || []
+        validated.artists || [],
+        validated.dynamicMode || false
       );
       res.json(preferences);
     } catch (error: any) {
@@ -84,6 +85,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         musicInfo: music,
         styles: preferences?.styles || [],
         artists: preferences?.artists || [],
+        dynamicMode: preferences?.dynamicMode || false,
         previousVotes: previousVotes || [],
       });
 
