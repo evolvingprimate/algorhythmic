@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { StyleSelector } from "@/components/style-selector";
+import { AudioSourceSelector } from "@/components/audio-source-selector";
 import { useToast } from "@/hooks/use-toast";
 import { AudioAnalyzer } from "@/lib/audio-analyzer";
 import { WebSocketClient } from "@/lib/websocket-client";
@@ -34,6 +35,7 @@ export default function Display() {
   const [volume, setVolume] = useState([80]);
   const [selectedStyles, setSelectedStyles] = useState<string[]>([]);
   const [showStyleSelector, setShowStyleSelector] = useState(false);
+  const [showAudioSourceSelector, setShowAudioSourceSelector] = useState(false);
   const [currentPrompt, setCurrentPrompt] = useState("");
   const [currentAudioAnalysis, setCurrentAudioAnalysis] = useState<AudioAnalysis | null>(null);
   const [currentArtworkId, setCurrentArtworkId] = useState<string | null>(null);
@@ -213,24 +215,35 @@ export default function Display() {
     }
   };
 
-  const handleStartListening = async () => {
+  const handleStartListening = () => {
     if (selectedStyles.length === 0) {
       setShowStyleSelector(true);
       return;
     }
 
+    // Show audio source selector modal
+    setShowAudioSourceSelector(true);
+  };
+
+  const handleAudioSourceConfirm = async (deviceId: string | undefined) => {
+    setShowAudioSourceSelector(false);
+
     try {
       if (!audioAnalyzerRef.current) {
-        audioAnalyzerRef.current = new AudioAnalyzer();
-        await audioAnalyzerRef.current.initialize(handleAudioAnalysis);
+        const analyzer = new AudioAnalyzer();
+        await analyzer.initialize(handleAudioAnalysis, deviceId);
+        // Only assign after successful initialization
+        audioAnalyzerRef.current = analyzer;
+        
+        setIsPlaying(true);
+        toast({
+          title: "Listening Started",
+          description: "Creating art from the sounds around you...",
+        });
       }
-      setIsPlaying(true);
-      
-      toast({
-        title: "Listening Started",
-        description: "Creating art from the sounds around you...",
-      });
     } catch (error: any) {
+      // Reset ref to allow retry
+      audioAnalyzerRef.current = null;
       toast({
         title: "Microphone Access Denied",
         description: error.message,
@@ -483,6 +496,13 @@ export default function Display() {
           onClose={() => setShowStyleSelector(false)}
         />
       )}
+
+      {/* Audio Source Selector Modal */}
+      <AudioSourceSelector
+        open={showAudioSourceSelector}
+        onClose={() => setShowAudioSourceSelector(false)}
+        onConfirm={handleAudioSourceConfirm}
+      />
 
       {/* Loading Overlay */}
       {isGenerating && (
