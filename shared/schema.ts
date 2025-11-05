@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, timestamp, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, timestamp, boolean, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -10,7 +10,9 @@ export const artPreferences = pgTable("art_preferences", {
   styles: text("styles").array().notNull().default(sql`'{}'::text[]`),
   artists: text("artists").array().notNull().default(sql`'{}'::text[]`),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (table) => ({
+  sessionIdIdx: index("art_preferences_session_id_idx").on(table.sessionId),
+}));
 
 // Voting history for generated art
 export const artVotes = pgTable("art_votes", {
@@ -20,7 +22,9 @@ export const artVotes = pgTable("art_votes", {
   vote: integer("vote").notNull(), // 1 for upvote, -1 for downvote
   audioCharacteristics: text("audio_characteristics"), // JSON string of audio features
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (table) => ({
+  sessionIdIdx: index("art_votes_session_id_idx").on(table.sessionId),
+}));
 
 // Generated art sessions
 export const artSessions = pgTable("art_sessions", {
@@ -30,7 +34,9 @@ export const artSessions = pgTable("art_sessions", {
   prompt: text("prompt").notNull(),
   audioFeatures: text("audio_features"), // JSON string
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (table) => ({
+  sessionIdIdx: index("art_sessions_session_id_idx").on(table.sessionId),
+}));
 
 // Subscription users
 export const users = pgTable("users", {

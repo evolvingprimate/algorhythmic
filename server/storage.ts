@@ -6,9 +6,16 @@ import {
   type ArtSession,
   type InsertArtSession,
   type User,
-  type InsertUser
+  type InsertUser,
+  artPreferences,
+  artVotes,
+  artSessions,
+  users,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
+import { drizzle } from "drizzle-orm/neon-serverless";
+import { eq, desc, and } from "drizzle-orm";
+import { Pool } from "@neondatabase/serverless";
 
 export interface IStorage {
   // Art Preferences
@@ -87,6 +94,7 @@ export class MemStorage implements IStorage {
     const vote: ArtVote = {
       id,
       ...insertVote,
+      audioCharacteristics: insertVote.audioCharacteristics || null,
       createdAt: new Date(),
     };
     this.votes.set(id, vote);
@@ -99,6 +107,7 @@ export class MemStorage implements IStorage {
     const session: ArtSession = {
       id,
       ...insertSession,
+      audioFeatures: insertSession.audioFeatures || null,
       createdAt: new Date(),
     };
     this.sessions.set(id, session);
@@ -128,6 +137,9 @@ export class MemStorage implements IStorage {
     const user: User = {
       id,
       ...insertUser,
+      subscriptionTier: insertUser.subscriptionTier || "free",
+      stripeCustomerId: insertUser.stripeCustomerId || null,
+      stripeSubscriptionId: insertUser.stripeSubscriptionId || null,
       isActive: true,
       createdAt: new Date(),
     };
@@ -157,4 +169,139 @@ export class MemStorage implements IStorage {
   }
 }
 
-export const storage = new MemStorage();
+// PostgreSQL Storage Implementation
+export class PostgresStorage implements IStorage {
+  private db;
+
+  constructor() {
+    if (!process.env.DATABASE_URL) {
+      throw new Error("DATABASE_URL is not set");
+    }
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    this.db = drizzle(pool);
+  }
+
+  // Art Preferences
+  async getPreferencesBySession(sessionId: string): Promise<ArtPreference | undefined> {
+    const results = await this.db
+      .select()
+      .from(artPreferences)
+      .where(eq(artPreferences.sessionId, sessionId))
+      .limit(1);
+    return results[0];
+  }
+
+  async createOrUpdatePreferences(
+    sessionId: string,
+    styles: string[],
+    artists: string[]
+  ): Promise<ArtPreference> {
+    const existing = await this.getPreferencesBySession(sessionId);
+
+    if (existing) {
+      const updated = await this.db
+        .update(artPreferences)
+        .set({ styles, artists })
+        .where(eq(artPreferences.id, existing.id))
+        .returning();
+      return updated[0];
+    }
+
+    const created = await this.db
+      .insert(artPreferences)
+      .values({ sessionId, styles, artists })
+      .returning();
+    return created[0];
+  }
+
+  // Art Votes
+  async getVotesBySession(sessionId: string): Promise<ArtVote[]> {
+    return await this.db
+      .select()
+      .from(artVotes)
+      .where(eq(artVotes.sessionId, sessionId))
+      .orderBy(desc(artVotes.createdAt));
+  }
+
+  async createVote(insertVote: InsertArtVote): Promise<ArtVote> {
+    const created = await this.db
+      .insert(artVotes)
+      .values(insertVote)
+      .returning();
+    return created[0];
+  }
+
+  // Art Sessions
+  async createArtSession(insertSession: InsertArtSession): Promise<ArtSession> {
+    const created = await this.db
+      .insert(artSessions)
+      .values(insertSession)
+      .returning();
+    return created[0];
+  }
+
+  async getSessionHistory(sessionId: string, limit: number = 20): Promise<ArtSession[]> {
+    return await this.db
+      .select()
+      .from(artSessions)
+      .where(eq(artSessions.sessionId, sessionId))
+      .orderBy(desc(artSessions.createdAt))
+      .limit(limit);
+  }
+
+  // Users
+  async getUser(id: string): Promise<User | undefined> {
+    const results = await this.db
+      .select()
+      .from(users)
+      .where(eq(users.id, id))
+      .limit(1);
+    return results[0];
+  }
+
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const results = await this.db
+      .select()
+      .from(users)
+      .where(eq(users.email, email))
+      .limit(1);
+    return results[0];
+  }
+
+  async createUser(insertUser: InsertUser): Promise<User> {
+    const created = await this.db
+      .insert(users)
+      .values(insertUser)
+      .returning();
+    return created[0];
+  }
+
+  async updateUserSubscription(
+    id: string,
+    tier: string,
+    stripeCustomerId?: string,
+    stripeSubscriptionId?: string
+  ): Promise<User> {
+    const existingUser = await this.getUser(id);
+    if (!existingUser) {
+      throw new Error("User not found");
+    }
+
+    const updated = await this.db
+      .update(users)
+      .set({
+        subscriptionTier: tier,
+        stripeCustomerId: stripeCustomerId ?? existingUser.stripeCustomerId,
+        stripeSubscriptionId: stripeSubscriptionId ?? existingUser.stripeSubscriptionId,
+      })
+      .where(eq(users.id, id))
+      .returning();
+    
+    return updated[0];
+  }
+}
+
+// Use PostgreSQL storage if DATABASE_URL is available, otherwise fallback to MemStorage
+export const storage = process.env.DATABASE_URL 
+  ? new PostgresStorage() 
+  : new MemStorage();
