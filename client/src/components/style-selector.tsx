@@ -1,9 +1,11 @@
 import { useState } from "react";
-import { X, Check } from "lucide-react";
+import { X, Check, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import cubistImage from "@assets/generated_images/Cubist_geometric_composition_aa773ee7.png";
 import pointillistImage from "@assets/generated_images/Pointillist_dotted_landscape_16a33696.png";
 import fluidImage from "@assets/generated_images/Digital_fluid_paint_swirls_8aeeb143.png";
@@ -115,12 +117,14 @@ const artists = [
 
 interface StyleSelectorProps {
   selectedStyles: string[];
-  onStylesChange: (styles: string[]) => void;
+  dynamicMode?: boolean;
+  onStylesChange: (styles: string[], dynamicMode: boolean) => void;
   onClose: () => void;
 }
 
-export function StyleSelector({ selectedStyles, onStylesChange, onClose }: StyleSelectorProps) {
+export function StyleSelector({ selectedStyles, dynamicMode = false, onStylesChange, onClose }: StyleSelectorProps) {
   const [localSelection, setLocalSelection] = useState<string[]>(selectedStyles);
+  const [localDynamicMode, setLocalDynamicMode] = useState<boolean>(dynamicMode);
   const [activeTab, setActiveTab] = useState<"styles" | "artists">("styles");
 
   const toggleSelection = (id: string) => {
@@ -132,7 +136,7 @@ export function StyleSelector({ selectedStyles, onStylesChange, onClose }: Style
   };
 
   const handleSave = () => {
-    onStylesChange(localSelection);
+    onStylesChange(localSelection, localDynamicMode);
     onClose();
   };
 
@@ -143,7 +147,9 @@ export function StyleSelector({ selectedStyles, onStylesChange, onClose }: Style
           <div>
             <h2 className="text-2xl font-bold">Choose Your Artistic Style</h2>
             <p className="text-sm text-muted-foreground mt-1">
-              Select styles and artists that inspire you
+              {localDynamicMode 
+                ? "AI will automatically choose styles based on music genre and album artwork"
+                : "Select styles and artists that inspire you"}
             </p>
           </div>
           <Button variant="ghost" size="icon" onClick={onClose} data-testid="button-close-style-selector">
@@ -151,7 +157,30 @@ export function StyleSelector({ selectedStyles, onStylesChange, onClose }: Style
           </Button>
         </div>
 
-        <div className="flex gap-2 px-6 pt-4 border-b">
+        <div className="px-6 pt-4 pb-3 border-b bg-muted/30">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Sparkles className="h-5 w-5 text-primary" />
+              <div>
+                <Label htmlFor="dynamic-mode" className="font-semibold cursor-pointer">
+                  Dynamic Art Style
+                </Label>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Let AI choose the perfect style for each song
+                </p>
+              </div>
+            </div>
+            <Switch
+              id="dynamic-mode"
+              checked={localDynamicMode}
+              onCheckedChange={setLocalDynamicMode}
+              data-testid="switch-dynamic-mode"
+            />
+          </div>
+        </div>
+
+        {!localDynamicMode && (
+          <div className="flex gap-2 px-6 pt-4 border-b">
           <Button
             variant={activeTab === "styles" ? "default" : "outline"}
             onClick={() => setActiveTab("styles")}
@@ -167,8 +196,10 @@ export function StyleSelector({ selectedStyles, onStylesChange, onClose }: Style
             Artists
           </Button>
         </div>
+        )}
 
-        <ScrollArea className="flex-1 p-6">
+        {!localDynamicMode && (
+          <ScrollArea className="flex-1 p-6">
           {activeTab === "styles" ? (
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
               {styles.map((style) => {
@@ -231,6 +262,39 @@ export function StyleSelector({ selectedStyles, onStylesChange, onClose }: Style
             </div>
           )}
         </ScrollArea>
+        )}
+
+        {localDynamicMode && (
+          <div className="flex-1 flex items-center justify-center p-12">
+            <div className="text-center max-w-md space-y-4">
+              <Sparkles className="h-16 w-16 text-primary mx-auto" />
+              <h3 className="text-xl font-semibold">AI-Powered Dynamic Styling</h3>
+              <p className="text-muted-foreground">
+                When dynamic mode is enabled, our AI will automatically select the perfect artistic style 
+                for each song based on its genre, mood, and album artwork. Each track gets a unique visual 
+                interpretation tailored to its essence.
+              </p>
+              <div className="grid grid-cols-2 gap-3 pt-4 text-sm">
+                <div className="p-3 rounded-md bg-muted">
+                  <p className="font-medium">Hip-Hop</p>
+                  <p className="text-xs text-muted-foreground">Urban street art</p>
+                </div>
+                <div className="p-3 rounded-md bg-muted">
+                  <p className="font-medium">Classical</p>
+                  <p className="text-xs text-muted-foreground">Elegant impressionism</p>
+                </div>
+                <div className="p-3 rounded-md bg-muted">
+                  <p className="font-medium">Rock</p>
+                  <p className="text-xs text-muted-foreground">Bold abstract</p>
+                </div>
+                <div className="p-3 rounded-md bg-muted">
+                  <p className="font-medium">Pop</p>
+                  <p className="text-xs text-muted-foreground">Vibrant colorful</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="p-6 border-t flex items-center justify-between">
           <div>
@@ -244,10 +308,10 @@ export function StyleSelector({ selectedStyles, onStylesChange, onClose }: Style
             </Button>
             <Button 
               onClick={handleSave} 
-              disabled={localSelection.length === 0}
+              disabled={!localDynamicMode && localSelection.length === 0}
               data-testid="button-save-selection"
             >
-              Create My Station
+              {localDynamicMode ? "Enable Dynamic Mode" : "Create My Station"}
             </Button>
           </div>
         </div>

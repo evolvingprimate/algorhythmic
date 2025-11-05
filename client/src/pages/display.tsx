@@ -48,6 +48,7 @@ export default function Display() {
   const [showControls, setShowControls] = useState(true);
   const [volume, setVolume] = useState([80]);
   const [selectedStyles, setSelectedStyles] = useState<string[]>([]);
+  const [dynamicMode, setDynamicMode] = useState<boolean>(false);
   const [showStyleSelector, setShowStyleSelector] = useState(false);
   const [showAudioSourceSelector, setShowAudioSourceSelector] = useState(false);
   const [currentPrompt, setCurrentPrompt] = useState("");
@@ -112,6 +113,9 @@ export default function Display() {
     if (preferences?.styles?.length) {
       setSelectedStyles(preferences.styles);
     }
+    if (preferences?.dynamicMode !== undefined) {
+      setDynamicMode(preferences.dynamicMode);
+    }
   }, [preferences]);
 
   // Load most recent artwork on mount to avoid empty screen
@@ -160,11 +164,12 @@ export default function Display() {
 
   // Save preferences mutation
   const savePreferencesMutation = useMutation({
-    mutationFn: async (styles: string[]) => {
+    mutationFn: async ({ styles, dynamicMode }: { styles: string[]; dynamicMode: boolean }) => {
       const res = await apiRequest("POST", "/api/preferences", {
         sessionId: sessionId.current,
         styles,
         artists: [],
+        dynamicMode,
       });
       return res.json();
     },
@@ -184,6 +189,7 @@ export default function Display() {
         preferences: {
           styles: selectedStyles,
           artists: [],
+          dynamicMode,
         },
         previousVotes: votes?.slice(0, 10) || [],
       });
@@ -432,7 +438,8 @@ export default function Display() {
   };
 
   const handleStartListening = () => {
-    if (selectedStyles.length === 0) {
+    // In dynamic mode, no style selection needed. Otherwise, require style selection.
+    if (!dynamicMode && selectedStyles.length === 0) {
       setShowStyleSelector(true);
       return;
     }
@@ -489,9 +496,10 @@ export default function Display() {
     });
   };
 
-  const handleStylesChange = (styles: string[]) => {
+  const handleStylesChange = (styles: string[], isDynamicMode: boolean) => {
     setSelectedStyles(styles);
-    savePreferencesMutation.mutate(styles);
+    setDynamicMode(isDynamicMode);
+    savePreferencesMutation.mutate({ styles, dynamicMode: isDynamicMode });
   };
 
   // Navigation functions - only update index
@@ -877,6 +885,7 @@ export default function Display() {
       {showStyleSelector && (
         <StyleSelector
           selectedStyles={selectedStyles}
+          dynamicMode={dynamicMode}
           onStylesChange={handleStylesChange}
           onClose={() => setShowStyleSelector(false)}
         />
