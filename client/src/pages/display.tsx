@@ -893,12 +893,12 @@ export default function Display() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            {currentMusicInfo && (
-              <div className="space-y-2">
-                <h4 className="text-sm font-medium flex items-center gap-2">
-                  <Music className="h-4 w-4 text-primary" />
-                  Identified Music
-                </h4>
+            <div className="space-y-2">
+              <h4 className="text-sm font-medium flex items-center gap-2">
+                <Music className="h-4 w-4 text-primary" />
+                Music Detection
+              </h4>
+              {currentMusicInfo ? (
                 <div className="rounded-md bg-muted p-3">
                   <p className="text-sm font-medium">{currentMusicInfo.title}</p>
                   <p className="text-sm text-muted-foreground">{currentMusicInfo.artist}</p>
@@ -906,8 +906,12 @@ export default function Display() {
                     <p className="text-xs text-muted-foreground mt-1">Album: {currentMusicInfo.album}</p>
                   )}
                 </div>
-              </div>
-            )}
+              ) : (
+                <div className="rounded-md bg-muted p-3">
+                  <p className="text-sm text-muted-foreground italic">No music detected - artwork generated from ambient audio mood</p>
+                </div>
+              )}
+            </div>
             
             {currentAudioAnalysis && (
               <div className="space-y-2">
