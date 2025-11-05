@@ -6,13 +6,20 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
-import cubistImage from "@assets/generated_images/Cubist_geometric_composition_aa773ee7.png";
-import pointillistImage from "@assets/generated_images/Pointillist_dotted_landscape_16a33696.png";
-import fluidImage from "@assets/generated_images/Digital_fluid_paint_swirls_8aeeb143.png";
-import vanGoghImage from "@assets/generated_images/Van_Gogh_swirling_starry_art_90bb8bcc.png";
-import daliImage from "@assets/generated_images/Dali_surrealist_dreamscape_80c595de.png";
-import colorFieldImage from "@assets/generated_images/Color_field_abstract_blocks_6a364188.png";
-import wireframeImage from "@assets/generated_images/Neon_wireframe_digital_art_0459c9fd.png";
+import surrealismImage from "@assets/generated_images/Surrealism_style_thumbnail_cb5f2897.png";
+import impressionismImage from "@assets/generated_images/Impressionism_style_thumbnail_726cee9a.png";
+import cubismImage from "@assets/generated_images/Cubism_style_thumbnail_19a87b24.png";
+import abstractImage from "@assets/generated_images/Abstract_style_thumbnail_146a060e.png";
+import vanGoghImage from "@assets/generated_images/Van_Gogh_style_thumbnail_67d77d29.png";
+import colorFieldImage from "@assets/generated_images/Color_field_style_thumbnail_b170ae78.png";
+import digitalImage from "@assets/generated_images/Digital_cyber_style_thumbnail_40cb0953.png";
+import italianBrainRotImage from "@assets/generated_images/Italian_brain_rot_thumbnail_bc833352.png";
+import cartoonImage from "@assets/generated_images/Cartoon_style_thumbnail_52e4f26d.png";
+import realismImage from "@assets/generated_images/Realism_style_thumbnail_751ddd8b.png";
+import horrorImage from "@assets/generated_images/Horror_style_thumbnail_a8839b25.png";
+import kidsImage from "@assets/generated_images/Kids_style_thumbnail_6e8a14b9.png";
+import trippyImage from "@assets/generated_images/Trippy_style_thumbnail_5bdb5cf9.png";
+import pixelArtImage from "@assets/generated_images/8-bit_pixel_art_thumbnail_8837b636.png";
 
 interface StyleOption {
   id: string;
@@ -25,25 +32,25 @@ const styles: StyleOption[] = [
   {
     id: "surrealism",
     name: "Surrealism",
-    image: daliImage,
+    image: surrealismImage,
     description: "Dreamlike, impossible scenes",
   },
   {
     id: "impressionism",
     name: "Impressionism",
-    image: pointillistImage,
+    image: impressionismImage,
     description: "Soft, dotted patterns",
   },
   {
     id: "cubism",
     name: "Cubism",
-    image: cubistImage,
+    image: cubismImage,
     description: "Geometric fragments",
   },
   {
     id: "abstract",
     name: "Abstract",
-    image: fluidImage,
+    image: abstractImage,
     description: "Fluid forms and colors",
   },
   {
@@ -61,44 +68,50 @@ const styles: StyleOption[] = [
   {
     id: "digital",
     name: "Digital/Cyber",
-    image: wireframeImage,
+    image: digitalImage,
     description: "Neon and wireframes",
   },
   {
     id: "italian-brain-rot",
     name: "Italian Brain Rot",
-    image: fluidImage,
+    image: italianBrainRotImage,
     description: "Chaotic viral vibes",
   },
   {
     id: "cartoon",
     name: "Cartoon",
-    image: colorFieldImage,
+    image: cartoonImage,
     description: "Bold, animated style",
   },
   {
     id: "realism",
     name: "Realism",
-    image: vanGoghImage,
+    image: realismImage,
     description: "Lifelike and detailed",
   },
   {
     id: "horror",
     name: "Horror",
-    image: daliImage,
+    image: horrorImage,
     description: "Dark and eerie",
   },
   {
     id: "kids",
     name: "Kids",
-    image: pointillistImage,
+    image: kidsImage,
     description: "Playful and colorful",
   },
   {
     id: "trippy",
     name: "Trippy",
-    image: cubistImage,
+    image: trippyImage,
     description: "Psychedelic patterns",
+  },
+  {
+    id: "8bit-pixel",
+    name: "8-Bit Pixel Art",
+    image: pixelArtImage,
+    description: "Retro gaming graphics",
   },
 ];
 
