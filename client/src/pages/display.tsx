@@ -231,7 +231,7 @@ export default function Display() {
       const res = await fetch("/api/identify-music", {
         method: "POST",
         headers: {
-          "Content-Type": "application/octet-stream",
+          "Content-Type": "audio/wav",
         },
         body: arrayBuffer,
       });

@@ -1,6 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
+import { raw } from "express";
 import Stripe from "stripe";
 import { storage } from "./storage";
 import { generateArtPrompt, generateArtImage } from "./openai-service";
@@ -120,8 +121,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Identify music from audio blob
-  app.post("/api/identify-music", async (req, res) => {
+  // Identify music from audio blob - use raw middleware to accept binary data
+  app.post("/api/identify-music", raw({ type: 'audio/*', limit: '10mb' }), async (req, res) => {
     try {
       if (!req.body || !Buffer.isBuffer(req.body)) {
         return res.status(400).json({ message: "Invalid audio data" });
