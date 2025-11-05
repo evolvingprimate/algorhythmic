@@ -16,7 +16,8 @@ import {
 import { randomUUID } from "crypto";
 import { drizzle } from "drizzle-orm/neon-serverless";
 import { eq, desc, and } from "drizzle-orm";
-import { Pool } from "@neondatabase/serverless";
+import { Pool, neonConfig } from "@neondatabase/serverless";
+import ws from "ws";
 
 export interface IStorage {
   // Art Preferences
@@ -253,6 +254,8 @@ export class PostgresStorage implements IStorage {
     if (!process.env.DATABASE_URL) {
       throw new Error("DATABASE_URL is not set");
     }
+    // Configure WebSocket for Neon serverless
+    neonConfig.webSocketConstructor = ws;
     const pool = new Pool({ connectionString: process.env.DATABASE_URL });
     this.db = drizzle(pool);
   }
