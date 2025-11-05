@@ -142,7 +142,7 @@ export function StyleSelector({ selectedStyles, dynamicMode = false, onStylesCha
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4">
-      <Card className="w-full max-w-4xl max-h-[90vh] flex flex-col">
+      <Card className="w-full max-w-4xl h-[90vh] flex flex-col">
         <div className="flex items-center justify-between p-6 border-b">
           <div>
             <h2 className="text-2xl font-bold">Choose Your Artistic Style</h2>
@@ -199,9 +199,10 @@ export function StyleSelector({ selectedStyles, dynamicMode = false, onStylesCha
         )}
 
         {!localDynamicMode && (
-          <ScrollArea className="flex-1 p-6">
-          {activeTab === "styles" ? (
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          <div className="flex-1 overflow-hidden">
+            <ScrollArea className="h-full px-6 py-6">
+              {activeTab === "styles" ? (
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 pb-2">
               {styles.map((style) => {
                 const isSelected = localSelection.includes(style.id);
                 return (
@@ -234,9 +235,9 @@ export function StyleSelector({ selectedStyles, dynamicMode = false, onStylesCha
                   </button>
                 );
               })}
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3 pb-2">
               {artists.map((artist) => {
                 const isSelected = localSelection.includes(artist);
                 return (
@@ -259,9 +260,10 @@ export function StyleSelector({ selectedStyles, dynamicMode = false, onStylesCha
                   </button>
                 );
               })}
-            </div>
-          )}
-        </ScrollArea>
+                </div>
+              )}
+            </ScrollArea>
+          </div>
         )}
 
         {localDynamicMode && (
