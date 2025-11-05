@@ -210,6 +210,14 @@ npm run dev
 - Test Stripe payments using test mode keys
 
 ## Recent Changes
+- **November 2025**: Landing Page Water Ripple Background
+  - Implemented shaderpark.com-inspired water ripple animation for landing page
+  - Soft gradient base: blue → lavender → pink (#a8b5ff → #f5d5f5)
+  - Three overlapping elliptical wave layers with smooth animations
+  - Gentle rotations, translations, and scaling for fluid water effect
+  - Heavy blur filters (40-60px) for soft, dreamy aesthetic
+  - Different animation speeds (15s, 18s, 20s) for natural depth
+  - CSS-only implementation (no JS, no performance impact)
 - **November 2025**: Music-to-Art Deep Integration Enhancement
   - **Major Enhancement**: GPT-5 now deeply analyzes identified music for artwork generation
     - Structured prompt format: SONG INSIGHT → VISUAL LANGUAGE → FINAL PROMPT
