@@ -1,6 +1,6 @@
 export function AnimatedBackground() {
   return (
-    <div className="fixed inset-0 -z-10 overflow-hidden">
+    <div className="fixed inset-0 -z-10 overflow-hidden bg-background">
       <div className="animated-gradient-bg" />
       <div className="animated-gradient-overlay" />
       
@@ -9,11 +9,12 @@ export function AnimatedBackground() {
           position: absolute;
           inset: -50%;
           background: linear-gradient(
-            45deg,
-            hsl(var(--primary) / 0.3),
-            hsl(var(--primary) / 0.15),
-            hsl(var(--accent) / 0.3),
-            hsl(var(--primary) / 0.2)
+            135deg,
+            rgba(138, 80, 255, 0.15) 0%,
+            rgba(138, 80, 255, 0.08) 25%,
+            rgba(64, 150, 255, 0.12) 50%,
+            rgba(138, 80, 255, 0.18) 75%,
+            rgba(100, 100, 255, 0.1) 100%
           );
           background-size: 400% 400%;
           animation: gradientShift 15s ease infinite;
@@ -22,21 +23,22 @@ export function AnimatedBackground() {
         .animated-gradient-overlay {
           position: absolute;
           inset: 0;
-          background: radial-gradient(
-            circle at 20% 50%,
-            hsl(var(--primary) / 0.2) 0%,
-            transparent 50%
-          ),
-          radial-gradient(
-            circle at 80% 80%,
-            hsl(var(--accent) / 0.15) 0%,
-            transparent 50%
-          ),
-          radial-gradient(
-            circle at 40% 20%,
-            hsl(var(--primary) / 0.1) 0%,
-            transparent 50%
-          );
+          background: 
+            radial-gradient(
+              circle 800px at 20% 50%,
+              rgba(138, 80, 255, 0.2) 0%,
+              transparent 50%
+            ),
+            radial-gradient(
+              circle 600px at 80% 80%,
+              rgba(64, 150, 255, 0.15) 0%,
+              transparent 50%
+            ),
+            radial-gradient(
+              circle 500px at 40% 20%,
+              rgba(180, 120, 255, 0.12) 0%,
+              transparent 50%
+            );
           animation: moveGradient 20s ease infinite;
         }
         
