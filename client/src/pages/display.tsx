@@ -81,11 +81,16 @@ export default function Display() {
   const imageCache = useRef<Map<string, { imageUrl: string; prompt: string; explanation: string }>>(new Map());
   const lastGenerationTime = useRef<number>(0);
   const historyIndexRef = useRef<number>(-1);
+  const isGeneratingRef = useRef<boolean>(false);
   
-  // Sync ref with state
+  // Sync refs with state
   useEffect(() => {
     historyIndexRef.current = historyIndex;
   }, [historyIndex]);
+  
+  useEffect(() => {
+    isGeneratingRef.current = isGenerating;
+  }, [isGenerating]);
   
   const { toast } = useToast();
   const { user, isAuthenticated } = useAuth();
@@ -198,6 +203,7 @@ export default function Display() {
         setCurrentArtworkSaved(data.session.isSaved || false);
       }
       setIsGenerating(false);
+      isGeneratingRef.current = false;
       // Note: lastGenerationTime is set before mutation starts in handleAudioAnalysis
     },
     onError: (error: any) => {
@@ -207,6 +213,9 @@ export default function Display() {
         variant: "destructive",
       });
       setIsGenerating(false);
+      isGeneratingRef.current = false;
+      // Reset time on error so we can try again
+      lastGenerationTime.current = 0;
     },
   });
 
@@ -365,8 +374,8 @@ export default function Display() {
     // Send to WebSocket for multi-device sync
     wsClientRef.current?.send('audio-analysis', analysis);
 
-    // Prevent scheduling if already generating or timeout is pending
-    if (isGenerating || generationTimeoutRef.current) {
+    // Use refs for reliable checking - prevent race conditions
+    if (isGeneratingRef.current || generationTimeoutRef.current) {
       return;
     }
 
@@ -379,8 +388,9 @@ export default function Display() {
       return; // Too soon
     }
 
-    // Mark the generation time NOW to prevent race conditions
+    // Mark the generation time NOW and set ref flag to prevent race conditions
     lastGenerationTime.current = now;
+    isGeneratingRef.current = true;
     
     // Schedule new generation
     setIsGenerating(true);
