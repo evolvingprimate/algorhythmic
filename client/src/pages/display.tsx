@@ -28,7 +28,8 @@ import {
   Info,
   Music,
   Brain,
-  Clock
+  Clock,
+  Zap
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { StyleSelector } from "@/components/style-selector";
@@ -97,6 +98,26 @@ export default function Display() {
   
   const { toast } = useToast();
   const { user, isAuthenticated } = useAuth();
+
+  // Redirect to login if not authenticated
+  useEffect(() => {
+    if (isAuthenticated === false) {
+      // Use window.location to trigger server-side redirect to Replit Auth
+      window.location.href = "/api/login";
+    }
+  }, [isAuthenticated]);
+
+  // Fetch daily usage stats
+  const { data: usageStats, refetch: refetchUsageStats } = useQuery<{
+    count: number;
+    limit: number;
+    remaining: number;
+    date: string;
+  }>({
+    queryKey: ["/api/usage/stats"],
+    enabled: isAuthenticated,
+    refetchInterval: 30000, // Refetch every 30 seconds
+  });
 
   // Fetch preferences on mount
   const { data: preferences } = useQuery<ArtPreference>({
@@ -182,6 +203,11 @@ export default function Display() {
   // Generate art mutation
   const generateArtMutation = useMutation({
     mutationFn: async ({ audioAnalysis, musicInfo }: { audioAnalysis: AudioAnalysis; musicInfo: MusicIdentification | null }) => {
+      // Check usage limits before generating
+      if (usageStats && usageStats.remaining <= 0) {
+        throw new Error(`Daily limit reached (${usageStats.count}/${usageStats.limit}). Upgrade your plan for more generations.`);
+      }
+
       // Generate new artwork (cache disabled to ensure unique images for navigation)
       const res = await apiRequest("POST", "/api/generate-art", {
         sessionId: sessionId.current,
@@ -194,6 +220,12 @@ export default function Display() {
         },
         previousVotes: votes?.slice(0, 10) || [],
       });
+      
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.message || "Failed to generate artwork");
+      }
+      
       const data = await res.json();
       
       return data;
@@ -236,6 +268,9 @@ export default function Display() {
       isGeneratingRef.current = false;
       // Update generation time when image is successfully displayed
       lastGenerationTime.current = Date.now();
+      
+      // Refetch usage stats after successful generation
+      refetchUsageStats();
     },
     onError: (error: any) => {
       toast({
@@ -634,6 +669,27 @@ export default function Display() {
               <Sparkles className="h-6 w-6 text-primary" />
               <span className="text-lg font-bold hidden sm:inline">Algorhythmic</span>
             </div>
+            
+            {/* Daily Usage Indicator */}
+            {usageStats && (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-muted/30" data-testid="usage-indicator">
+                <Zap className={`h-4 w-4 ${usageStats.remaining > 0 ? 'text-primary' : 'text-destructive'}`} />
+                <span className="text-sm font-medium">
+                  <span className={usageStats.remaining > 0 ? 'text-foreground' : 'text-destructive'}>
+                    {usageStats.remaining}
+                  </span>
+                  <span className="text-muted-foreground">/{usageStats.limit}</span>
+                  <span className="text-muted-foreground ml-1 hidden sm:inline">today</span>
+                </span>
+                {usageStats.remaining === 0 && (
+                  <Link href="/subscribe">
+                    <Button size="sm" variant="default" className="ml-2 h-6 text-xs" data-testid="button-upgrade">
+                      Upgrade
+                    </Button>
+                  </Link>
+                )}
+              </div>
+            )}
           </div>
           
           <div className="flex items-center gap-2">
