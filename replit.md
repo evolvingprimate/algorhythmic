@@ -34,10 +34,10 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 
 ### Key Features
 - **Landing Page**: Hero section, "How It Works," style showcase, pricing tiers, user-generated art gallery, responsive design, login/logout.
-- **Art Display**: Fullscreen canvas, real-time audio capture and analysis, audio-reactive visual effects, auto-hiding controls, style/artist selection, voting system, WebSocket for multi-device sync, timed generation.
+- **Art Display**: Fullscreen canvas, real-time audio capture and analysis with frequency meter (bass/mids/highs visualization), audio-reactive visual effects, auto-hiding controls, style/artist selection, voting system, WebSocket for multi-device sync, timed generation.
 - **User Gallery Page**: Protected route, display saved artworks, save/unsave, delete, download, sorted by date.
 - **Subscription Page**: Stripe payment integration, 7-day free trial, secure payment form, feature comparison.
-- **Style Selector Component**: Visual grid of artistic styles and artists, multi-select, tab navigation.
+- **Style Selector Component**: Visual grid of 71 artistic styles organized into 8 master groups with matching AI-generated thumbnails, multi-select, tab navigation, dynamic AI mode.
 
 ### AI Art Generation Flow
 1.  **Audio Capture & Analysis**: Microphone captures sound; AudioAnalyzer extracts frequency, amplitude, tempo, mood.
@@ -55,6 +55,17 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 - **Components**: Shadcn UI with custom elevations.
 - **Interactions**: Subtle animations, auto-hiding UI, smooth transitions.
 - **Responsive**: Mobile-first, optimized for TV (10-foot UI).
+
+### Art Style Library (71 Total Styles)
+**8 Master Groups:**
+1. **CLASSIC MASTERS** (8): Surrealism, Impressionism, Cubism, Van Gogh Style, Color Field, Renaissance, Baroque, Pointillism
+2. **MODERN DIGITAL** (8): Abstract, Digital/Cyber, 8-Bit Pixel Art, Anime, Claymation, Vector Art, Low-Poly, Glitch Art
+3. **DREAM & MIND** (8): Psychedelic, Italian Brain Rot, Cartoon, Expressionism, Op Art, Fantasy, Optical Illusions, Minimalist
+4. **REALISM & NATURE** (8): Realism, Photorealism, Landscape, Portrait, Wildlife, Still Life, Hyperrealism, Botanical
+5. **DARK & MOODY** (8): Horror, Gothic, Noir, Dark Fantasy, Vaporwave, Steampunk Shadows, Dystopian, Macabre
+6. **SCI-FI & FUTURE** (8): Sci-Fi, Cyberpunk, Retro-Futurism, Space Opera, Neon Noir, Biotech, Holographic, Apocalyptic
+7. **SEASONAL & HOLIDAYS** (20): Halloween, Christmas, New Year's Day, MLK Jr Day, Washington's Birthday, Memorial Day, Juneteenth, Independence Day, Labor Day, Indigenous Peoples' Day, Veterans Day, Thanksgiving, Ramadan, Eid al-Fitr, Eid al-Adha, Diwali, Lunar New Year, Vesak, Holi, Easter
+8. **MEME CULTURE** (8): Nyan Cat, Distracted Boyfriend, This Is Fine, Expanding Brain, Doge, Pepe the Frog, Wojak, Rickroll
 
 ## External Dependencies
 - **OpenAI API**: For GPT-5, DALL-E 3, and GPT-4o Vision for AI art generation and prompt analysis.
