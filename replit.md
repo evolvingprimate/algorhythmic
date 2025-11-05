@@ -210,11 +210,19 @@ npm run dev
 - Test Stripe payments using test mode keys
 
 ## Recent Changes
-- January 2025: Initial MVP implementation with all core features
-- Full frontend with landing, display, and subscription pages
-- Backend with OpenAI integration and Stripe payments
-- WebSocket server for real-time audio coordination
-- Audio analysis and preference learning system
+- **November 2025**: Navigation and startup improvements
+  - Fixed back/forward navigation using useEffect to avoid stale closure issues
+  - Added automatic loading of most recent artwork on app start (eliminates empty "Ready to Create" screen)
+  - Improved generation throttling with proper ref management (isGeneratingRef, lastGenerationTime)
+  - Fixed rapid generation bug by resetting refs on mutation success/error
+- **January 2025**: Initial MVP implementation with all core features
+  - Full frontend with landing, display, and subscription pages
+  - Backend with OpenAI integration and Stripe payments
+  - WebSocket server for real-time audio coordination
+  - Audio analysis and preference learning system
+  - Music identification with explanation feature
+  - Image caching system to reuse similar artworks
+  - Back/forward history navigation with position counter
 
 ## User Preferences
 - Theme: Light mode default with dark mode toggle
