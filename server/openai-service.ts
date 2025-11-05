@@ -185,10 +185,27 @@ Provide structured output with ARTISTIC CONTEXT, SONG INSIGHT, VISUAL LANGUAGE, 
     
     // Validate and clean the final prompt
     if (!artPrompt) {
-      console.warn("GPT-5 response missing FINAL PROMPT section, using fallback parsing");
-      // Try to extract last meaningful line as fallback
-      const lines = fullResponse.split('\n').filter(l => l.trim().length > 20);
-      artPrompt = lines[lines.length - 1]?.trim() || "";
+      console.warn("GPT response missing FINAL PROMPT section");
+      console.log("Full GPT response for debugging:", fullResponse);
+      
+      // Improved fallback: look for lines that seem like image prompts (not analysis text)
+      const lines = fullResponse.split('\n').map(l => l.trim()).filter(l => l.length > 30 && l.length < 500);
+      
+      // Filter out lines that are clearly analysis (contain certain keywords)
+      const analysisKeywords = ['artist', 'inspired', 'song', 'lyric', 'theme', 'genre:', 'context:', 'insight:', 'language:'];
+      const potentialPrompts = lines.filter(line => {
+        const lower = line.toLowerCase();
+        return !analysisKeywords.some(keyword => lower.includes(keyword)) && 
+               !line.startsWith('•') && 
+               !line.startsWith('-') &&
+               !line.match(/^[A-Z\s]+:$/); // Avoid section headers
+      });
+      
+      artPrompt = potentialPrompts[potentialPrompts.length - 1] || "";
+      
+      if (artPrompt) {
+        console.log("Using fallback prompt:", artPrompt);
+      }
     }
     
     // Enforce prompt constraints for DALL-E
@@ -197,11 +214,36 @@ Provide structured output with ARTISTIC CONTEXT, SONG INSIGHT, VISUAL LANGUAGE, 
       artPrompt = artPrompt.substring(0, 397) + "...";
     }
     
-    // Final fallback if still empty
-    if (!artPrompt || artPrompt.length < 10) {
-      console.error("Could not parse valid prompt from GPT-5, using genre-aware fallback");
+    // Remove potentially unsafe content from prompt
+    const unsafePatterns = [
+      /\b(gun|weapon|violence|blood|death|kill|murder|war|fight)\b/gi,
+      /\b(explicit|nsfw|nude|naked|sexual)\b/gi,
+    ];
+    
+    let cleanedPrompt = artPrompt;
+    unsafePatterns.forEach(pattern => {
+      if (pattern.test(cleanedPrompt)) {
+        console.warn(`Removing potentially unsafe content from prompt: ${pattern}`);
+        cleanedPrompt = cleanedPrompt.replace(pattern, '');
+      }
+    });
+    
+    // Clean up extra spaces after removal
+    cleanedPrompt = cleanedPrompt.replace(/\s+/g, ' ').trim();
+    
+    if (cleanedPrompt !== artPrompt && cleanedPrompt.length > 20) {
+      console.log(`Sanitized prompt from "${artPrompt}" to "${cleanedPrompt}"`);
+      artPrompt = cleanedPrompt;
+    }
+    
+    // Final fallback if still empty or too short
+    if (!artPrompt || artPrompt.length < 20) {
+      console.error("Could not parse valid prompt, using safe genre-aware fallback");
       artPrompt = `${moodMapping[audioAnalysis.mood]}, ${styleContext} ${artistContext}, dreamlike artistic composition`;
     }
+    
+    console.log(`[Art Generation] Final DALL-E prompt (${artPrompt.length} chars): "${artPrompt}"`);
+
     
     // Extract genre from SONG INSIGHT and verify genre-specific cues
     if (musicInfo && artPrompt && songInsight) {
