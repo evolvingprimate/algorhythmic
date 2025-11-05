@@ -30,12 +30,15 @@ export const artVotes = pgTable("art_votes", {
 export const artSessions = pgTable("art_sessions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   sessionId: varchar("session_id").notNull(),
+  userId: varchar("user_id"),
   imageUrl: text("image_url").notNull(),
   prompt: text("prompt").notNull(),
   audioFeatures: text("audio_features"), // JSON string
+  isSaved: boolean("is_saved").notNull().default(false),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => ({
   sessionIdIdx: index("art_sessions_session_id_idx").on(table.sessionId),
+  userIdIdx: index("art_sessions_user_id_idx").on(table.userId),
 }));
 
 // Session storage table (required for Replit Auth)

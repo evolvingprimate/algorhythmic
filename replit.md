@@ -4,8 +4,8 @@
 Algorhythmic is a revenue-generating web application that transforms sound into stunning AI-generated artwork. Users select their favorite artistic styles and artists (like choosing stations on Pandora), and the AI creates dreamlike visualizations that react to audio in real-time. The system learns from user preferences through an upvote/downvote mechanism to continuously improve personalization.
 
 ## Current State
-- **Version**: MVP (Minimum Viable Product)
-- **Status**: Fully functional with all core features implemented
+- **Version**: MVP+ with Auth & Gallery
+- **Status**: Full auth integration + user art gallery with save/delete features
 - **Last Updated**: January 2025
 
 ## Tech Stack
@@ -20,10 +20,11 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 
 ### Backend
 - **Runtime**: Node.js with Express
+- **Database**: PostgreSQL with Drizzle ORM for persistent storage
+- **Authentication**: Replit Auth with OpenID Connect (Passport.js)
 - **Real-time**: WebSocket Server (ws package)
 - **AI Integration**: OpenAI API (GPT-5 for prompts, DALL-E 3 for images)
 - **Payments**: Stripe API for subscription management
-- **Storage**: In-memory storage (MemStorage) for MVP
 
 ### Key Libraries
 - OpenAI SDK for AI art generation
@@ -37,8 +38,9 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 Located in `shared/schema.ts`:
 - **ArtPreferences**: User-selected styles and artists per session
 - **ArtVotes**: Upvote/downvote history for preference learning
-- **ArtSessions**: Generated artwork history with prompts
-- **Users**: Subscription tier and Stripe customer data
+- **ArtSessions**: Generated artwork history with prompts, userId, isSaved flag
+- **Users**: Auth profile data (firstName, lastName, profileImageUrl, subscription tier, Stripe IDs)
+- **Sessions**: Passport session storage for Replit Auth
 - **AudioAnalysis**: Real-time audio characteristics (frequency, amplitude, tempo, mood)
 
 ### Key Features
@@ -50,6 +52,7 @@ Located in `shared/schema.ts`:
 - Pricing tiers (Free, Premium $9.99, Ultimate $19.99)
 - User-generated art gallery
 - Full responsive design with dark mode support
+- Login/logout integration (Replit Auth)
 
 #### 2. Art Display (`/display`)
 - Fullscreen canvas for AI-generated artwork
@@ -61,7 +64,16 @@ Located in `shared/schema.ts`:
 - WebSocket integration for multi-device sync
 - Generation every 12 seconds when audio is active
 
-#### 3. Subscription Page (`/subscribe`)
+#### 3. User Gallery Page (`/gallery`)
+- Protected route requiring authentication
+- Display all saved artworks for logged-in user
+- Save/unsave artwork toggle functionality
+- Delete artwork with confirmation
+- Download artwork to device
+- Sorted by creation date (newest first)
+- Empty state with call-to-action
+
+#### 4. Subscription Page (`/subscribe`)
 - Stripe payment integration
 - 7-day free trial for Premium tier
 - Secure payment form with Stripe Elements
@@ -75,6 +87,12 @@ Located in `shared/schema.ts`:
 - Saves preferences to backend
 
 ### API Endpoints
+
+#### Authentication (Replit Auth)
+- `GET /api/login` - Initiate Replit Auth login flow
+- `GET /api/callback` - OAuth callback handler
+- `GET /api/logout` - Logout and clear session
+- `GET /api/auth/user` - Get current user data (protected)
 
 #### Preferences
 - `GET /api/preferences/:sessionId` - Fetch user preferences
@@ -92,6 +110,11 @@ Located in `shared/schema.ts`:
 
 #### Sessions
 - `GET /api/sessions/:sessionId` - Get artwork generation history
+
+#### Gallery (protected)
+- `GET /api/gallery` - Get all saved artworks for user
+- `POST /api/gallery/:artId/toggle` - Toggle saved status for artwork
+- `DELETE /api/gallery/:artId` - Delete artwork from gallery
 
 #### Payments
 - `POST /api/create-payment-intent` - Create Stripe payment intent

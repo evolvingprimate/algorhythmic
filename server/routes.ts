@@ -63,7 +63,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Generate art based on audio analysis
-  app.post("/api/generate-art", async (req, res) => {
+  app.post("/api/generate-art", async (req: any, res) => {
     try {
       const { sessionId, audioAnalysis, preferences, previousVotes } = req.body;
 
@@ -84,12 +84,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Generate image using DALL-E
       const imageUrl = await generateArtImage(prompt);
 
+      // Get userId if authenticated
+      const userId = req.user?.claims?.sub || null;
+
       // Save session
       const session = await storage.createArtSession({
         sessionId,
+        userId,
         imageUrl,
         prompt,
         audioFeatures: JSON.stringify(audio),
+        isSaved: false,
       });
 
       res.json({
@@ -134,6 +139,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(sessions);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Gallery endpoints (protected)
+  app.get("/api/gallery", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const savedArt = await storage.getUserSavedArt(userId);
+      res.json(savedArt);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/gallery/:artId/toggle", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { artId } = req.params;
+      const updated = await storage.toggleArtSaved(artId, userId);
+      res.json(updated);
+    } catch (error: any) {
+      res.status(error.message === "Not authorized" ? 403 : 404).json({ message: error.message });
+    }
+  });
+
+  app.delete("/api/gallery/:artId", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { artId } = req.params;
+      await storage.deleteArt(artId, userId);
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(error.message === "Not authorized" ? 403 : 404).json({ message: error.message });
     }
   });
 

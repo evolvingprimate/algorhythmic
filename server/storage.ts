@@ -30,6 +30,9 @@ export interface IStorage {
   // Art Sessions
   createArtSession(session: InsertArtSession): Promise<ArtSession>;
   getSessionHistory(sessionId: string, limit?: number): Promise<ArtSession[]>;
+  getUserSavedArt(userId: string, limit?: number): Promise<ArtSession[]>;
+  toggleArtSaved(artId: string, userId: string): Promise<ArtSession>;
+  deleteArt(artId: string, userId: string): Promise<void>;
   
   // Users (for subscription management and authentication)
   getUser(id: string): Promise<User | undefined>;
@@ -121,6 +124,40 @@ export class MemStorage implements IStorage {
       .filter((session) => session.sessionId === sessionId)
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .slice(0, limit);
+  }
+
+  async getUserSavedArt(userId: string, limit: number = 100): Promise<ArtSession[]> {
+    return Array.from(this.sessions.values())
+      .filter(s => s.userId === userId && s.isSaved)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, limit);
+  }
+
+  async toggleArtSaved(artId: string, userId: string): Promise<ArtSession> {
+    const art = this.sessions.get(artId);
+    if (!art) {
+      throw new Error("Art not found");
+    }
+    if (art.userId !== userId) {
+      throw new Error("Not authorized");
+    }
+    const updated: ArtSession = {
+      ...art,
+      isSaved: !art.isSaved,
+    };
+    this.sessions.set(artId, updated);
+    return updated;
+  }
+
+  async deleteArt(artId: string, userId: string): Promise<void> {
+    const art = this.sessions.get(artId);
+    if (!art) {
+      throw new Error("Art not found");
+    }
+    if (art.userId !== userId) {
+      throw new Error("Not authorized");
+    }
+    this.sessions.delete(artId);
   }
 
   // Users
@@ -286,6 +323,56 @@ export class PostgresStorage implements IStorage {
       .where(eq(artSessions.sessionId, sessionId))
       .orderBy(desc(artSessions.createdAt))
       .limit(limit);
+  }
+
+  async getUserSavedArt(userId: string, limit: number = 100): Promise<ArtSession[]> {
+    return await this.db
+      .select()
+      .from(artSessions)
+      .where(and(eq(artSessions.userId, userId), eq(artSessions.isSaved, true)))
+      .orderBy(desc(artSessions.createdAt))
+      .limit(limit);
+  }
+
+  async toggleArtSaved(artId: string, userId: string): Promise<ArtSession> {
+    const art = await this.db
+      .select()
+      .from(artSessions)
+      .where(eq(artSessions.id, artId))
+      .limit(1);
+    
+    if (!art[0]) {
+      throw new Error("Art not found");
+    }
+    if (art[0].userId !== userId) {
+      throw new Error("Not authorized");
+    }
+    
+    const updated = await this.db
+      .update(artSessions)
+      .set({ isSaved: !art[0].isSaved })
+      .where(eq(artSessions.id, artId))
+      .returning();
+    return updated[0];
+  }
+
+  async deleteArt(artId: string, userId: string): Promise<void> {
+    const art = await this.db
+      .select()
+      .from(artSessions)
+      .where(eq(artSessions.id, artId))
+      .limit(1);
+    
+    if (!art[0]) {
+      throw new Error("Art not found");
+    }
+    if (art[0].userId !== userId) {
+      throw new Error("Not authorized");
+    }
+    
+    await this.db
+      .delete(artSessions)
+      .where(eq(artSessions.id, artId));
   }
 
   // Users

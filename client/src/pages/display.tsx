@@ -13,7 +13,8 @@ import {
   VolumeX,
   Pause,
   Play,
-  ArrowLeft
+  ArrowLeft,
+  Heart
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { StyleSelector } from "@/components/style-selector";
@@ -21,7 +22,8 @@ import { useToast } from "@/hooks/use-toast";
 import { AudioAnalyzer } from "@/lib/audio-analyzer";
 import { WebSocketClient } from "@/lib/websocket-client";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { AudioAnalysis, ArtVote } from "@shared/schema";
+import { useAuth } from "@/hooks/useAuth";
+import type { AudioAnalysis, ArtVote, ArtPreference } from "@shared/schema";
 
 export default function Display() {
   const [isPlaying, setIsPlaying] = useState(false);
@@ -34,6 +36,8 @@ export default function Display() {
   const [showStyleSelector, setShowStyleSelector] = useState(false);
   const [currentPrompt, setCurrentPrompt] = useState("");
   const [currentAudioAnalysis, setCurrentAudioAnalysis] = useState<AudioAnalysis | null>(null);
+  const [currentArtworkId, setCurrentArtworkId] = useState<string | null>(null);
+  const [currentArtworkSaved, setCurrentArtworkSaved] = useState(false);
   
   const audioAnalyzerRef = useRef<AudioAnalyzer | null>(null);
   const wsClientRef = useRef<WebSocketClient | null>(null);
@@ -42,9 +46,10 @@ export default function Display() {
   const sessionId = useRef(crypto.randomUUID());
   
   const { toast } = useToast();
+  const { user, isAuthenticated } = useAuth();
 
   // Fetch preferences on mount
-  const { data: preferences } = useQuery({
+  const { data: preferences } = useQuery<ArtPreference>({
     queryKey: [`/api/preferences/${sessionId.current}`],
   });
 
@@ -92,6 +97,8 @@ export default function Display() {
     onSuccess: (data) => {
       setCurrentImage(data.imageUrl);
       setCurrentPrompt(data.prompt);
+      setCurrentArtworkId(data.session.id);
+      setCurrentArtworkSaved(data.session.isSaved || false);
       setIsGenerating(false);
     },
     onError: (error: any) => {
@@ -117,6 +124,37 @@ export default function Display() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/votes/${sessionId.current}`] });
+    },
+  });
+
+  // Save artwork mutation
+  const saveArtworkMutation = useMutation({
+    mutationFn: async () => {
+      if (!currentArtworkId) throw new Error("No artwork to save");
+      const response = await fetch(`/api/gallery/${currentArtworkId}/toggle`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || "Failed to save artwork");
+      }
+      return response.json();
+    },
+    onSuccess: (data) => {
+      setCurrentArtworkSaved(data.isSaved);
+      toast({
+        title: data.isSaved ? "Artwork saved!" : "Artwork unsaved",
+        description: data.isSaved ? "Added to your gallery" : "Removed from your gallery",
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/gallery"] });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive",
+      });
     },
   });
 
@@ -363,7 +401,7 @@ export default function Display() {
               )}
             </div>
 
-            {/* Vote Buttons */}
+            {/* Vote and Save Buttons */}
             {currentImage && (
               <div className="flex items-center gap-3">
                 <Button
@@ -384,6 +422,18 @@ export default function Display() {
                 >
                   <ThumbsUp className="h-6 w-6" />
                 </Button>
+                {isAuthenticated && (
+                  <Button
+                    variant={currentArtworkSaved ? "default" : "outline"}
+                    size="icon"
+                    className="h-14 w-14"
+                    onClick={() => saveArtworkMutation.mutate()}
+                    disabled={saveArtworkMutation.isPending}
+                    data-testid="button-save-artwork"
+                  >
+                    <Heart className={`h-6 w-6 ${currentArtworkSaved ? "fill-current" : ""}`} />
+                  </Button>
+                )}
               </div>
             )}
           </div>
