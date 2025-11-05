@@ -1,24 +1,58 @@
 import type { AudioAnalysis } from "@shared/schema";
 
+export interface AudioDevice {
+  deviceId: string;
+  label: string;
+  groupId: string;
+}
+
 export class AudioAnalyzer {
   private audioContext: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
   private microphone: MediaStreamAudioSourceNode | null = null;
+  private mediaStream: MediaStream | null = null;
   private dataArray: Uint8Array | null = null;
   private rafId: number | null = null;
   private onAnalysis: ((analysis: AudioAnalysis) => void) | null = null;
 
-  async initialize(onAnalysisCallback: (analysis: AudioAnalysis) => void): Promise<void> {
+  static async enumerateDevices(): Promise<AudioDevice[]> {
+    try {
+      // Request initial permission to get device labels
+      const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      tempStream.getTracks().forEach(track => track.stop());
+
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      return devices
+        .filter(device => device.kind === 'audioinput')
+        .map(device => ({
+          deviceId: device.deviceId,
+          label: device.label || `Microphone ${device.deviceId.slice(0, 8)}`,
+          groupId: device.groupId,
+        }));
+    } catch (error) {
+      console.error("Error enumerating audio devices:", error);
+      throw new Error("Could not access microphone. Please grant permission.");
+    }
+  }
+
+  async initialize(
+    onAnalysisCallback: (analysis: AudioAnalysis) => void,
+    deviceId?: string
+  ): Promise<void> {
     this.onAnalysis = onAnalysisCallback;
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const constraints: MediaStreamConstraints = {
+        audio: deviceId ? { deviceId: { exact: deviceId } } : true
+      };
+      
+      this.mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
       
       this.audioContext = new AudioContext();
       this.analyser = this.audioContext.createAnalyser();
       this.analyser.fftSize = 2048;
       
-      this.microphone = this.audioContext.createMediaStreamSource(stream);
+      this.microphone = this.audioContext.createMediaStreamSource(this.mediaStream);
       this.microphone.connect(this.analyser);
       
       const bufferLength = this.analyser.frequencyBinCount;
@@ -104,6 +138,11 @@ export class AudioAnalyzer {
     if (this.rafId) {
       cancelAnimationFrame(this.rafId);
       this.rafId = null;
+    }
+    
+    if (this.mediaStream) {
+      this.mediaStream.getTracks().forEach(track => track.stop());
+      this.mediaStream = null;
     }
     
     if (this.microphone) {
