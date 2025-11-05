@@ -352,19 +352,21 @@
   }
 }
 
-/* Animated Water Ripple Background Styles */
+/* Animated Neonwave Background Styles - Inspired by Synthwave Aesthetic */
 .animated-gradient-bg {
   position: absolute;
   width: 100%;
   height: 100%;
   background: linear-gradient(
     180deg,
-    #a8b5ff 0%,
-    #c5b4e3 25%,
-    #d4a5d9 50%,
-    #e8c4e8 75%,
-    #f5d5f5 100%
+    #0a0520 0%,
+    #1a0f3e 20%,
+    #2d1b5e 40%,
+    #4a2980 60%,
+    #6b3fa0 80%,
+    #8b5fc8 100%
   );
+  animation: gradientPulse 8s ease-in-out infinite;
 }
 
 .animated-blob-1 {
@@ -374,10 +376,11 @@
   width: 200%;
   height: 200%;
   background: 
-    radial-gradient(ellipse 1000px 700px at 30% 40%, rgba(168, 181, 255, 0.5) 0%, transparent 60%),
-    radial-gradient(ellipse 800px 1000px at 70% 60%, rgba(212, 165, 217, 0.4) 0%, transparent 60%);
-  animation: rippleWave1 15s ease-in-out infinite;
-  filter: blur(40px);
+    radial-gradient(ellipse 1200px 800px at 25% 35%, rgba(255, 50, 150, 0.6) 0%, transparent 55%),
+    radial-gradient(ellipse 900px 1200px at 75% 65%, rgba(100, 80, 255, 0.5) 0%, transparent 55%);
+  animation: neonWave1 12s ease-in-out infinite;
+  filter: blur(50px);
+  mix-blend-mode: screen;
 }
 
 .animated-blob-2 {
@@ -387,10 +390,11 @@
   width: 200%;
   height: 200%;
   background: 
-    radial-gradient(ellipse 900px 600px at 50% 30%, rgba(197, 180, 227, 0.5) 0%, transparent 60%),
-    radial-gradient(ellipse 600px 900px at 40% 70%, rgba(232, 196, 232, 0.4) 0%, transparent 60%);
-  animation: rippleWave2 18s ease-in-out infinite;
-  filter: blur(50px);
+    radial-gradient(ellipse 1000px 700px at 60% 40%, rgba(0, 255, 200, 0.5) 0%, transparent 55%),
+    radial-gradient(ellipse 700px 1000px at 30% 70%, rgba(255, 100, 200, 0.4) 0%, transparent 55%);
+  animation: neonWave2 10s ease-in-out infinite reverse;
+  filter: blur(60px);
+  mix-blend-mode: screen;
 }
 
 .animated-blob-3 {
@@ -400,62 +404,72 @@
   width: 200%;
   height: 200%;
   background: 
-    radial-gradient(ellipse 1100px 500px at 60% 50%, rgba(245, 213, 245, 0.4) 0%, transparent 60%),
-    radial-gradient(ellipse 500px 1100px at 50% 50%, rgba(168, 181, 255, 0.3) 0%, transparent 60%);
-  animation: rippleWave3 20s ease-in-out infinite;
-  filter: blur(60px);
+    radial-gradient(ellipse 1300px 600px at 50% 50%, rgba(138, 80, 255, 0.6) 0%, transparent 55%),
+    radial-gradient(ellipse 600px 1300px at 65% 55%, rgba(255, 150, 100, 0.4) 0%, transparent 55%);
+  animation: neonWave3 14s ease-in-out infinite;
+  filter: blur(55px);
+  mix-blend-mode: screen;
 }
 
-@keyframes rippleWave1 {
-  0% {
-    transform: translate(0%, 0%) rotate(0deg);
-  }
-  25% {
-    transform: translate(3%, -5%) rotate(8deg);
+@keyframes gradientPulse {
+  0%, 100% {
+    opacity: 1;
   }
   50% {
-    transform: translate(-4%, 2%) rotate(-6deg);
+    opacity: 0.85;
+  }
+}
+
+@keyframes neonWave1 {
+  0% {
+    transform: translate(0%, 0%) rotate(0deg) scale(1);
+  }
+  25% {
+    transform: translate(8%, -12%) rotate(15deg) scale(1.15);
+  }
+  50% {
+    transform: translate(-10%, 5%) rotate(-12deg) scale(0.9);
   }
   75% {
-    transform: translate(2%, -3%) rotate(4deg);
+    transform: translate(6%, -8%) rotate(10deg) scale(1.1);
   }
   100% {
-    transform: translate(0%, 0%) rotate(0deg);
+    transform: translate(0%, 0%) rotate(0deg) scale(1);
   }
 }
 
-@keyframes rippleWave2 {
+@keyframes neonWave2 {
   0% {
-    transform: translate(0%, 0%) rotate(0deg);
+    transform: translate(0%, 0%) rotate(0deg) scale(1);
   }
   30% {
-    transform: translate(-5%, 3%) rotate(-10deg);
+    transform: translate(-12%, 10%) rotate(-18deg) scale(1.2);
   }
   60% {
-    transform: translate(4%, -4%) rotate(7deg);
+    transform: translate(10%, -10%) rotate(14deg) scale(0.85);
   }
   85% {
-    transform: translate(-2%, 2%) rotate(-5deg);
+    transform: translate(-6%, 6%) rotate(-10deg) scale(1.12);
   }
   100% {
-    transform: translate(0%, 0%) rotate(0deg);
+    transform: translate(0%, 0%) rotate(0deg) scale(1);
   }
 }
 
-@keyframes rippleWave3 {
+@keyframes neonWave3 {
   0% {
-    transform: translate(0%, 0%) rotate(0deg);
+    transform: translate(0%, 0%) rotate(0deg) scale(1);
   }
   35% {
-    transform: translate(2%, 4%) rotate(9deg);
+    transform: translate(6%, 12%) rotate(20deg) scale(0.92);
   }
   65% {
-    transform: translate(-3%, -2%) rotate(-8deg);
+    transform: translate(-8%, -6%) rotate(-16deg) scale(1.18);
   }
   90% {
-    transform: translate(3%, -3%) rotate(5deg);
+    transform: translate(8%, -8%) rotate(12deg) scale(0.95);
   }
   100% {
-    transform: translate(0%, 0%) rotate(0deg);
+    transform: translate(0%, 0%) rotate(0deg) scale(1);
   }
 }
