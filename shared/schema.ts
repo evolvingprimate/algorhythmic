@@ -34,6 +34,11 @@ export const artSessions = pgTable("art_sessions", {
   imageUrl: text("image_url").notNull(),
   prompt: text("prompt").notNull(),
   audioFeatures: text("audio_features"), // JSON string
+  musicTrack: text("music_track"), // Identified song title
+  musicArtist: text("music_artist"), // Identified artist
+  musicGenre: text("music_genre"), // Identified genre
+  musicAlbum: text("music_album"), // Album name
+  generationExplanation: text("generation_explanation"), // Why this image was created
   isSaved: boolean("is_saved").notNull().default(false),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => ({
@@ -118,10 +123,30 @@ export type AudioAnalysis = {
   mood: "energetic" | "calm" | "dramatic" | "playful" | "melancholic";
 };
 
+// Music identification result type
+export type MusicIdentification = {
+  title: string;
+  artist: string;
+  album?: string;
+  release_date?: string;
+  label?: string;
+  timecode?: string;
+  song_link?: string;
+  apple_music?: {
+    previews?: Array<{ url: string }>;
+    url?: string;
+  };
+  spotify?: {
+    album?: { id: string };
+    id?: string;
+  };
+};
+
 // Art generation request type
 export type ArtGenerationRequest = {
   sessionId: string;
   audioAnalysis: AudioAnalysis;
+  musicInfo?: MusicIdentification | null;
   preferences: {
     styles: string[];
     artists: string[];

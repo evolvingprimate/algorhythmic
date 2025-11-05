@@ -115,6 +115,11 @@ export class MemStorage implements IStorage {
       ...insertSession,
       userId: insertSession.userId || null,
       audioFeatures: insertSession.audioFeatures || null,
+      musicTrack: insertSession.musicTrack || null,
+      musicArtist: insertSession.musicArtist || null,
+      musicGenre: insertSession.musicGenre || null,
+      musicAlbum: insertSession.musicAlbum || null,
+      generationExplanation: insertSession.generationExplanation || null,
       isSaved: insertSession.isSaved || false,
       createdAt: new Date(),
     };

@@ -4,7 +4,8 @@ import { WebSocketServer, WebSocket } from "ws";
 import Stripe from "stripe";
 import { storage } from "./storage";
 import { generateArtPrompt, generateArtImage } from "./openai-service";
-import { insertArtVoteSchema, insertArtPreferenceSchema, type AudioAnalysis } from "@shared/schema";
+import { identifyMusic } from "./music-service";
+import { insertArtVoteSchema, insertArtPreferenceSchema, type AudioAnalysis, type MusicIdentification } from "@shared/schema";
 import { setupAuth, isAuthenticated } from "./replitAuth";
 
 // Initialize Stripe only if keys are available (optional for MVP)
@@ -65,7 +66,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Generate art based on audio analysis
   app.post("/api/generate-art", async (req: any, res) => {
     try {
-      const { sessionId, audioAnalysis, preferences, previousVotes } = req.body;
+      const { sessionId, audioAnalysis, musicInfo, preferences, previousVotes } = req.body;
 
       // Validate audio analysis
       const audio = audioAnalysis as AudioAnalysis;
@@ -73,38 +74,64 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid audio analysis data" });
       }
 
+      // Use provided music info or null
+      const music = musicInfo as MusicIdentification | null;
+
       // Generate art prompt using OpenAI
-      const prompt = await generateArtPrompt({
+      const result = await generateArtPrompt({
         audioAnalysis: audio,
+        musicInfo: music,
         styles: preferences?.styles || [],
         artists: preferences?.artists || [],
         previousVotes: previousVotes || [],
       });
 
       // Generate image using DALL-E
-      const imageUrl = await generateArtImage(prompt);
+      const imageUrl = await generateArtImage(result.prompt);
 
       // Get userId if authenticated
       const userId = req.user?.claims?.sub || null;
 
-      // Save session
+      // Save session with music info and explanation
       const session = await storage.createArtSession({
         sessionId,
         userId,
         imageUrl,
-        prompt,
+        prompt: result.prompt,
         audioFeatures: JSON.stringify(audio),
+        musicTrack: music?.title || null,
+        musicArtist: music?.artist || null,
+        musicGenre: null, // Could be populated from additional API call
+        musicAlbum: music?.album || null,
+        generationExplanation: result.explanation,
         isSaved: false,
       });
 
       res.json({
         imageUrl,
-        prompt,
+        prompt: result.prompt,
+        explanation: result.explanation,
+        musicInfo: music,
         session,
       });
     } catch (error: any) {
       console.error("Error generating art:", error);
       res.status(500).json({ message: "Failed to generate artwork: " + error.message });
+    }
+  });
+
+  // Identify music from audio blob
+  app.post("/api/identify-music", async (req, res) => {
+    try {
+      if (!req.body || !Buffer.isBuffer(req.body)) {
+        return res.status(400).json({ message: "Invalid audio data" });
+      }
+
+      const musicInfo = await identifyMusic(req.body);
+      res.json({ musicInfo });
+    } catch (error: any) {
+      console.error("Error identifying music:", error);
+      res.status(500).json({ message: "Failed to identify music: " + error.message });
     }
   });
 
