@@ -59,6 +59,7 @@ export default function Display() {
   const [showExplanation, setShowExplanation] = useState(false);
   const [isIdentifyingMusic, setIsIdentifyingMusic] = useState(false);
   const [generationInterval, setGenerationInterval] = useState(1); // minutes
+  const [timeUntilNext, setTimeUntilNext] = useState<number>(0); // seconds
   
   // Image history for back/forward navigation
   const [imageHistory, setImageHistory] = useState<Array<{
@@ -550,6 +551,30 @@ export default function Display() {
   const canGoBack = historyIndex > 0;
   const canGoForward = historyIndex < imageHistory.length - 1;
 
+  // Countdown timer for next generation
+  useEffect(() => {
+    if (!isPlaying) {
+      setTimeUntilNext(0);
+      return;
+    }
+
+    const updateCountdown = () => {
+      const now = Date.now();
+      const intervalMs = generationInterval * 60 * 1000;
+      const timeSinceLastGen = now - lastGenerationTime.current;
+      const timeRemaining = Math.max(0, intervalMs - timeSinceLastGen);
+      setTimeUntilNext(Math.ceil(timeRemaining / 1000));
+    };
+
+    // Update immediately
+    updateCountdown();
+
+    // Update every second
+    const interval = setInterval(updateCountdown, 1000);
+
+    return () => clearInterval(interval);
+  }, [isPlaying, generationInterval]);
+
   useEffect(() => {
     return () => {
       handleStopListening();
@@ -627,6 +652,14 @@ export default function Display() {
                     +{selectedStyles.length - 3} more
                   </Badge>
                 )}
+              </div>
+            )}
+            {isPlaying && timeUntilNext > 0 && (
+              <div className="flex items-center gap-2 mr-2" data-testid="countdown-timer">
+                <Clock className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-mono text-muted-foreground">
+                  {Math.floor(timeUntilNext / 60)}:{(timeUntilNext % 60).toString().padStart(2, '0')}
+                </span>
               </div>
             )}
             <ThemeToggle />
