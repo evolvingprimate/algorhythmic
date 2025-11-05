@@ -1,81 +1,90 @@
 import type { MusicIdentification } from "@shared/schema";
 
-interface AudDResponse {
-  status: string;
-  result: {
-    artist: string;
-    title: string;
-    album?: string;
-    release_date?: string;
-    label?: string;
-    timecode?: string;
-    song_link?: string;
-    apple_music?: {
-      previews?: Array<{ url: string }>;
-      url?: string;
-    };
-    spotify?: {
-      album?: { id: string };
-      id?: string;
-    };
-  } | null;
+interface ACRCloudResponse {
+  status: {
+    msg: string;
+    code: number;
+    version: string;
+  };
+  metadata?: {
+    played_duration: number;
+    music?: Array<{
+      title: string;
+      artists?: Array<{ name: string }>;
+      album?: { name: string };
+      release_date?: string;
+      label?: string;
+      external_metadata?: {
+        spotify?: { track?: { id: string }; album?: { id: string } };
+        youtube?: { vid?: string };
+      };
+      external_ids?: {
+        isrc?: string;
+      };
+      genres?: Array<{ name: string }>;
+    }>;
+    timestamp_utc: string;
+  };
+  result_type?: number;
 }
 
 export async function identifyMusic(audioBlob: Buffer): Promise<MusicIdentification | null> {
-  if (!process.env.AUDD_API_KEY) {
-    console.warn("AUDD_API_KEY not configured - skipping music identification");
+  const host = process.env.ACRCLOUD_HOST;
+  const accessKey = process.env.ACRCLOUD_ACCESS_KEY;
+  const accessSecret = process.env.ACRCLOUD_ACCESS_SECRET;
+
+  if (!host || !accessKey || !accessSecret) {
+    console.warn("ACRCloud credentials not configured - skipping music identification");
     return null;
   }
 
   try {
-    console.log(`[Music ID] Attempting to identify music from ${audioBlob.length} byte audio sample`);
+    console.log(`[Music ID] Attempting ACRCloud identification from ${audioBlob.length} byte audio sample`);
     
-    const FormData = (await import("form-data")).default;
-    const formData = new FormData();
+    // @ts-ignore - ACRCloud is a CommonJS module without proper ESM types
+    const ACRCloudModule = await import("acrcloud");
+    const ACRCloud = ACRCloudModule.default || ACRCloudModule;
     
-    formData.append("api_token", process.env.AUDD_API_KEY);
-    formData.append("file", audioBlob, {
-      filename: "audio.mp3",
-      contentType: "audio/mpeg",
-    });
-    formData.append("return", "apple_music,spotify");
-
-    const response = await fetch("https://api.audd.io/", {
-      method: "POST",
-      body: formData as any,
-      headers: formData.getHeaders(),
+    const acr = new ACRCloud({
+      host,
+      access_key: accessKey,
+      access_secret: accessSecret,
     });
 
-    if (!response.ok) {
-      console.error("[Music ID] AudD API error:", response.status, response.statusText);
-      const errorText = await response.text();
-      console.error("[Music ID] Error details:", errorText);
-      return null;
-    }
+    const result = await acr.identify(audioBlob);
+    const data = result as ACRCloudResponse;
+    
+    console.log("[Music ID] ACRCloud API response:", JSON.stringify(data, null, 2));
 
-    const data = await response.json() as AudDResponse;
-    console.log("[Music ID] AudD API response:", JSON.stringify(data, null, 2));
-
-    if (data.status === "success" && data.result) {
-      const result = data.result;
-      console.log(`[Music ID] ✅ Successfully identified: ${result.artist} - ${result.title}`);
+    if (data.status?.code === 0 && data.metadata?.music && data.metadata.music.length > 0) {
+      const track = data.metadata.music[0];
+      const artist = track.artists?.[0]?.name || "Unknown Artist";
+      const title = track.title || "Unknown Track";
+      
+      console.log(`[Music ID] ✅ Successfully identified: ${artist} - ${title}`);
+      
       return {
-        title: result.title,
-        artist: result.artist,
-        album: result.album,
-        release_date: result.release_date,
-        label: result.label,
-        timecode: result.timecode,
-        song_link: result.song_link,
-        apple_music: result.apple_music,
-        spotify: result.spotify,
+        title,
+        artist,
+        album: track.album?.name,
+        release_date: track.release_date,
+        label: track.label,
+        song_link: track.external_metadata?.youtube?.vid 
+          ? `https://youtube.com/watch?v=${track.external_metadata.youtube.vid}`
+          : undefined,
+        spotify: track.external_metadata?.spotify?.track?.id 
+          ? { id: track.external_metadata.spotify.track.id }
+          : undefined,
       };
     }
 
-    console.log("[Music ID] ❌ No music identified (AudD returned null result)");
+    console.log("[Music ID] ❌ No music identified (ACRCloud returned no matches)");
+    if (data.status) {
+      console.log(`[Music ID] Status: ${data.status.msg} (code: ${data.status.code})`);
+    }
     return null;
   } catch (error) {
-    console.error("[Music ID] Error identifying music:", error);
+    console.error("[Music ID] Error identifying music with ACRCloud:", error);
     return null;
   }
 }
