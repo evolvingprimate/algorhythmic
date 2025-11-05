@@ -135,7 +135,9 @@ export default function Display() {
       });
       if (imageCache.current.size > 20) {
         const firstKey = imageCache.current.keys().next().value;
-        imageCache.current.delete(firstKey);
+        if (firstKey) {
+          imageCache.current.delete(firstKey);
+        }
       }
       
       return data;
