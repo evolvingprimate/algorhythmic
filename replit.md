@@ -235,15 +235,20 @@ npm run dev
   - Represents sound, rhythm, and artistic transformation visually
 - **November 2025**: Music-to-Art Deep Integration Enhancement
   - **Major Enhancement**: GPT-5 now deeply analyzes identified music for artwork generation
-    - Structured prompt format: SONG INSIGHT → VISUAL LANGUAGE → FINAL PROMPT
+    - Enhanced structured prompt format: ARTISTIC CONTEXT → SONG INSIGHT → VISUAL LANGUAGE → FINAL PROMPT
+    - **NEW: ARTISTIC CONTEXT** section analyzes:
+      - Artist intention: What inspired the song, what the artist was trying to express
+      - Lyrical themes: 2-3 dominant themes/motifs from lyrics (e.g., "struggle & triumph", "lost love & nostalgia")
+      - Visual metaphors: Maps lyrical themes to visual imagery (e.g., "chains breaking" → "shattered metal fragments")
     - Analyzes music video aesthetics (real or imaginatively reconstructed)
-    - Incorporates lyrical themes and emotional content
+    - Deeply incorporates lyrical meaning, symbolism, and emotional narrative into visual art
     - Applies genre-specific visual culture (hip-hop → street photography, urban landscapes, graffiti, music video cinematography)
   - Genre visual mappings: Hip-Hop, Rock, Electronic, Pop, Jazz, Classical
   - Robust parsing with markdown support and multiple fallback layers
   - Prompt validation (length limits, content verification)
   - Hip-hop track verification with warning logs for missing visual cues
   - Music Detection section always visible in explanation dialog
+  - Explanation prioritizes artistic context (artist intent + lyrics) over generic visual language
 - **Navigation and startup improvements**:
   - Fixed back/forward navigation using useEffect to avoid stale closure issues
   - Added automatic loading of most recent artwork on app start (eliminates empty "Ready to Create" screen)
