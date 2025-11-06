@@ -203,10 +203,10 @@ export default function Display() {
   // Generate art mutation
   const generateArtMutation = useMutation({
     mutationFn: async ({ audioAnalysis, musicInfo }: { audioAnalysis: AudioAnalysis; musicInfo: MusicIdentification | null }) => {
-      // Check usage limits before generating
-      if (usageStats && usageStats.remaining <= 0) {
-        throw new Error(`Daily limit reached (${usageStats.count}/${usageStats.limit}). Upgrade your plan for more generations.`);
-      }
+      // TEMPORARILY DISABLED: Check usage limits before generating
+      // if (usageStats && usageStats.remaining <= 0) {
+      //   throw new Error(`Daily limit reached (${usageStats.count}/${usageStats.limit}). Upgrade your plan for more generations.`);
+      // }
 
       // Generate new artwork (cache disabled to ensure unique images for navigation)
       const res = await apiRequest("POST", "/api/generate-art", {
