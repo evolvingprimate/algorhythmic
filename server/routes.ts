@@ -121,15 +121,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Get userId from authenticated user
       const userId = req.user.claims.sub;
 
-      // Check daily limit
-      const usageCheck = await storage.checkDailyLimit(userId);
-      if (!usageCheck.canGenerate) {
-        return res.status(429).json({ 
-          message: "Daily generation limit reached. Upgrade your plan for more generations.",
-          count: usageCheck.count,
-          limit: usageCheck.limit,
-        });
-      }
+      // TEMPORARILY DISABLED: Check daily limit
+      // const usageCheck = await storage.checkDailyLimit(userId);
+      // if (!usageCheck.canGenerate) {
+      //   return res.status(429).json({ 
+      //     message: "Daily generation limit reached. Upgrade your plan for more generations.",
+      //     count: usageCheck.count,
+      //     limit: usageCheck.limit,
+      //   });
+      // }
 
       // Validate audio analysis
       const audio = audioAnalysis as AudioAnalysis;
