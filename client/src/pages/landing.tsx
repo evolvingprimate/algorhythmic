@@ -3,9 +3,10 @@ import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Check, Music, Sparkles, TrendingUp, Zap, Palette, Heart, Volume2 } from "lucide-react";
+import { Check, Music, Sparkles, TrendingUp, Zap, Palette, Heart, Volume2, LogOut } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { AnimatedBackground } from "@/components/animated-background";
+import { useAuth } from "@/hooks/useAuth";
 import heroImage from "@assets/generated_images/Surreal_flowing_abstract_art_0d26abec.png";
 import cubistImage from "@assets/generated_images/Cubist_geometric_composition_aa773ee7.png";
 import pointillistImage from "@assets/generated_images/Pointillist_dotted_landscape_16a33696.png";
@@ -168,6 +169,7 @@ const galleryImages = [
 
 export default function Landing() {
   const [hoveredStyle, setHoveredStyle] = useState<number | null>(null);
+  const { isAuthenticated, isLoading } = useAuth();
 
   return (
     <div className="min-h-screen relative">
@@ -197,9 +199,24 @@ export default function Landing() {
             </div>
             <div className="flex items-center gap-2">
               <ThemeToggle />
-              <a href="/api/login">
-                <Button data-testid="button-get-started">Sign Up Free</Button>
-              </a>
+              {!isLoading && (
+                isAuthenticated ? (
+                  <>
+                    <Link href="/display">
+                      <Button data-testid="button-create-art">Create Art</Button>
+                    </Link>
+                    <a href="/api/logout">
+                      <Button variant="ghost" size="icon" data-testid="button-logout">
+                        <LogOut className="h-5 w-5" />
+                      </Button>
+                    </a>
+                  </>
+                ) : (
+                  <a href="/api/login">
+                    <Button data-testid="button-get-started">Sign Up Free</Button>
+                  </a>
+                )
+              )}
             </div>
           </div>
         </div>
@@ -215,11 +232,21 @@ export default function Landing() {
             AI-generated art that dances to your world. Choose your favorite artists and styles, then watch as sound transforms into stunning visual masterpieces.
           </p>
           <div className="flex flex-wrap items-center justify-center gap-4">
-            <a href="/api/login">
-              <Button size="lg" className="text-lg px-8" data-testid="button-hero-start-trial">
-                Sign Up Free
-              </Button>
-            </a>
+            {!isLoading && (
+              isAuthenticated ? (
+                <Link href="/display">
+                  <Button size="lg" className="text-lg px-8" data-testid="button-hero-create-art">
+                    Create Art Now
+                  </Button>
+                </Link>
+              ) : (
+                <a href="/api/login">
+                  <Button size="lg" className="text-lg px-8" data-testid="button-hero-start-trial">
+                    Sign Up Free
+                  </Button>
+                </a>
+              )
+            )}
             <Button 
               size="lg" 
               variant="outline" 
