@@ -699,14 +699,22 @@ export default function Display() {
         return;
       }
 
-      // When playing: full morphing with audio effects
-      // When paused: show static frame with gentle Ken Burns effect
-      if (isPlaying) {
-        const morphState = morphEngineRef.current.getMorphState(currentAudioAnalysis || undefined);
+      // Check if we have multiple frames for morphing
+      const totalFrames = morphEngineRef.current.getFrameCount();
+      const hasMultipleFrames = totalFrames > 1;
+      
+      // Three display modes:
+      // 1. Playing + multiple frames → Full audio-reactive morphing
+      // 2. Paused + multiple frames → Gentle ambient morphing (no audio)
+      // 3. Single frame (any state) → Static with Ken Burns effect
+      
+      if (hasMultipleFrames) {
+        // MORPHING MODE (both playing and paused)
+        const morphState = morphEngineRef.current.getMorphState(isPlaying ? (currentAudioAnalysis || undefined) : undefined);
         const nextFrame = morphEngineRef.current.getNextFrame();
 
-        // Audio intensity now comes directly from morphState (no duplicate calculation needed)
-        const scaledAudio = currentAudioAnalysis && morphState.audioIntensity > 0 ? {
+        // Audio reactivity only when playing
+        const scaledAudio = isPlaying && currentAudioAnalysis && morphState.audioIntensity > 0 ? {
           frequency: currentAudioAnalysis.frequency,
           bassLevel: currentAudioAnalysis.bassLevel * morphState.audioIntensity,
           amplitude: currentAudioAnalysis.amplitude * morphState.audioIntensity,
@@ -717,7 +725,7 @@ export default function Display() {
 
         // Log every 5 seconds (300 frames at 60fps)
         if (frameCount % 300 === 0) {
-          console.log(`[RenderLoop] Phase: ${morphState.phase}, Progress: ${(morphState.phaseProgress * 100).toFixed(1)}%, MorphProgress: ${(morphState.morphProgress * 100).toFixed(1)}%, AudioIntensity: ${(morphState.audioIntensity * 100).toFixed(0)}%, Foreshadow: ${(morphState.frameForeshadowMix * 100).toFixed(0)}%, Frames: ${morphEngineRef.current.getFrameCount()}`);
+          console.log(`[RenderLoop] ${isPlaying ? 'PLAYING' : 'PAUSED (morphing)'}, Phase: ${morphState.phase}, Progress: ${(morphState.phaseProgress * 100).toFixed(1)}%, MorphProgress: ${(morphState.morphProgress * 100).toFixed(1)}%, Foreshadow: ${(morphState.frameForeshadowMix * 100).toFixed(0)}%, Frames: ${totalFrames}`);
         }
         frameCount++;
 
@@ -731,11 +739,11 @@ export default function Display() {
           nextFrame ? { imageUrl: nextFrame.imageUrl, opacity: nextOpacity } : null,
           morphState.currentDNA,
           scaledAudio,
-          morphState.audioIntensity,
-          morphState.beatBurst
+          isPlaying ? morphState.audioIntensity : 0.0, // No audio effects when paused
+          isPlaying ? morphState.beatBurst : 0.0       // No beat bursts when paused
         );
       } else {
-        // Paused: show static frame with gentle Ken Burns effect (no audio, no morphing)
+        // STATIC MODE (single frame)
         let staticDNA: number[];
         try {
           staticDNA = currentFrame.dnaVector 
@@ -748,11 +756,11 @@ export default function Display() {
         
         rendererRef.current.render(
           { imageUrl: currentFrame.imageUrl, opacity: 1.0 },
-          null, // No next frame when paused
-          staticDNA, // DNAVector is number[]
+          null, // No next frame with single frame
+          staticDNA,
           null, // No audio
-          0.0, // No audio intensity
-          0.0  // No beat burst
+          0.0,  // No audio intensity
+          0.0   // No beat burst
         );
       }
 
