@@ -83,7 +83,10 @@ export class Tier1Renderer {
     dna: DNAVector,
     audioAnalysis: AudioAnalysis | null
   ): Promise<void> {
-    if (!this.canvas || !this.ctx) return;
+    if (!this.canvas || !this.ctx) {
+      console.warn('[Tier1Renderer] Canvas or context not available');
+      return;
+    }
 
     const ctx = this.ctx;
     const width = this.canvas.width;
@@ -107,13 +110,13 @@ export class Tier1Renderer {
       const trebleReactivity = audioAnalysis ? (audioAnalysis.trebleLevel / 100) : 0;
       const amplitude = audioAnalysis ? (audioAnalysis.amplitude / 100) : 0;
 
-      // Enhanced effects
-      const scale = 1 + (warpElasticity - 1) * bassReactivity * 0.2 * reactivityGain;
-      const rotation = trebleReactivity * 0.02 * reactivityGain; // Subtle rotation
-      const blur = boundaryFuzz * 2 + amplitude * 3 * reactivityGain;
-      const brightness = 1.0 + amplitude * 0.2 * reactivityGain;
-      const contrast = 1.0 + bassReactivity * 0.3 * reactivityGain;
-      const saturation = 1.0 + trebleReactivity * 0.2 * reactivityGain;
+      // Enhanced effects (MORE DRAMATIC for visibility)
+      const scale = 1 + (warpElasticity - 1) * bassReactivity * 0.5 * reactivityGain;
+      const rotation = trebleReactivity * 0.05 * reactivityGain; // More visible rotation
+      const blur = boundaryFuzz * 3 + amplitude * 5 * reactivityGain;
+      const brightness = 1.0 + amplitude * 0.4 * reactivityGain;
+      const contrast = 1.0 + bassReactivity * 0.5 * reactivityGain;
+      const saturation = 1.0 + trebleReactivity * 0.4 * reactivityGain;
 
       // Calculate aspect-fit dimensions
       const imgAspect = currentImg.width / currentImg.height;
