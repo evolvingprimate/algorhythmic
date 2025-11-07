@@ -39,6 +39,10 @@ import { AudioAnalyzer } from "@/lib/audio-analyzer";
 import { WebSocketClient } from "@/lib/websocket-client";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
+import { MorphEngine } from "@/lib/morphEngine";
+import { Tier1Renderer } from "@/lib/tier1Renderer";
+import { detectDeviceCapabilities } from "@/lib/deviceDetection";
+import { parseDNAFromSession } from "@/lib/dna";
 import type { AudioAnalysis, ArtVote, ArtPreference, MusicIdentification } from "@shared/schema";
 
 export default function Display() {
@@ -79,6 +83,9 @@ export default function Display() {
   
   const audioAnalyzerRef = useRef<AudioAnalyzer | null>(null);
   const wsClientRef = useRef<WebSocketClient | null>(null);
+  const morphEngineRef = useRef<MorphEngine | null>(null);
+  const rendererRef = useRef<Tier1Renderer | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
   const hideControlsTimeoutRef = useRef<number>();
   const generationTimeoutRef = useRef<number>();
   const musicIdentificationTimeoutRef = useRef<number>();
@@ -241,6 +248,30 @@ export default function Display() {
         isSaved: data.session?.isSaved || false,
       };
       
+      // Parse DNA vector and add frame to MorphEngine
+      if (data.session && morphEngineRef.current) {
+        const dnaVector = parseDNAFromSession(data.session);
+        if (dnaVector) {
+          morphEngineRef.current.addFrame({
+            imageUrl: data.imageUrl,
+            dnaVector,
+            prompt: data.prompt,
+            explanation: data.explanation,
+            artworkId: data.session.id,
+            musicInfo: data.musicInfo,
+            audioAnalysis: variables.audioAnalysis,
+          });
+          
+          // Start the morph engine if not already started
+          if (morphEngineRef.current.getFrameCount() === 1) {
+            morphEngineRef.current.start();
+            console.log('[Display] MorphEngine started with first frame');
+          }
+        } else {
+          console.warn('[Display] No DNA vector found in session, skipping morph frame');
+        }
+      }
+      
       // Add to history using ref to avoid stale closure
       setImageHistory(prev => {
         const currentIndex = historyIndexRef.current;
@@ -383,6 +414,61 @@ export default function Display() {
       wsClientRef.current?.disconnect();
     };
   }, []);
+
+  // Initialize MorphEngine and Renderer
+  useEffect(() => {
+    const device = detectDeviceCapabilities();
+    console.log(`[Display] Device tier ${device.tier} detected, max FPS: ${device.maxFPS}`);
+    
+    morphEngineRef.current = new MorphEngine();
+    rendererRef.current = new Tier1Renderer('morphing-canvas-container');
+    
+    return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+      morphEngineRef.current?.stop();
+      rendererRef.current?.destroy();
+    };
+  }, []);
+
+  // Render loop for DNA morphing
+  useEffect(() => {
+    const renderLoop = () => {
+      if (!morphEngineRef.current || !rendererRef.current || !isPlaying) {
+        animationFrameRef.current = requestAnimationFrame(renderLoop);
+        return;
+      }
+
+      const morphState = morphEngineRef.current.getMorphState(currentAudioAnalysis || undefined);
+      const currentFrame = morphEngineRef.current.getCurrentFrame();
+      const nextFrame = morphEngineRef.current.getNextFrame();
+
+      if (currentFrame) {
+        const currentOpacity = morphState.phase === 'hold' ? 1.0 : (1.0 - morphState.phaseProgress);
+        const nextOpacity = morphState.phase === 'morph' ? morphState.phaseProgress : 0;
+
+        rendererRef.current.render(
+          { imageUrl: currentFrame.imageUrl, opacity: currentOpacity },
+          nextFrame ? { imageUrl: nextFrame.imageUrl, opacity: nextOpacity } : null,
+          morphState.currentDNA,
+          currentAudioAnalysis
+        );
+      }
+
+      animationFrameRef.current = requestAnimationFrame(renderLoop);
+    };
+
+    if (isPlaying) {
+      animationFrameRef.current = requestAnimationFrame(renderLoop);
+    }
+
+    return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+    };
+  }, [isPlaying, currentAudioAnalysis]);
 
   // Identify music from audio
   const identifyMusic = async () => {
@@ -619,10 +705,10 @@ export default function Display() {
       <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-background via-primary/5 to-background">
         {currentImage ? (
           <div className="relative w-full h-full">
-            <img 
-              src={currentImage} 
-              alt="Generated artwork"
-              className="w-full h-full object-cover"
+            {/* Morphing Canvas Container */}
+            <div 
+              id="morphing-canvas-container"
+              className="w-full h-full relative"
             />
             {/* Audio reactive glow effect */}
             <div 
