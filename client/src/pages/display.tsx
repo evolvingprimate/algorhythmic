@@ -448,6 +448,7 @@ export default function Display() {
 
   // Render loop for DNA morphing
   useEffect(() => {
+    let frameCount = 0;
     const renderLoop = () => {
       if (!morphEngineRef.current || !rendererRef.current || !isPlaying) {
         animationFrameRef.current = requestAnimationFrame(renderLoop);
@@ -457,6 +458,12 @@ export default function Display() {
       const morphState = morphEngineRef.current.getMorphState(currentAudioAnalysis || undefined);
       const currentFrame = morphEngineRef.current.getCurrentFrame();
       const nextFrame = morphEngineRef.current.getNextFrame();
+
+      // Log every 5 seconds (300 frames at 60fps)
+      if (frameCount % 300 === 0) {
+        console.log(`[RenderLoop] Phase: ${morphState.phase}, Progress: ${(morphState.phaseProgress * 100).toFixed(1)}%, Frames: ${morphEngineRef.current.getFrameCount()}`);
+      }
+      frameCount++;
 
       if (currentFrame) {
         const currentOpacity = morphState.phase === 'hold' ? 1.0 : (1.0 - morphState.phaseProgress);
@@ -474,6 +481,7 @@ export default function Display() {
     };
 
     if (isPlaying) {
+      console.log('[RenderLoop] Starting render loop');
       animationFrameRef.current = requestAnimationFrame(renderLoop);
     }
 
