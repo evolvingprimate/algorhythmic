@@ -713,25 +713,45 @@ float getEdgeMagnitude(sampler2D tex, vec2 uv, vec2 texelSize) {
 }
 
 // Simple 5x5 Gaussian blur for soft trace
+// FULLY UNROLLED with COMPILE-TIME CONSTANT indices (WebGL GLSL ES 1.0 requirement)
 float gaussianBlur(sampler2D tex, vec2 uv, vec2 texelSize) {
-  float kernel[25];
-  kernel[0] = 1.0; kernel[1] = 4.0; kernel[2] = 6.0; kernel[3] = 4.0; kernel[4] = 1.0;
-  kernel[5] = 4.0; kernel[6] = 16.0; kernel[7] = 24.0; kernel[8] = 16.0; kernel[9] = 4.0;
-  kernel[10] = 6.0; kernel[11] = 24.0; kernel[12] = 36.0; kernel[13] = 24.0; kernel[14] = 6.0;
-  kernel[15] = 4.0; kernel[16] = 16.0; kernel[17] = 24.0; kernel[18] = 16.0; kernel[19] = 4.0;
-  kernel[20] = 1.0; kernel[21] = 4.0; kernel[22] = 6.0; kernel[23] = 4.0; kernel[24] = 1.0;
-  
   float sum = 0.0;
+  const float norm = 1.0 / 256.0;
   
-  for(int y = -2; y <= 2; y++) {
-    for(int x = -2; x <= 2; x++) {
-      // Compute constant index from loop variables (WebGL GLSL requirement)
-      int idx = (y + 2) * 5 + (x + 2);
-      vec2 offset = vec2(float(x), float(y)) * texelSize;
-      float sample = texture2D(tex, uv + offset).r;
-      sum += sample * kernel[idx] / 256.0;
-    }
-  }
+  // Row -2
+  sum += texture2D(tex, uv + vec2(-2.0, -2.0) * texelSize).r * 1.0 * norm;
+  sum += texture2D(tex, uv + vec2(-1.0, -2.0) * texelSize).r * 4.0 * norm;
+  sum += texture2D(tex, uv + vec2( 0.0, -2.0) * texelSize).r * 6.0 * norm;
+  sum += texture2D(tex, uv + vec2( 1.0, -2.0) * texelSize).r * 4.0 * norm;
+  sum += texture2D(tex, uv + vec2( 2.0, -2.0) * texelSize).r * 1.0 * norm;
+  
+  // Row -1
+  sum += texture2D(tex, uv + vec2(-2.0, -1.0) * texelSize).r * 4.0 * norm;
+  sum += texture2D(tex, uv + vec2(-1.0, -1.0) * texelSize).r * 16.0 * norm;
+  sum += texture2D(tex, uv + vec2( 0.0, -1.0) * texelSize).r * 24.0 * norm;
+  sum += texture2D(tex, uv + vec2( 1.0, -1.0) * texelSize).r * 16.0 * norm;
+  sum += texture2D(tex, uv + vec2( 2.0, -1.0) * texelSize).r * 4.0 * norm;
+  
+  // Row 0 (center)
+  sum += texture2D(tex, uv + vec2(-2.0,  0.0) * texelSize).r * 6.0 * norm;
+  sum += texture2D(tex, uv + vec2(-1.0,  0.0) * texelSize).r * 24.0 * norm;
+  sum += texture2D(tex, uv + vec2( 0.0,  0.0) * texelSize).r * 36.0 * norm;
+  sum += texture2D(tex, uv + vec2( 1.0,  0.0) * texelSize).r * 24.0 * norm;
+  sum += texture2D(tex, uv + vec2( 2.0,  0.0) * texelSize).r * 6.0 * norm;
+  
+  // Row 1
+  sum += texture2D(tex, uv + vec2(-2.0,  1.0) * texelSize).r * 4.0 * norm;
+  sum += texture2D(tex, uv + vec2(-1.0,  1.0) * texelSize).r * 16.0 * norm;
+  sum += texture2D(tex, uv + vec2( 0.0,  1.0) * texelSize).r * 24.0 * norm;
+  sum += texture2D(tex, uv + vec2( 1.0,  1.0) * texelSize).r * 16.0 * norm;
+  sum += texture2D(tex, uv + vec2( 2.0,  1.0) * texelSize).r * 4.0 * norm;
+  
+  // Row 2
+  sum += texture2D(tex, uv + vec2(-2.0,  2.0) * texelSize).r * 1.0 * norm;
+  sum += texture2D(tex, uv + vec2(-1.0,  2.0) * texelSize).r * 4.0 * norm;
+  sum += texture2D(tex, uv + vec2( 0.0,  2.0) * texelSize).r * 6.0 * norm;
+  sum += texture2D(tex, uv + vec2( 1.0,  2.0) * texelSize).r * 4.0 * norm;
+  sum += texture2D(tex, uv + vec2( 2.0,  2.0) * texelSize).r * 1.0 * norm;
   
   return sum;
 }
