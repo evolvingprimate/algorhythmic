@@ -114,13 +114,14 @@ float snoise(vec3 v) {
 }
 
 // Fractal Brownian Motion for more complex noise
-float fbm(vec3 p, int octaves) {
+// Fixed octave count for WebGL GLSL compatibility (loop bounds must be constant)
+float fbm(vec3 p) {
   float value = 0.0;
   float amplitude = 0.5;
   float frequency = 1.0;
+  const int octaves = 5; // Fixed at 5 octaves for good quality/performance balance
   
-  for(int i = 0; i < 8; i++) {
-    if(i >= octaves) break;
+  for(int i = 0; i < 5; i++) {
     value += amplitude * snoise(p * frequency);
     frequency *= 2.0;
     amplitude *= 0.5;
