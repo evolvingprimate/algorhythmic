@@ -131,9 +131,10 @@ export default function Display() {
     queryKey: [`/api/preferences/${sessionId.current}`],
   });
 
-  // Fetch most recent session to show cached image immediately
-  const { data: recentSessions } = useQuery<any[]>({
-    queryKey: [`/api/sessions/${sessionId.current}`],
+  // Fetch user's most recent artwork from gallery to use as Frame A
+  const { data: recentArtworks } = useQuery<any[]>({
+    queryKey: ["/api/gallery"],
+    enabled: isAuthenticated,
     refetchOnWindowFocus: false,
     refetchOnMount: true,
   });
@@ -147,10 +148,10 @@ export default function Display() {
     }
   }, [preferences]);
 
-  // Load most recent artwork on mount to avoid empty screen
+  // Load most recent artwork on mount as Frame A (to avoid blank screen)
   useEffect(() => {
-    if (recentSessions && recentSessions.length > 0 && !currentImage) {
-      const mostRecent = recentSessions[0];
+    if (recentArtworks && recentArtworks.length > 0 && !currentImage) {
+      const mostRecent = recentArtworks[0];
       const audioFeatures = mostRecent.audioFeatures ? JSON.parse(mostRecent.audioFeatures) : null;
       const musicInfo = mostRecent.musicTrack ? {
         title: mostRecent.musicTrack,
@@ -162,11 +163,11 @@ export default function Display() {
         song_link: undefined
       } : null;
 
-      // Add to history
+      // Add to history as Frame A
       const historyItem = {
         imageUrl: mostRecent.imageUrl,
         prompt: mostRecent.prompt,
-        explanation: mostRecent.explanation || '',
+        explanation: mostRecent.generationExplanation || '',
         musicInfo,
         audioAnalysis: audioFeatures,
         artworkId: mostRecent.id,
@@ -177,13 +178,15 @@ export default function Display() {
       setHistoryIndex(0);
       setCurrentImage(mostRecent.imageUrl);
       setCurrentPrompt(mostRecent.prompt);
-      setCurrentExplanation(mostRecent.explanation || '');
+      setCurrentExplanation(mostRecent.generationExplanation || '');
       setCurrentMusicInfo(musicInfo);
       setCurrentAudioAnalysis(audioFeatures);
       setCurrentArtworkId(mostRecent.id);
       setCurrentArtworkSaved(mostRecent.isSaved || false);
+      
+      console.log('[Display] Loaded most recent artwork as Frame A:', mostRecent.imageUrl);
     }
-  }, [recentSessions]);
+  }, [recentArtworks, currentImage]);
 
   // Fetch voting history
   const { data: votes } = useQuery<ArtVote[]>({
