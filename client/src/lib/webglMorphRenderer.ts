@@ -192,13 +192,22 @@ export class WebGLMorphRenderer {
     this.imageTextureB = this.gl.createTexture();
     this.feedbackTexture = this.gl.createTexture();
     
-    [this.imageTextureA, this.imageTextureB, this.feedbackTexture].forEach(texture => {
+    // Setup image textures A and B with mipmaps for pyramid blending
+    [this.imageTextureA, this.imageTextureB].forEach(texture => {
       this.gl!.bindTexture(this.gl!.TEXTURE_2D, texture);
       this.gl!.texParameteri(this.gl!.TEXTURE_2D, this.gl!.TEXTURE_WRAP_S, this.gl!.CLAMP_TO_EDGE);
       this.gl!.texParameteri(this.gl!.TEXTURE_2D, this.gl!.TEXTURE_WRAP_T, this.gl!.CLAMP_TO_EDGE);
-      this.gl!.texParameteri(this.gl!.TEXTURE_2D, this.gl!.TEXTURE_MIN_FILTER, this.gl!.LINEAR);
+      // Use mipmap filtering for Laplacian pyramid
+      this.gl!.texParameteri(this.gl!.TEXTURE_2D, this.gl!.TEXTURE_MIN_FILTER, this.gl!.LINEAR_MIPMAP_LINEAR);
       this.gl!.texParameteri(this.gl!.TEXTURE_2D, this.gl!.TEXTURE_MAG_FILTER, this.gl!.LINEAR);
     });
+    
+    // Feedback texture doesn't need mipmaps
+    this.gl.bindTexture(this.gl.TEXTURE_2D, this.feedbackTexture);
+    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE);
+    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE);
+    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.LINEAR);
+    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.LINEAR);
   }
 
   private setupFramebuffer(): void {
@@ -303,6 +312,9 @@ export class WebGLMorphRenderer {
       this.gl.TEXTURE_2D, 0, this.gl.RGBA,
       this.gl.RGBA, this.gl.UNSIGNED_BYTE, image
     );
+    
+    // Generate mipmaps for Laplacian pyramid blending
+    this.gl.generateMipmap(this.gl.TEXTURE_2D);
   }
 
   async render(

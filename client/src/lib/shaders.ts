@@ -194,6 +194,18 @@ float luminance(vec3 color) {
   return dot(color, vec3(0.299, 0.587, 0.114));
 }
 
+// Gaussian blur helper for Laplacian pyramid (5-tap cross pattern)
+vec3 gaussianBlur(sampler2D tex, vec2 uv, float radius) {
+  vec3 color = vec3(0.0);
+  // Gaussian weights for 5-tap cross pattern
+  color += texture2D(tex, uv).rgb * 0.4;
+  color += texture2D(tex, uv + vec2(radius, 0.0)).rgb * 0.15;
+  color += texture2D(tex, uv - vec2(radius, 0.0)).rgb * 0.15;
+  color += texture2D(tex, uv + vec2(0.0, radius)).rgb * 0.15;
+  color += texture2D(tex, uv - vec2(0.0, radius)).rgb * 0.15;
+  return color;
+}
+
 void main() {
   vec2 uv = v_texCoord;
   vec2 pixel = gl_FragCoord.xy / u_resolution;
@@ -248,39 +260,54 @@ void main() {
     uvB -= vec2(anomaly * 0.01 * anomalyWeight);
   }
   
-  vec4 colorA = texture2D(u_imageA, uvA);
-  vec4 colorB = texture2D(u_imageB, uvB);
+  // ====== TRUE LAPLACIAN PYRAMID MULTIBAND BLENDING ======
+  // Key: Extract frequency bands by subtracting adjacent Gaussian levels
+  // This isolates coarse structure from fine texture for latent-space feel
   
-  // Calculate luminance for both images to weight displacement
-  float lumA = luminance(colorA.rgb);
-  float lumB = luminance(colorB.rgb);
-  float avgLum = mix(lumA, lumB, easedProgress);
+  // Different blend rates for each frequency band
+  float tCoarse = smoothstep(0.05, 0.95, easedProgress); // Coarsest: slowest (structure)
+  float tMid = smoothstep(0.20, 0.80, easedProgress);    // Mid: moderate (forms)
+  float tFine = smoothstep(0.30, 0.70, easedProgress);   // Finest: fastest (details)
   
-  // Apply additional luminance-weighted displacement for watercolor effect
-  // Darker areas get more displacement (like pigment pooling)
-  float lumWeight = smoothstep(0.3, 0.7, 1.0 - avgLum);
-  vec2 extraDisp = fluidFlow * lumWeight * 0.01;
-  uvA += extraDisp;
-  uvB += extraDisp;
+  // === Build Gaussian Pyramid (progressively blurred levels) ===
+  vec3 A_G0 = texture2D(u_imageA, uvA).rgb;              // Level 0: Full detail
+  vec3 A_G1 = gaussianBlur(u_imageA, uvA, 0.003);        // Level 1: Slight blur
+  vec3 A_G2 = gaussianBlur(u_imageA, uvA, 0.008);        // Level 2: More blur
   
-  // Re-sample with luminance-weighted displacement
-  colorA = texture2D(u_imageA, uvA);
-  colorB = texture2D(u_imageB, uvB);
+  vec3 B_G0 = texture2D(u_imageB, uvB).rgb;
+  vec3 B_G1 = gaussianBlur(u_imageB, uvB, 0.003);
+  vec3 B_G2 = gaussianBlur(u_imageB, uvB, 0.008);
   
-  // Intelligent color morphing in HSL space
-  vec3 hslA = rgb2hsl(colorA.rgb);
-  vec3 hslB = rgb2hsl(colorB.rgb);
+  // === Compute Laplacian Bands (band-pass via subtraction) ===
+  // Each band contains ONLY its frequency range (no overlap)
+  vec3 A_Lap_Fine = A_G0 - A_G1;    // High frequencies (fine detail)
+  vec3 A_Lap_Mid  = A_G1 - A_G2;    // Mid frequencies (edges/forms)
+  vec3 A_Lap_Coarse = A_G2;         // Base level (coarse structure)
+  
+  vec3 B_Lap_Fine = B_G0 - B_G1;
+  vec3 B_Lap_Mid  = B_G1 - B_G2;
+  vec3 B_Lap_Coarse = B_G2;
+  
+  // === Blend each Laplacian band at different rates ===
+  // This is THE KEY to latent-space feel: structure evolves slowly, details quickly
+  vec3 blendedCoarse = mix(A_Lap_Coarse, B_Lap_Coarse, tCoarse); // Slowest
+  vec3 blendedMid    = mix(A_Lap_Mid, B_Lap_Mid, tMid);           // Moderate
+  vec3 blendedFine   = mix(A_Lap_Fine, B_Lap_Fine, tFine);        // Fastest
+  
+  // === Reconstruct by SUMMING blended Laplacian bands ===
+  // Unlike Gaussian pyramid, Laplacian bands must be ADDED (not weighted mix)
+  // because they're residuals that sum to the original image
+  vec3 multiband = blendedCoarse + blendedMid + blendedFine;
+  
+  // Intelligent color morphing in HSL space on the multiband result
+  vec3 hslMultiband = rgb2hsl(multiband);
   
   // Subtle hue rotation with color shift rate
-  float hueShift = u_colorShiftRate * sin(flowTime * 0.5) * 0.05; // Reduced for subtlety
-  hslA.x = fract(hslA.x + hueShift);
-  hslB.x = fract(hslB.x + hueShift);
-  
-  // Smooth HSL interpolation with eased progress
-  vec3 hslMorphed = mix(hslA, hslB, smoothstep(0.0, 1.0, easedProgress));
+  float hueShift = u_colorShiftRate * sin(flowTime * 0.5) * 0.05;
+  hslMultiband.x = fract(hslMultiband.x + hueShift);
   
   // Convert back to RGB
-  vec3 finalColor = hsl2rgb(hslMorphed);
+  vec3 finalColor = hsl2rgb(hslMultiband);
   
   // Softer detail layer using low-frequency noise (not harsh fbm)
   float trebleDetail = u_trebleLevel * 0.3 + 0.3; // Reduced range
