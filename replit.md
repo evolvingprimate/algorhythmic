@@ -43,10 +43,44 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 1.  **Audio Capture & Analysis**: Microphone captures sound; AudioAnalyzer extracts frequency, amplitude, tempo, mood.
 2.  **Music Identification**: ACRCloud identifies the playing song.
 3.  **Album Artwork Fetch**: Spotify API retrieves album cover.
-4.  **Prompt Generation**: GPT-4o Vision (with album art) or GPT-5 (text-only) creates DALL-E prompt considering user preferences, audio mood, identified music (artist intent, lyrical themes, visual metaphors), and voting history. Genre-specific visual culture is applied.
+4.  **Prompt Generation**: GPT-4o Vision (with album art) or GPT-5 (text-only) creates DALL-E prompt considering user preferences, audio mood, identified music (artist intent, lyrical themes, visual metaphors), and voting history. Genre-specific visual culture is applied. **Generates 50-point DNA vector alongside prompt.**
 5.  **Image Generation**: DALL-E 3 creates 1024x1024 artwork.
-6.  **Display**: Image shown with crossfade.
+6.  **Display**: Image shown with DNA-driven morphing (see DNA Morphing System below).
 7.  **Feedback**: User votes to train preferences.
+
+### DNA Morphing System
+**GAN-Like Interpolation**: Each artwork has a 50-point "DNA vector" (0-3 range) enabling smooth, procedural morphing between frames over 5-minute cycles.
+
+**50-Point DNA Structure:**
+- **Points 1-12**: Color & Palette (hue, saturation, brightness, temperature, contrast, etc.)
+- **Points 13-24**: Texture & Style (smoothness, fractal depth, grain, impasto, detail level, etc.)
+- **Points 25-34**: Composition (focal point, symmetry, layering, depth, perspective, etc.)
+- **Points 35-44**: Mood & Semantics (emotional valence, abstraction, atmosphere, narrative, surreal factor, etc.)
+- **Points 45-50**: Morph Controls (audio-reactive: warp elasticity, particle density, dissolve speed, echo trail, boundary fuzz, reactivity gain)
+
+**Morphing Timeline (5-Minute Hero Cycle):**
+1. **0:00-1:00 (Hold Phase)**: Display current artwork ("Hero 1") with audio-reactive modulation on DNA points 45-50
+2. **1:00-5:00 (Morph Phase)**: Linearly interpolate DNA points 1-44 from Hero 1 → Hero 2 using easeInOutSine, while points 45-50 continue reacting to live audio
+3. **5:00**: Advance to next hero, restart cycle
+
+**Tiered Rendering (Device-Adaptive):**
+- **Tier 1** (≤4GB RAM, no WebGL2): CSS transforms + Canvas2D for basic warp/blur/dissolve
+- **Tier 2** (4-8GB, WebGL): WebGL shaders for particle systems and advanced effects
+- **Tier 3** (8-16GB, WebGL2): High-fidelity effects with post-processing
+- **Tier 4** (≥16GB, WebGPU): Compute shaders for fluid dynamics and advanced morphing
+
+**Implementation:**
+- `client/src/lib/dna.ts`: DNA utility functions (interpolation, audio reactivity, clamping)
+- `client/src/lib/morphEngine.ts`: MorphEngine class managing 5-min cycles
+- `client/src/lib/deviceDetection.ts`: Auto-detects device tier based on RAM/GPU
+- `client/src/lib/tier1Renderer.ts`: Canvas2D renderer for low-end devices
+- `server/openai-service.ts`: GPT generates DNA alongside prompts, with fallback DNA generation
+- `shared/schema.ts`: Database stores `dnaVector` (JSON) with each artwork
+
+**Validation & Safety:**
+- All DNA values clamped to 0-3 range at generation, parsing, and modulation
+- Fallback DNA generation based on audio characteristics if GPT fails
+- Audio-reactive modulation prevents overflow via clampDNAValue() function
 
 ### Design System
 - **Colors**: Purple primary with full light/dark mode support.
