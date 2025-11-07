@@ -176,7 +176,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // CRITICAL: This must succeed - no fallback to temporary DALL-E URLs
       console.log('[ArtGeneration] 💾 Storing image permanently in Replit Object Storage...');
       const objectStorageService = new ObjectStorageService();
-      const imageUrl = await objectStorageService.storeImageFromUrl(dalleUrl);
+      const imageUrl = await objectStorageService.storeImageFromUrl(dalleUrl, userId);
       console.log('[ArtGeneration] ✅ Image stored and verified:', imageUrl);
 
       // DATABASE INTEGRITY CHECK: Validate imageUrl is a permanent storage path
@@ -334,6 +334,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Health check
   app.get("/api/health", (req, res) => {
     res.json({ status: "healthy", timestamp: new Date().toISOString() });
+  });
+
+  // Storage health monitoring endpoint
+  app.get("/api/admin/storage-health", async (req, res) => {
+    try {
+      const stats = await storage.getStorageHealthStats();
+      const recentMetrics = await storage.getStorageMetrics(20);
+      
+      res.json({
+        timestamp: new Date().toISOString(),
+        health: stats.successRate >= 95 ? "healthy" : stats.successRate >= 80 ? "degraded" : "critical",
+        stats,
+        recentMetrics,
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: "Error fetching storage health: " + error.message });
+    }
   });
 
   const httpServer = createServer(app);

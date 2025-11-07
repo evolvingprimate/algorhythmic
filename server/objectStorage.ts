@@ -3,6 +3,7 @@
 import { Storage, File } from "@google-cloud/storage";
 import { Response } from "express";
 import { randomUUID } from "crypto";
+import { storage } from "./storage";
 
 const REPLIT_SIDECAR_ENDPOINT = "http://127.0.0.1:1106";
 
@@ -109,8 +110,12 @@ export class ObjectStorageService {
   }
 
   // Download image from DALL-E URL and store in object storage with verification
-  async storeImageFromUrl(imageUrl: string, maxRetries: number = 3): Promise<string> {
+  async storeImageFromUrl(imageUrl: string, userId?: string, maxRetries: number = 3): Promise<string> {
     let lastError: Error | null = null;
+    let fileName: string = '';
+    let fileSize: number = 0;
+    const startTime = Date.now();
+    const orphanedFiles: File[] = []; // Track files for cleanup on failure
 
     // Retry logic: Try up to maxRetries times
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -127,12 +132,15 @@ export class ObjectStorageService {
         
         // Generate unique filename with UUID
         const imageId = randomUUID();
-        const fileName = `artwork-${imageId}.png`;
+        fileName = `artwork-${imageId}.png`;
         const fullPath = `${publicPath}/${fileName}`;
 
         const { bucketName, objectName } = parseObjectPath(fullPath);
         const bucket = objectStorageClient.bucket(bucketName);
         const file = bucket.file(objectName);
+        
+        // Track file for potential cleanup
+        orphanedFiles.push(file);
 
         // Download image from DALL-E URL
         const response = await fetch(imageUrl);
@@ -143,6 +151,7 @@ export class ObjectStorageService {
         const arrayBuffer = await response.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
         const downloadedSize = buffer.length;
+        fileSize = downloadedSize; // Track for metrics
         
         console.log(`[ObjectStorage] ✅ Downloaded ${downloadedSize} bytes`);
 
@@ -196,7 +205,28 @@ export class ObjectStorageService {
 
         // All verifications passed!
         const publicUrl = `/public-objects/${fileName}`;
+        const verificationTimeMs = Date.now() - startTime;
         console.log(`[ObjectStorage] 🎉 Storage verified successfully: ${publicUrl}`);
+        
+        // Record success metrics
+        try {
+          await storage.recordStorageMetric({
+            userId: userId || null,
+            fileName,
+            fileSize,
+            dalleUrl: imageUrl,
+            storageUrl: publicUrl,
+            attemptCount: attempt,
+            success: true,
+            verificationTimeMs,
+            errorMessage: null,
+          });
+          console.log(`[ObjectStorage] 📊 Metrics recorded: ${attempt} attempts, ${verificationTimeMs}ms`);
+        } catch (metricsError) {
+          // Don't fail the whole operation if metrics recording fails
+          console.error(`[ObjectStorage] ⚠️  Failed to record metrics:`, metricsError);
+        }
+        
         return publicUrl;
 
       } catch (error) {
@@ -211,8 +241,39 @@ export class ObjectStorageService {
       }
     }
 
-    // All retries exhausted
+    // All retries exhausted - cleanup orphaned files and record failure
     console.error(`[ObjectStorage] 💥 All ${maxRetries} attempts failed. Last error:`, lastError);
+    
+    // Cleanup: Delete orphaned partial uploads
+    console.log(`[ObjectStorage] 🧹 Cleaning up ${orphanedFiles.length} orphaned files...`);
+    for (const orphanedFile of orphanedFiles) {
+      try {
+        await orphanedFile.delete();
+        console.log(`[ObjectStorage] ✅ Deleted orphaned file: ${orphanedFile.name}`);
+      } catch (cleanupError) {
+        console.error(`[ObjectStorage] ⚠️  Failed to delete orphaned file:`, cleanupError);
+      }
+    }
+    
+    // Record failure metrics
+    const verificationTimeMs = Date.now() - startTime;
+    try {
+      await storage.recordStorageMetric({
+        userId: userId || null,
+        fileName: fileName || 'unknown',
+        fileSize: fileSize || null,
+        dalleUrl: imageUrl,
+        storageUrl: null,
+        attemptCount: maxRetries,
+        success: false,
+        verificationTimeMs,
+        errorMessage: lastError?.message || 'Unknown error',
+      });
+      console.log(`[ObjectStorage] 📊 Failure metrics recorded: ${maxRetries} attempts, ${verificationTimeMs}ms`);
+    } catch (metricsError) {
+      console.error(`[ObjectStorage] ⚠️  Failed to record failure metrics:`, metricsError);
+    }
+    
     throw new Error(
       `Failed to store image after ${maxRetries} attempts: ${lastError?.message || 'Unknown error'}`
     );

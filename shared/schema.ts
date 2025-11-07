@@ -87,6 +87,25 @@ export const dailyUsage = pgTable("daily_usage", {
   userDateIdx: index("daily_usage_user_date_idx").on(table.userId, table.date),
 }));
 
+// Storage metrics for monitoring object storage reliability
+export const storageMetrics = pgTable("storage_metrics", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id"),
+  fileName: text("file_name").notNull(), // artwork-{uuid}.png
+  fileSize: integer("file_size"), // Bytes
+  dalleUrl: text("dalle_url"), // Original DALL-E URL (for debugging)
+  storageUrl: text("storage_url"), // Final /public-objects/ URL
+  attemptCount: integer("attempt_count").notNull().default(1), // Number of retries
+  success: boolean("success").notNull(), // True if final verification passed
+  verificationTimeMs: integer("verification_time_ms"), // Total time for download + upload + verify
+  errorMessage: text("error_message"), // Error details if failed
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => ({
+  successIdx: index("storage_metrics_success_idx").on(table.success),
+  createdAtIdx: index("storage_metrics_created_at_idx").on(table.createdAt),
+  userIdIdx: index("storage_metrics_user_id_idx").on(table.userId),
+}));
+
 // Insert schemas
 export const insertArtPreferenceSchema = createInsertSchema(artPreferences).omit({
   id: true,
@@ -115,6 +134,11 @@ export const insertDailyUsageSchema = createInsertSchema(dailyUsage).omit({
   updatedAt: true,
 });
 
+export const insertStorageMetricSchema = createInsertSchema(storageMetrics).omit({
+  id: true,
+  createdAt: true,
+});
+
 // Types
 export type ArtPreference = typeof artPreferences.$inferSelect;
 export type InsertArtPreference = z.infer<typeof insertArtPreferenceSchema>;
@@ -130,6 +154,9 @@ export type InsertUser = z.infer<typeof insertUserSchema>;
 
 export type DailyUsage = typeof dailyUsage.$inferSelect;
 export type InsertDailyUsage = z.infer<typeof insertDailyUsageSchema>;
+
+export type StorageMetric = typeof storageMetrics.$inferSelect;
+export type InsertStorageMetric = z.infer<typeof insertStorageMetricSchema>;
 
 // Replit Auth specific type
 export type UpsertUser = typeof users.$inferInsert;

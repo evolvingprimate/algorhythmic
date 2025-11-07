@@ -10,16 +10,19 @@ import {
   type UpsertUser,
   type DailyUsage,
   type InsertDailyUsage,
+  type StorageMetric,
+  type InsertStorageMetric,
   artPreferences,
   artVotes,
   artSessions,
   users,
   dailyUsage,
+  storageMetrics,
   SUBSCRIPTION_TIERS,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { drizzle } from "drizzle-orm/neon-serverless";
-import { eq, desc, and } from "drizzle-orm";
+import { eq, desc, and, gte } from "drizzle-orm";
 import { Pool, neonConfig } from "@neondatabase/serverless";
 import ws from "ws";
 
@@ -64,6 +67,18 @@ export interface IStorage {
   incrementDailyUsage(userId: string, date: string): Promise<DailyUsage>;
   getUserDailyLimit(userId: string): Promise<number>;
   checkDailyLimit(userId: string): Promise<{ canGenerate: boolean; count: number; limit: number }>;
+  
+  // Storage Metrics
+  recordStorageMetric(metric: InsertStorageMetric): Promise<StorageMetric>;
+  getStorageMetrics(limit?: number): Promise<StorageMetric[]>;
+  getStorageHealthStats(): Promise<{
+    totalAttempts: number;
+    successCount: number;
+    failureCount: number;
+    successRate: number;
+    avgVerificationTime: number;
+    recentFailures: StorageMetric[];
+  }>;
 }
 
 export class MemStorage implements IStorage {
@@ -332,6 +347,41 @@ export class MemStorage implements IStorage {
       limit,
     };
   }
+
+  // Storage Metrics (stub implementation for MemStorage)
+  async recordStorageMetric(metric: InsertStorageMetric): Promise<StorageMetric> {
+    // MemStorage doesn't persist metrics - return stub
+    const id = randomUUID();
+    return {
+      id,
+      ...metric,
+      createdAt: new Date(),
+    };
+  }
+
+  async getStorageMetrics(limit: number = 100): Promise<StorageMetric[]> {
+    // MemStorage doesn't persist metrics
+    return [];
+  }
+
+  async getStorageHealthStats(): Promise<{
+    totalAttempts: number;
+    successCount: number;
+    failureCount: number;
+    successRate: number;
+    avgVerificationTime: number;
+    recentFailures: StorageMetric[];
+  }> {
+    // MemStorage doesn't persist metrics
+    return {
+      totalAttempts: 0,
+      successCount: 0,
+      failureCount: 0,
+      successRate: 100,
+      avgVerificationTime: 0,
+      recentFailures: [],
+    };
+  }
 }
 
 // PostgreSQL Storage Implementation
@@ -591,6 +641,66 @@ export class PostgresStorage implements IStorage {
       canGenerate: count < limit,
       count,
       limit,
+    };
+  }
+
+  // Storage Metrics
+  async recordStorageMetric(metric: InsertStorageMetric): Promise<StorageMetric> {
+    const created = await this.db
+      .insert(storageMetrics)
+      .values(metric)
+      .returning();
+    return created[0];
+  }
+
+  async getStorageMetrics(limit: number = 100): Promise<StorageMetric[]> {
+    return await this.db
+      .select()
+      .from(storageMetrics)
+      .orderBy(desc(storageMetrics.createdAt))
+      .limit(limit);
+  }
+
+  async getStorageHealthStats(): Promise<{
+    totalAttempts: number;
+    successCount: number;
+    failureCount: number;
+    successRate: number;
+    avgVerificationTime: number;
+    recentFailures: StorageMetric[];
+  }> {
+    // Get all metrics from last 7 days
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    
+    const allMetrics = await this.db
+      .select()
+      .from(storageMetrics)
+      .where(gte(storageMetrics.createdAt, sevenDaysAgo))
+      .orderBy(desc(storageMetrics.createdAt));
+
+    const totalAttempts = allMetrics.length;
+    const successCount = allMetrics.filter(m => m.success).length;
+    const failureCount = totalAttempts - successCount;
+    const successRate = totalAttempts > 0 ? (successCount / totalAttempts) * 100 : 0;
+    
+    const verificationTimes = allMetrics
+      .filter(m => m.verificationTimeMs !== null)
+      .map(m => m.verificationTimeMs!);
+    const avgVerificationTime = verificationTimes.length > 0
+      ? verificationTimes.reduce((a, b) => a + b, 0) / verificationTimes.length
+      : 0;
+
+    const recentFailures = allMetrics
+      .filter(m => !m.success)
+      .slice(0, 10);
+
+    return {
+      totalAttempts,
+      successCount,
+      failureCount,
+      successRate,
+      avgVerificationTime,
+      recentFailures,
     };
   }
 }
