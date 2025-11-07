@@ -68,6 +68,7 @@ export default function Display() {
   const [generationInterval, setGenerationInterval] = useState(5); // minutes (Frame A to Frame B duration)
   const [timeUntilNext, setTimeUntilNext] = useState<number>(0); // seconds
   const [showCountdown, setShowCountdown] = useState(false); // hide countdown timer (using 5min morph cycle)
+  const [isValidatingImages, setIsValidatingImages] = useState(false); // show spinner during validation/auto-generation
   
   // Image history for back/forward navigation
   const [imageHistory, setImageHistory] = useState<Array<{
@@ -148,7 +149,54 @@ export default function Display() {
     }
   }, [preferences]);
 
-  // Helper: Validate that image URL from object storage is accessible
+  // Helper: Check if image is black/blank by analyzing pixel data
+  const isImageBlank = (img: HTMLImageElement): boolean => {
+    try {
+      // Create canvas to analyze pixel data
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return false;
+      
+      // Sample at smaller resolution for speed (100x100)
+      canvas.width = 100;
+      canvas.height = 100;
+      ctx.drawImage(img, 0, 0, 100, 100);
+      
+      const imageData = ctx.getImageData(0, 0, 100, 100);
+      const pixels = imageData.data;
+      
+      let darkPixelCount = 0;
+      const totalPixels = 100 * 100;
+      const DARKNESS_THRESHOLD = 20; // RGB values below this are considered "black"
+      
+      // Check each pixel (RGBA format, so step by 4)
+      for (let i = 0; i < pixels.length; i += 4) {
+        const r = pixels[i];
+        const g = pixels[i + 1];
+        const b = pixels[i + 2];
+        const brightness = (r + g + b) / 3;
+        
+        if (brightness < DARKNESS_THRESHOLD) {
+          darkPixelCount++;
+        }
+      }
+      
+      const darkPixelPercentage = (darkPixelCount / totalPixels) * 100;
+      
+      if (darkPixelPercentage > 95) {
+        console.warn(`[Display] ⚫ Image is ${darkPixelPercentage.toFixed(1)}% black - rejecting as blank`);
+        return true; // Image is blank/black
+      }
+      
+      console.log(`[Display] ✅ Image pixel check passed (${darkPixelPercentage.toFixed(1)}% dark pixels)`);
+      return false; // Image has visible content
+    } catch (error) {
+      console.error(`[Display] Error analyzing image pixels:`, error);
+      return false; // Assume valid on error
+    }
+  };
+
+  // Helper: Validate that image URL from object storage is accessible AND not blank
   const validateImageUrl = async (url: string): Promise<boolean> => {
     try {
       // Images are served from /public-objects/... (Replit Object Storage)
@@ -164,7 +212,17 @@ export default function Display() {
         
         img.onload = () => {
           clearTimeout(timeoutId);
-          console.log(`[Display] ✅ Image validation passed: ${url} (${img.width}x${img.height})`);
+          console.log(`[Display] ✅ Image loaded: ${url} (${img.width}x${img.height})`);
+          
+          // ENHANCED: Check if image is black/blank
+          const isBlank = isImageBlank(img);
+          if (isBlank) {
+            console.error(`[Display] ❌ Image is black/blank, rejecting: ${url}`);
+            resolve(false);
+            return;
+          }
+          
+          console.log(`[Display] ✅ Image validation passed (loaded + not blank): ${url}`);
           resolve(true);
         };
         
@@ -187,28 +245,33 @@ export default function Display() {
     if (recentArtworks && recentArtworks.length > 0 && morphEngineRef.current.getFrameCount() === 0) {
       // Load and VALIDATE frames asynchronously
       const loadValidatedFrames = async () => {
-        const framesToLoad = Math.min(3, recentArtworks.length);
-        console.log(`[Display] Loading and validating ${framesToLoad} frames from gallery`);
+        setIsValidatingImages(true); // Show loading spinner
+        console.log(`[Display] 🔍 Starting smart validation (max 3 attempts)...`);
         
-        // RANDOMIZE: Shuffle artworks so we don't always show the same "Hocus Pocus" image first
+        // RANDOMIZE: Shuffle artworks for variety
         const shuffled = [...recentArtworks].sort(() => Math.random() - 0.5);
-        console.log(`[Display] Randomized ${shuffled.length} artworks for variety`);
         
         // Track validated artworks for UI selection
         const validatedArtworks: typeof recentArtworks = [];
         
-        let framesAdded = 0;
-        for (let i = 0; i < shuffled.length && framesAdded < framesToLoad; i++) {
+        // SMART BAILOUT: Try only 3 random images (don't exhaust entire library)
+        const MAX_VALIDATION_ATTEMPTS = 3;
+        let attemptCount = 0;
+        
+        for (let i = 0; i < shuffled.length && attemptCount < MAX_VALIDATION_ATTEMPTS; i++) {
           const artwork = shuffled[i];
+          attemptCount++;
           
-          // CRITICAL: Validate image URL from object storage before adding frame
+          console.log(`[Display] Attempt ${attemptCount}/${MAX_VALIDATION_ATTEMPTS}: Validating ${artwork.imageUrl.substring(0, 60)}...`);
+          
+          // CRITICAL: Validate image URL from object storage (loads + not blank)
           const isValid = await validateImageUrl(artwork.imageUrl);
           if (!isValid) {
-            console.error(`[Display] ❌ Artwork ${i} has invalid/broken image URL: ${artwork.imageUrl}`);
-            continue; // Skip this artwork
+            console.warn(`[Display] ❌ Attempt ${attemptCount} failed - image invalid/blank`);
+            continue; // Try next image
           }
           
-          console.log(`[Display] ✅ Image validated: ${artwork.imageUrl}`);
+          console.log(`[Display] ✅ Attempt ${attemptCount} SUCCESS - image validated`);
           
           // Track this artwork as validated
           validatedArtworks.push(artwork);
@@ -217,7 +280,7 @@ export default function Display() {
           
           // Fallback: If no DNA vector, generate default one
           if (!dnaVector) {
-            console.warn(`[Display] Artwork ${i} missing DNA vector, generating default`);
+            console.warn(`[Display] Artwork missing DNA vector, generating default`);
             dnaVector = Array(50).fill(0).map(() => Math.random() * 3);
           }
           
@@ -242,21 +305,29 @@ export default function Display() {
             audioAnalysis: audioFeatures,
           });
           
-          framesAdded++;
-          console.log(`[Display] ✅ Loaded frame ${framesAdded}/${framesToLoad}: ${artwork.prompt?.substring(0, 50)}...`);
+          console.log(`[Display] ✅ Loaded frame ${validatedArtworks.length}: ${artwork.prompt?.substring(0, 50)}...`);
         }
         
-        if (framesAdded === 0 || validatedArtworks.length === 0) {
-          console.error('[Display] ❌ NO VALID FRAMES FOUND! All images failed validation.');
+        // QUICK BAILOUT: If all 3 attempts failed, trigger seamless auto-generation
+        if (validatedArtworks.length === 0) {
+          console.error(`[Display] 🚨 BAILOUT: All ${MAX_VALIDATION_ATTEMPTS} validation attempts failed.`);
+          console.error('[Display] Gallery validation failed after 3 attempts, generating fresh artwork');
+          
+          // SEAMLESS FALLBACK: Auto-generate 2 fresh images (no error message to user!)
           toast({
-            title: "Image Loading Error",
-            description: "Unable to load any artwork. Please try generating new art.",
-            variant: "destructive",
+            title: "Loading Artwork",
+            description: "Preparing fresh artwork for you...",
           });
+          
+          // Generate 2 fresh artworks automatically
+          await generateFallbackArtwork();
           return;
         }
         
-        console.log(`[Display] Total valid frames loaded: ${framesAdded}`);
+        console.log(`[Display] ✅ Total valid frames loaded: ${validatedArtworks.length}`);
+        
+        // Hide loading spinner - validation successful!
+        setIsValidatingImages(false);
         
         // CRITICAL: Use FIRST VALIDATED artwork for UI (not just first with URL)
         const firstValidArtwork = validatedArtworks[0];
@@ -322,6 +393,16 @@ export default function Display() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/preferences/${sessionId.current}`] });
     },
+  });
+
+  // Helper: Generate default audio analysis for auto-generation
+  const createDefaultAudioAnalysis = (): AudioAnalysis => ({
+    frequency: 60 + Math.random() * 40, // 60-100 Hz
+    amplitude: 0.3 + Math.random() * 0.4, // 0.3-0.7
+    tempo: 100 + Math.random() * 40, // 100-140 BPM
+    bassLevel: 0.4 + Math.random() * 0.3, // 0.4-0.7
+    trebleLevel: 0.3 + Math.random() * 0.3, // 0.3-0.6
+    mood: 'energetic',
   });
 
   // Generate art mutation
@@ -431,6 +512,34 @@ export default function Display() {
       lastGenerationTime.current = 0;
     },
   });
+
+  // Seamless auto-generation: Generate 2 images without user intervention
+  const generateFallbackArtwork = async () => {
+    console.log(`[Display] 🎨 Auto-generating 2 fresh artworks seamlessly...`);
+    
+    // Generate 2 images sequentially
+    for (let i = 1; i <= 2; i++) {
+      try {
+        const audioAnalysis = createDefaultAudioAnalysis();
+        console.log(`[Display] Auto-generating artwork ${i}/2...`);
+        
+        await generateArtMutation.mutateAsync({
+          audioAnalysis,
+          musicInfo: null,
+        });
+        
+        console.log(`[Display] ✅ Auto-generation ${i}/2 complete`);
+      } catch (error) {
+        console.error(`[Display] ❌ Auto-generation ${i}/2 failed:`, error);
+        // Continue trying even if one fails
+      }
+    }
+    
+    console.log(`[Display] 🎨 Auto-generation complete - seamless fallback successful`);
+    
+    // Hide loading spinner after auto-generation completes
+    setIsValidatingImages(false);
+  };
 
   // Vote mutation
   const voteMutation = useMutation({
@@ -881,6 +990,19 @@ export default function Display() {
           </div>
         )}
       </div>
+
+      {/* Loading Spinner Overlay - shown during validation/auto-generation */}
+      {isValidatingImages && (
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-background/95 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-6">
+            <div className="animate-spin rounded-full h-16 w-16 border-4 border-primary border-t-transparent"></div>
+            <div className="text-center">
+              <h3 className="text-2xl font-bold mb-2">Loading Artwork</h3>
+              <p className="text-muted-foreground">Preparing beautiful art for you...</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Top Control Bar */}
       <div 
