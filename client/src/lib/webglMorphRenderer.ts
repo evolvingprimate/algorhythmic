@@ -598,9 +598,27 @@ export class WebGLMorphRenderer {
     burnIntensity: number = 0.0
   ): Promise<void> {
     if (!this.gl || !this.canvas || !this.flowProgram || !this.feedbackProgram) {
-      console.warn('[WebGLMorphRenderer] Renderer not ready');
+      console.warn('[WebGLMorphRenderer] Renderer not ready:', {
+        hasGL: !!this.gl,
+        hasCanvas: !!this.canvas,
+        hasFlowProgram: !!this.flowProgram,
+        hasFeedbackProgram: !!this.feedbackProgram
+      });
       return;
     }
+    
+    // Validate programs are linked successfully
+    if (!this.gl.getProgramParameter(this.flowProgram, this.gl.LINK_STATUS)) {
+      console.error('[WebGLMorphRenderer] ❌ Flow program not linked:', this.gl.getProgramInfoLog(this.flowProgram));
+      return;
+    }
+    if (!this.gl.getProgramParameter(this.feedbackProgram, this.gl.LINK_STATUS)) {
+      console.error('[WebGLMorphRenderer] ❌ Feedback program not linked:', this.gl.getProgramInfoLog(this.feedbackProgram));
+      return;
+    }
+    
+    // Clear any existing GL errors before rendering (don't block on stale errors)
+    this.gl.getError();
 
     try {
       let currentImg: HTMLImageElement;

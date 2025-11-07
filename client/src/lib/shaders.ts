@@ -533,20 +533,8 @@ void main() {
   // Perceptually uniform color space prevents muddy grays during transitions
   vec3 oklabMultiband = rgbToOklab(clamp(multiband, 0.0, 1.0));
   
-  // Subtle chroma boost (only in masked areas)
-  float chromaBoost = 1.0 + u_colorShiftRate * 0.1 * spatialMask;
-  oklabMultiband.yz *= chromaBoost; // Boost a/b channels (chroma)
-  
-  // Subtle hue rotation (only in masked areas)
-  // Add color warmth flash on beats
-  float hueShift = (u_colorShiftRate * sin(flowTime * 0.5) * 0.1 + 0.02 * u_beatBurst) * spatialMask;
-  float cosH = cos(hueShift);
-  float sinH = sin(hueShift);
-  vec2 rotatedChroma = vec2(
-    oklabMultiband.y * cosH - oklabMultiband.z * sinH,
-    oklabMultiband.y * sinH + oklabMultiband.z * cosH
-  );
-  oklabMultiband.yz = rotatedChroma;
+  // DISABLED: Chroma boost and hue rotation removed per user request
+  // No color pulsing or shifting - keep natural colors
   
   // Convert back to RGB
   vec3 finalColor = clamp(oklabToRgb(oklabMultiband), 0.0, 1.0);
@@ -734,14 +722,14 @@ float gaussianBlur(sampler2D tex, vec2 uv, vec2 texelSize) {
   kernel[20] = 1.0; kernel[21] = 4.0; kernel[22] = 6.0; kernel[23] = 4.0; kernel[24] = 1.0;
   
   float sum = 0.0;
-  int idx = 0;
   
   for(int y = -2; y <= 2; y++) {
     for(int x = -2; x <= 2; x++) {
+      // Compute constant index from loop variables (WebGL GLSL requirement)
+      int idx = (y + 2) * 5 + (x + 2);
       vec2 offset = vec2(float(x), float(y)) * texelSize;
       float sample = texture2D(tex, uv + offset).r;
       sum += sample * kernel[idx] / 256.0;
-      idx++;
     }
   }
   
