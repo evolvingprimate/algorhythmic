@@ -1,0 +1,210 @@
+System overview (modules)
+
+Audio features (Music DNA → Control DNA)
+
+Input: mic / line-in (WebAudio).
+
+Features (60 FPS or 30 FPS)
+
+FFT (Hann) 1024 or 2048 → magnitude.
+
+Bands: sub/bass (20–120 Hz), low-mid (120–500), mid (500–2k), high (2–8k).
+
+Smoothed envelopes (attack/decay):
+
+attack α≈0.35, decay α≈0.05.
+
+Beat/onset: spectral flux + moving threshold; output a short impulse 0→1 with 150–220 ms decay.
+
+Extras: spectral centroid (brightness), zero-crossing (noisiness).
+
+Outputs (per frame):
+
+musicDNA = {
+  bass, lowMid, mid, high, // [0..1] smoothed
+  beat,                    // [0..1] impulse
+  intensity,               // RMS of bands
+  brightness,              // spectral centroid normalized
+  tempoHint                // optional, running estimate (bpm)
+}
+
+
+Visual morph engine (GPU)
+
+Inputs: textures A, B, progress t∈[0,1], musicDNA.
+
+Pipeline (each frame):
+
+Feature maps: edge tangent fields from A & B (Sobel).
+
+Flow fields: edge-tangent + low-octave curl noise; optional polar swirl.
+
+Warp: advect A slightly toward B with the flow.
+
+Multiband blend: 3–4 Laplacian/mip bands; interpolate each band with different easing.
+
+Color manifold: blend in OKLab (or 3D LUT) with palette glides.
+
+Feedback: ping-pong prev frame with small decay, reduced near edges.
+
+Event hooks: on beat, micro-bursts in flow magnitude / palette warmth.
+
+Style/preset system
+
+JSON-described “recipes” (weights, easings, palette, event responses).
+
+Hot-swappable without recompiling shaders.
+
+Control mapping (Music DNA → Visual DNA)
+
+Core idea: each visual control is a low-pass filtered signal driven by audio features with tasteful ceilings.
+
+controls = {
+  flowMag     = LERP( base.flowMag,  base.flowMag + 0.35*bass,  0.8 ), // stronger with bass
+  curlScale   = LERP( base.curl,     base.curl  + 0.50*mid,     0.7 ), // detail with mids
+  sparkleGain = LERP( base.sparkle,  base.sparkle + 0.7*high,   0.6 ), // highs add shimmer
+  colorWarmth = LERP( base.warmth,   base.warmth + 0.4*brightness, 0.5 ),
+  beatBurst   = smoothImpulse(beat, 0.18),   // 180ms decay
+}
+
+
+Beat hooks (short events):
+
+flowMag *= 1.0 + 0.45*beatBurst
+
+palettePhase += 0.02*beatBurst
+
+feedbackAmount *= 1.0 - 0.25*beatBurst (reduce trails on kicks so hits feel crisp)
+
+A→B “latent-ish” morph choreography
+
+Easings (staggered):
+
+t_coarse = smoothstep(0.05, 0.95, t);   // layout glides late
+t_fine   = smoothstep(0.25, 0.75, t);   // texture arrives earlier
+t_color  = smoothstep(0.15, 0.90, t);   // mood glide
+
+
+Flow field (union):
+
+vec2 eA = edgeTangent(uA, uv);   // Sobel → tangent
+vec2 eB = edgeTangent(uB, uv);
+vec2 curlVec = curlNoise(uv * (1.5 + 2.5*controls.curlScale) + t*0.2);
+vec2 polar   = polarSwirl(uv, amount = 0.05);
+
+vec2 flow = normalize( mix(eA, eB, t) + 0.8*curlVec + 0.3*polar + 1e-5 );
+float edgeAmt = clamp(length(eA)+length(eB), 0.0, 1.0);
+float mag = controls.flowMag * mix(0.8, 1.6, edgeAmt); // stronger near edges
+
+
+Warp + bands (mip/Laplacian approximation for speed):
+
+// Warp A forward a touch; keep B stable for stability
+vec3 Aw = texture(uA, uv - mag * t * flow).rgb;
+vec3 base  = mix( mip(Aw, 3), mip(uB, 3), t_coarse );
+vec3 mid   = mix( mip(Aw, 2) - mip(Aw, 3), mip(uB, 2) - mip(uB, 3), mix(t_coarse, t_fine, 0.6) );
+vec3 fine  = mix( mip(Aw, 0) - mip(Aw, 1), mip(uB, 0) - mip(uB, 1), t_fine ) * preset.fineWeight;
+vec3 reconA = mip(Aw,0); vec3 reconB = mip(uB,0);
+vec3 recon  = base + mid + fine;
+
+
+Perceptual color glide (OKLab/LUT):
+
+vec3 okA = rgb_to_oklab(clamp(reconA, 0.0, 1.0));
+vec3 okB = rgb_to_oklab(clamp(reconB, 0.0, 1.0));
+vec3 okM = mix(okA, okB, t_color);
+vec3 colOK = oklab_to_rgb(okM);
+vec3 outRGB = mix(recon, colOK, preset.colorMix);
+
+
+Palette “mood” layer (subtle, optional):
+
+float lum = dot(outRGB, vec3(0.2126,0.7152,0.0722));
+float phase = preset.palPhase + 0.12*controls.colorWarmth + 0.04*sin(time*0.15);
+vec3 palCol = texture(uPalette256x1, vec2(fract(lum + phase), 0.5)).rgb;
+outRGB = mix(outRGB, palCol, preset.paletteMix); // <= 0.25 feels classy
+
+
+Temporal feedback (coherence):
+
+vec3 prev = texture(uPrev, uv).rgb;
+float fb = preset.feedback * (1.0 - edgeAmt);    // less trail near structure
+outRGB = mix(outRGB, prev, fb);
+
+Preset JSON (tweakable “feel”)
+{
+  "name": "DreamDrift",
+  "fineWeight": 0.9,
+  "colorMix": 0.85,
+  "paletteMix": 0.20,
+  "feedback": 0.08,
+  "flowMagBase": 0.36,
+  "curlBase": 0.25,
+  "polarBase": 0.04,
+  "edgeGuidance": 0.8,
+  "event": {
+    "onBeat": {
+      "flowMagMul": 1.45,
+      "palettePhaseAdd": 0.02,
+      "feedbackMul": 0.8
+    }
+  }
+}
+
+Orchestration (browser, minimal)
+
+Audio (WebAudio):
+
+const ctx = new AudioContext();
+const src = ctx.createMediaStreamSource(await navigator.mediaDevices.getUserMedia({audio:true}));
+const an = ctx.createAnalyser(); an.fftSize = 1024; src.connect(an);
+const bins = new Float32Array(an.frequencyBinCount);
+
+function getMusicDNA(){
+  an.getFloatFrequencyData(bins);
+  // convert to linear mags [0..1]
+  const mags = bins.map(v => Math.max(0, (v + 140)/140));
+  const bass = avg(mags, 1, 8), lowMid = avg(mags, 8, 32),
+        mid  = avg(mags, 32, 128), high = avg(mags, 128, mags.length);
+  // smooth attack/decay per band...
+  const beat = detectBeatFromSpectralFlux(mags);
+  const intensity = (bass+lowMid+mid+high)/4;
+  const brightness = spectralCentroid(mags);
+  return {bass, lowMid, mid, high, beat, intensity, brightness};
+}
+
+
+Render loop (JS → WebGL uniforms):
+
+// compute t externally (auto or scrubbable)
+gl.useProgram(prog);
+setUniforms({
+  uT: t,
+  uTime: time,
+  uA: texA, uB: texB, uPrev: texPrev,
+  uFlowMag: flowMagFromDNA(musicDNA, preset),
+  uCurl: curlFromDNA(musicDNA, preset),
+  uFeedback: feedbackFromDNA(musicDNA, preset),
+  uPalettePhase: palettePhaseFromDNA(musicDNA, preset),
+  // ...
+});
+drawFullscreen();
+swap(prev, out);
+
+What “merged StyleGAN + G-Force + MusicDNA” looks like
+
+Shape story (StyleGAN vibe): large forms retain identity longer; they move toward the target rather than dissolving (thanks to the flow field + band-staggered easings).
+
+Texture life (G-Force vibe): mid/high bands shimmer and evolve with curl noise and feedback trails; palette subtly cycles, so color feels alive.
+
+Musicality:
+
+Bass → “pushes” the canvas (flow magnitude).
+
+Mids → “etch” detail (curl scale, fine-band weight).
+
+Highs → sprinkle sparkle (minor additive detail or high-band gain).
+
+Beats → micro-events: a breath of motion, a warm flash in the palette, briefly shorter trails.
+
+Visually: instead of “A fades into B,” you see A’s structure drift, breathe, and re-arrange into B, with texture and color dancing to the music.
