@@ -32,6 +32,7 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 - **Visual Effects System**: 
   - **Trace Extraction**: Three-pass rendering with Frame B alpha/luminance extraction, Sobel edge detection, 5×5 Gaussian blur, and temporal accumulation (0.85-0.95 decay) creates ethereal trailing ribbons. Multiply blend composite makes Frame B appear to "birth" from behind Frame A with DNA-controlled strength and parallax offset.
   - **Soft Bloom/Glow**: Single-pass Kawase bloom on downsampled (1/4 resolution) framebuffer extracts bright regions with DNA[48]-controlled intensity, modulated by burnIntensity for dreamy halos around bright areas during transitions.
+  - **Chromatic Drift**: Post-process RGB channel separation (<1.5px) applied to final composited framebuffer, controlled by DNA[47] and morphProgress. Horizontal-only offset creates subtle hallucinatory out-of-focus feel during morphs while preserving morph fidelity.
   - **Displacement & Flow**: Curl noise flow fields with luminance weighting
   - **Ken Burns Effect**: Enhanced zoom and parallax translation
   - **Particle System**: Beat-triggered particles with bass peak detection and edge-weighted emission
