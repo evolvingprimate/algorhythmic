@@ -334,8 +334,9 @@ export default function Display() {
             // Generate 2 fresh artworks automatically
             await generateFallbackArtwork();
           } finally {
-            // Always clear guard and spinner, even if generation fails
+            // CRITICAL: Always clear guard and spinner, even if generation fails
             isFallbackGeneratingRef.current = false;
+            setIsValidatingImages(false);
           }
           return;
         }
