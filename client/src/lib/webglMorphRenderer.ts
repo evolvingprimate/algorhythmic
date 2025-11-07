@@ -1,6 +1,6 @@
 import { DNAVector } from './dna';
 import type { AudioAnalysis } from '@shared/schema';
-import { vertexShaderSource, flowFieldFragmentShader, feedbackFragmentShader } from './shaders';
+import { vertexShaderSource, flowFieldFragmentShader, feedbackFragmentShader, traceExtractionFragmentShader } from './shaders';
 import { ParticleSystem } from './particleSystem';
 
 export interface RendererFrame {
@@ -16,6 +16,7 @@ export class WebGLMorphRenderer {
   // Programs
   private flowProgram: WebGLProgram | null = null;
   private feedbackProgram: WebGLProgram | null = null;
+  private traceProgram: WebGLProgram | null = null;
   
   // Buffers
   private positionBuffer: WebGLBuffer | null = null;
@@ -29,6 +30,11 @@ export class WebGLMorphRenderer {
   // Framebuffers for multi-pass rendering
   private framebuffer: WebGLFramebuffer | null = null;
   private renderTexture: WebGLTexture | null = null;
+  
+  // Trace extraction system (for dreamy birthing effect)
+  private traceFramebuffer: WebGLFramebuffer | null = null;
+  private traceTextureCurrent: WebGLTexture | null = null;
+  private traceTexturePrevious: WebGLTexture | null = null;
   
   // Image cache
   private imageCache: Map<string, HTMLImageElement> = new Map();
@@ -132,22 +138,25 @@ export class WebGLMorphRenderer {
     const vertexShader = this.compileShader(vertexShaderSource, this.gl.VERTEX_SHADER);
     const flowFragShader = this.compileShader(flowFieldFragmentShader, this.gl.FRAGMENT_SHADER);
     const feedbackFragShader = this.compileShader(feedbackFragmentShader, this.gl.FRAGMENT_SHADER);
+    const traceFragShader = this.compileShader(traceExtractionFragmentShader, this.gl.FRAGMENT_SHADER);
     
-    if (!vertexShader || !flowFragShader || !feedbackFragShader) {
+    if (!vertexShader || !flowFragShader || !feedbackFragShader || !traceFragShader) {
       console.error('[WebGLMorphRenderer] Failed to compile shaders');
       return;
     }
     
     this.flowProgram = this.createProgram(vertexShader, flowFragShader);
     this.feedbackProgram = this.createProgram(vertexShader, feedbackFragShader);
+    this.traceProgram = this.createProgram(vertexShader, traceFragShader);
     
-    if (!this.flowProgram || !this.feedbackProgram) {
+    if (!this.flowProgram || !this.feedbackProgram || !this.traceProgram) {
       console.error('[WebGLMorphRenderer] Failed to create programs');
       return;
     }
     
     this.setupGeometry();
     this.setupTextures();
+    this.setupTraceTextures();
     
     // Initialize particle system
     if (this.canvas && this.gl) {
@@ -155,8 +164,9 @@ export class WebGLMorphRenderer {
       console.log('[WebGLMorphRenderer] Particle system initialized');
     }
     this.setupFramebuffer();
+    this.setupTraceFramebuffer();
     
-    console.log('[WebGLMorphRenderer] WebGL initialization complete');
+    console.log('[WebGLMorphRenderer] WebGL initialization complete with trace extraction');
   }
 
   private setupGeometry(): void {
@@ -245,6 +255,43 @@ export class WebGLMorphRenderer {
       this.canvas.width, this.canvas.height, 0,
       this.gl.RGBA, this.gl.UNSIGNED_BYTE, null
     );
+  }
+
+  private setupTraceTextures(): void {
+    if (!this.gl) return;
+    
+    // Create two textures for ping-pong temporal accumulation
+    this.traceTextureCurrent = this.gl.createTexture();
+    this.traceTexturePrevious = this.gl.createTexture();
+    
+    [this.traceTextureCurrent, this.traceTexturePrevious].forEach(texture => {
+      this.gl!.bindTexture(this.gl!.TEXTURE_2D, texture);
+      this.gl!.texParameteri(this.gl!.TEXTURE_2D, this.gl!.TEXTURE_WRAP_S, this.gl!.CLAMP_TO_EDGE);
+      this.gl!.texParameteri(this.gl!.TEXTURE_2D, this.gl!.TEXTURE_WRAP_T, this.gl!.CLAMP_TO_EDGE);
+      this.gl!.texParameteri(this.gl!.TEXTURE_2D, this.gl!.TEXTURE_MIN_FILTER, this.gl!.LINEAR);
+      this.gl!.texParameteri(this.gl!.TEXTURE_2D, this.gl!.TEXTURE_MAG_FILTER, this.gl!.LINEAR);
+    });
+    
+    console.log('[WebGLMorphRenderer] Trace textures initialized for dreamy birthing effect');
+  }
+
+  private setupTraceFramebuffer(): void {
+    if (!this.gl || !this.canvas) return;
+    
+    this.traceFramebuffer = this.gl.createFramebuffer();
+    
+    // Initialize trace textures with canvas size
+    [this.traceTextureCurrent, this.traceTexturePrevious].forEach(texture => {
+      if (!texture) return;
+      this.gl!.bindTexture(this.gl!.TEXTURE_2D, texture);
+      this.gl!.texImage2D(
+        this.gl!.TEXTURE_2D, 0, this.gl!.RGBA,
+        this.canvas!.width, this.canvas!.height, 0,
+        this.gl!.RGBA, this.gl!.UNSIGNED_BYTE, null
+      );
+    });
+    
+    console.log('[WebGLMorphRenderer] Trace framebuffer initialized');
   }
 
   private async loadImage(url: string): Promise<HTMLImageElement> {
@@ -434,6 +481,62 @@ export class WebGLMorphRenderer {
       const detailLevel = (dna[48] ?? 1.0) * audioIntensity;
       const anomalyFactor = (dna[49] ?? 0.5) * audioIntensity;
       
+      // ====== PASS 1: Trace Extraction (NEW) ======
+      // Extract luminance/edge trace from Frame B for dreamy birthing effect
+      if (this.traceProgram && this.traceFramebuffer && this.traceTextureCurrent && this.traceTexturePrevious) {
+        this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, this.traceFramebuffer);
+        this.gl.useProgram(this.traceProgram);
+        
+        // Set vertex attributes for trace program
+        const tracePosLoc = this.gl.getAttribLocation(this.traceProgram, 'a_position');
+        const traceTexLoc = this.gl.getAttribLocation(this.traceProgram, 'a_texCoord');
+        
+        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.positionBuffer);
+        this.gl.enableVertexAttribArray(tracePosLoc);
+        this.gl.vertexAttribPointer(tracePosLoc, 2, this.gl.FLOAT, false, 0, 0);
+        
+        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.texCoordBuffer);
+        this.gl.enableVertexAttribArray(traceTexLoc);
+        this.gl.vertexAttribPointer(traceTexLoc, 2, this.gl.FLOAT, false, 0, 0);
+        
+        // Bind Frame B texture (unit 0)
+        this.gl.activeTexture(this.gl.TEXTURE0);
+        this.gl.bindTexture(this.gl.TEXTURE_2D, this.imageTextureB);
+        this.gl.uniform1i(this.gl.getUniformLocation(this.traceProgram, 'u_imageB'), 0);
+        
+        // Bind previous trace texture (unit 1) for temporal accumulation
+        this.gl.activeTexture(this.gl.TEXTURE1);
+        this.gl.bindTexture(this.gl.TEXTURE_2D, this.traceTexturePrevious);
+        this.gl.uniform1i(this.gl.getUniformLocation(this.traceProgram, 'u_previousTrace'), 1);
+        
+        // Set resolution uniform
+        this.gl.uniform2f(this.gl.getUniformLocation(this.traceProgram, 'u_resolution'), this.canvas.width, this.canvas.height);
+        
+        // DNA[49]: Trace decay (0-3 → 0.85-0.95 range)
+        const traceDecay = 0.85 + ((dna[49] ?? 0) / 10) * 0.1;
+        this.gl.uniform1f(this.gl.getUniformLocation(this.traceProgram, 'u_traceDecay'), traceDecay);
+        
+        // DNA[47]: Trace intensity (0-3 → 0-1 range)
+        const traceIntensity = (dna[47] ?? 0) / 3;
+        this.gl.uniform1f(this.gl.getUniformLocation(this.traceProgram, 'u_traceIntensity'), traceIntensity);
+        
+        // Attach traceTextureCurrent to framebuffer
+        this.gl.framebufferTexture2D(
+          this.gl.FRAMEBUFFER,
+          this.gl.COLOR_ATTACHMENT0,
+          this.gl.TEXTURE_2D,
+          this.traceTextureCurrent,
+          0
+        );
+        
+        // Draw quad to extract trace
+        this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
+        
+        // Ping-pong swap: traceTextureCurrent ↔ traceTexturePrevious
+        [this.traceTextureCurrent, this.traceTexturePrevious] = [this.traceTexturePrevious, this.traceTextureCurrent];
+      }
+      
+      // ====== PASS 2: Flow Field (MODIFIED - Added trace texture uniforms) ======
       this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, this.framebuffer);
       this.gl.useProgram(this.flowProgram);
       
@@ -477,8 +580,25 @@ export class WebGLMorphRenderer {
       this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_parallaxStrength'), parallaxStrength);
       this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_burnIntensity'), burnIntensity);
       
+      // Trace texture uniforms (dreamy birthing effect)
+      if (this.traceTextureCurrent) {
+        // Bind trace texture to unit 2
+        this.gl.activeTexture(this.gl.TEXTURE2);
+        this.gl.bindTexture(this.gl.TEXTURE_2D, this.traceTextureCurrent);
+        this.gl.uniform1i(this.gl.getUniformLocation(this.flowProgram, 'u_traceTexture'), 2);
+        
+        // DNA[47]: Trace multiply strength (0-3 → 0-0.5 range)
+        const traceMultiplyStrength = ((dna[47] ?? 0) / 3) * 0.5;
+        this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_traceMultiplyStrength'), traceMultiplyStrength);
+        
+        // Trace parallax offset in pixels (uses parallaxStrength)
+        const traceParallaxOffset = parallaxStrength * 10.0;
+        this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_traceParallaxOffset'), traceParallaxOffset);
+      }
+      
       this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
       
+      // ====== PASS 3: Feedback (UNCHANGED) ======
       this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
       this.gl.useProgram(this.feedbackProgram);
       

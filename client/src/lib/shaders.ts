@@ -14,6 +14,7 @@ precision highp float;
 
 uniform sampler2D u_imageA;
 uniform sampler2D u_imageB;
+uniform sampler2D u_traceTexture; // Frame B luminance/edge trace
 uniform float u_time;
 uniform float u_morphProgress;
 uniform vec2 u_resolution;
@@ -36,6 +37,10 @@ uniform float u_beatBurst; // 0-1 impulse that decays over 180ms
 uniform float u_zoomBias; // 0-1: Ken Burns zoom (0 at holds, 1 at peak burn)
 uniform float u_parallaxStrength; // 0-1: Parallax effect intensity
 uniform float u_burnIntensity; // 0-1: Peak "burn" effect intensity
+
+// Dreamy birthing effect parameters
+uniform float u_traceMultiplyStrength; // 0-1: How much trace affects the image
+uniform float u_traceParallaxOffset; // Pixel offset for trace to create depth
 
 varying vec2 v_texCoord;
 
@@ -548,6 +553,21 @@ void main() {
   float detail = snoise(vec3(uv * 8.0 * trebleDetail, flowTime * 0.15)) * 0.5 + 0.5;
   finalColor += (detail - 0.5) * sparkleGain * u_amplitude; // Enhanced sparkle control
   
+  // ====== DREAMY BIRTHING EFFECT: TRACE MULTIPLY BLEND ======
+  // Sample the Frame B trace with parallax offset for depth
+  vec2 traceUV = uv + vec2(u_traceParallaxOffset) / u_resolution;
+  float traceMask = texture2D(u_traceTexture, traceUV).r;
+  
+  // Create multiply blend: darken where trace is present
+  // This makes Frame B appear to "emerge" from behind Frame A
+  // Mix between original color (1.0) and darkened version based on trace strength
+  vec3 darkenedColor = finalColor * (1.0 - traceMask);
+  finalColor = mix(finalColor, darkenedColor, u_traceMultiplyStrength);
+  
+  // Add subtle glow from trace for ethereal effect
+  vec3 traceGlow = vec3(traceMask) * u_traceMultiplyStrength * 0.1;
+  finalColor += traceGlow * u_burnIntensity; // Glow peaks during burn
+  
   // Subtle vignette for depth
   float vignette = smoothstep(0.8, 0.2, length(pixel - 0.5));
   finalColor *= mix(0.8, 1.0, vignette);
@@ -658,5 +678,98 @@ void main() {
   vec3 finalColor = v_color * (1.0 + glow);
   
   gl_FragColor = vec4(finalColor, alpha);
+}
+`;
+
+// ====== TRACE EXTRACTION SHADER ======
+// Extracts luminance and edges from Frame B to create soft "ghost" trace
+export const traceExtractionFragmentShader = `
+precision highp float;
+
+uniform sampler2D u_imageB;
+uniform sampler2D u_previousTrace; // Previous frame's trace for temporal accumulation
+uniform vec2 u_resolution;
+uniform float u_traceDecay; // 0.85-0.92 for temporal smoothing
+uniform float u_traceIntensity; // DNA-controlled trace strength
+
+varying vec2 v_texCoord;
+
+// Luminance extraction
+float getLuminance(vec3 rgb) {
+  return dot(rgb, vec3(0.299, 0.587, 0.114));
+}
+
+// Sobel edge detection for Frame B
+float getEdgeMagnitude(sampler2D tex, vec2 uv, vec2 texelSize) {
+  // Sobel kernels
+  float s00 = getLuminance(texture2D(tex, uv + vec2(-texelSize.x, -texelSize.y)).rgb);
+  float s01 = getLuminance(texture2D(tex, uv + vec2(0.0, -texelSize.y)).rgb);
+  float s02 = getLuminance(texture2D(tex, uv + vec2(texelSize.x, -texelSize.y)).rgb);
+  
+  float s10 = getLuminance(texture2D(tex, uv + vec2(-texelSize.x, 0.0)).rgb);
+  float s12 = getLuminance(texture2D(tex, uv + vec2(texelSize.x, 0.0)).rgb);
+  
+  float s20 = getLuminance(texture2D(tex, uv + vec2(-texelSize.x, texelSize.y)).rgb);
+  float s21 = getLuminance(texture2D(tex, uv + vec2(0.0, texelSize.y)).rgb);
+  float s22 = getLuminance(texture2D(tex, uv + vec2(texelSize.x, texelSize.y)).rgb);
+  
+  // Sobel operator
+  float gx = -s00 - 2.0*s10 - s20 + s02 + 2.0*s12 + s22;
+  float gy = -s00 - 2.0*s01 - s02 + s20 + 2.0*s21 + s22;
+  
+  return sqrt(gx*gx + gy*gy);
+}
+
+// Simple 5x5 Gaussian blur for soft trace
+float gaussianBlur(sampler2D tex, vec2 uv, vec2 texelSize) {
+  float kernel[25];
+  kernel[0] = 1.0; kernel[1] = 4.0; kernel[2] = 6.0; kernel[3] = 4.0; kernel[4] = 1.0;
+  kernel[5] = 4.0; kernel[6] = 16.0; kernel[7] = 24.0; kernel[8] = 16.0; kernel[9] = 4.0;
+  kernel[10] = 6.0; kernel[11] = 24.0; kernel[12] = 36.0; kernel[13] = 24.0; kernel[14] = 6.0;
+  kernel[15] = 4.0; kernel[16] = 16.0; kernel[17] = 24.0; kernel[18] = 16.0; kernel[19] = 4.0;
+  kernel[20] = 1.0; kernel[21] = 4.0; kernel[22] = 6.0; kernel[23] = 4.0; kernel[24] = 1.0;
+  
+  float sum = 0.0;
+  int idx = 0;
+  
+  for(int y = -2; y <= 2; y++) {
+    for(int x = -2; x <= 2; x++) {
+      vec2 offset = vec2(float(x), float(y)) * texelSize;
+      float sample = texture2D(tex, uv + offset).r;
+      sum += sample * kernel[idx] / 256.0;
+      idx++;
+    }
+  }
+  
+  return sum;
+}
+
+void main() {
+  vec2 texelSize = 1.0 / u_resolution;
+  
+  // Extract luminance from Frame B
+  vec3 colorB = texture2D(u_imageB, v_texCoord).rgb;
+  float luma = getLuminance(colorB);
+  
+  // Detect edges
+  float edges = getEdgeMagnitude(u_imageB, v_texCoord, texelSize);
+  
+  // Combine luma + edges for trace mask
+  // Bright areas and edges create stronger traces
+  float traceMask = clamp(luma * 0.6 + edges * 1.5, 0.0, 1.0);
+  
+  // Apply gaussian blur for softness
+  // Note: For performance, we skip blur here and do it in separate pass if needed
+  // traceMask = gaussianBlur(u_imageB, v_texCoord, texelSize * 2.0);
+  
+  // Temporal accumulation: blend with previous frame's trace
+  float previousTrace = texture2D(u_previousTrace, v_texCoord).r;
+  float accumulated = mix(traceMask, previousTrace, u_traceDecay);
+  
+  // Apply DNA-controlled intensity
+  accumulated *= u_traceIntensity;
+  
+  // Output trace mask (grayscale stored in all channels for easier sampling)
+  gl_FragColor = vec4(accumulated, accumulated, accumulated, 1.0);
 }
 `;
