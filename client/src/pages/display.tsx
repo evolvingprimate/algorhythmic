@@ -703,22 +703,22 @@ export default function Display() {
     <div className="h-screen w-screen overflow-hidden bg-background relative">
       {/* Art Canvas */}
       <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-background via-primary/5 to-background">
-        {currentImage ? (
-          <div className="relative w-full h-full">
-            {/* Morphing Canvas Container */}
-            <div 
-              id="morphing-canvas-container"
-              className="w-full h-full relative"
-            />
-            {/* Audio reactive glow effect */}
-            <div 
-              className="absolute inset-0 pointer-events-none transition-shadow duration-300"
-              style={{
-                boxShadow: `inset 0 0 ${audioLevel * 2}px ${audioLevel * 1}px rgba(138, 80, 255, ${audioLevel / 200})`,
-              }}
-            />
-          </div>
-        ) : (
+        {/* Morphing Canvas Container - always present for renderer initialization */}
+        <div 
+          id="morphing-canvas-container"
+          className="w-full h-full absolute inset-0"
+          style={{ display: currentImage ? 'block' : 'none' }}
+        />
+        {/* Audio reactive glow effect */}
+        {currentImage && (
+          <div 
+            className="absolute inset-0 pointer-events-none transition-shadow duration-300"
+            style={{
+              boxShadow: `inset 0 0 ${audioLevel * 2}px ${audioLevel * 1}px rgba(138, 80, 255, ${audioLevel / 200})`,
+            }}
+          />
+        )}
+        {!currentImage && (
           <div className="flex flex-col items-center justify-center gap-6 max-w-lg px-4 text-center">
             <Sparkles className="h-20 w-20 text-primary" />
             <h1 className="text-4xl md:text-5xl font-bold">Ready to Create</h1>
