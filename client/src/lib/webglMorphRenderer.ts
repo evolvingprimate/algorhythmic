@@ -1,6 +1,6 @@
 import { DNAVector } from './dna';
 import type { AudioAnalysis } from '@shared/schema';
-import { vertexShaderSource, flowFieldFragmentShader, feedbackFragmentShader, traceExtractionFragmentShader } from './shaders';
+import { vertexShaderSource, flowFieldFragmentShader, feedbackFragmentShader, traceExtractionFragmentShader, bloomFragmentShader, compositeFragmentShader } from './shaders';
 import { ParticleSystem } from './particleSystem';
 
 export interface RendererFrame {
@@ -17,6 +17,8 @@ export class WebGLMorphRenderer {
   private flowProgram: WebGLProgram | null = null;
   private feedbackProgram: WebGLProgram | null = null;
   private traceProgram: WebGLProgram | null = null;
+  private bloomProgram: WebGLProgram | null = null;
+  private compositeProgram: WebGLProgram | null = null;
   
   // Buffers
   private positionBuffer: WebGLBuffer | null = null;
@@ -35,6 +37,10 @@ export class WebGLMorphRenderer {
   private traceFramebuffer: WebGLFramebuffer | null = null;
   private traceTextureCurrent: WebGLTexture | null = null;
   private traceTexturePrevious: WebGLTexture | null = null;
+  
+  // Bloom system (for dreamy glow effect)
+  private bloomFramebuffer: WebGLFramebuffer | null = null;
+  private bloomTexture: WebGLTexture | null = null;
   
   // Image cache
   private imageCache: Map<string, HTMLImageElement> = new Map();
@@ -93,6 +99,8 @@ export class WebGLMorphRenderer {
     this.gl.viewport(0, 0, rect.width, rect.height);
     
     this.recreateFramebuffer();
+    this.recreateTraceFramebuffer();
+    this.recreateBloomFramebuffer();
   }
 
   private compileShader(source: string, type: number): WebGLShader | null {
@@ -139,8 +147,10 @@ export class WebGLMorphRenderer {
     const flowFragShader = this.compileShader(flowFieldFragmentShader, this.gl.FRAGMENT_SHADER);
     const feedbackFragShader = this.compileShader(feedbackFragmentShader, this.gl.FRAGMENT_SHADER);
     const traceFragShader = this.compileShader(traceExtractionFragmentShader, this.gl.FRAGMENT_SHADER);
+    const bloomFragShader = this.compileShader(bloomFragmentShader, this.gl.FRAGMENT_SHADER);
+    const compositeFragShader = this.compileShader(compositeFragmentShader, this.gl.FRAGMENT_SHADER);
     
-    if (!vertexShader || !flowFragShader || !feedbackFragShader || !traceFragShader) {
+    if (!vertexShader || !flowFragShader || !feedbackFragShader || !traceFragShader || !bloomFragShader || !compositeFragShader) {
       console.error('[WebGLMorphRenderer] Failed to compile shaders');
       return;
     }
@@ -148,8 +158,10 @@ export class WebGLMorphRenderer {
     this.flowProgram = this.createProgram(vertexShader, flowFragShader);
     this.feedbackProgram = this.createProgram(vertexShader, feedbackFragShader);
     this.traceProgram = this.createProgram(vertexShader, traceFragShader);
+    this.bloomProgram = this.createProgram(vertexShader, bloomFragShader);
+    this.compositeProgram = this.createProgram(vertexShader, compositeFragShader);
     
-    if (!this.flowProgram || !this.feedbackProgram || !this.traceProgram) {
+    if (!this.flowProgram || !this.feedbackProgram || !this.traceProgram || !this.bloomProgram || !this.compositeProgram) {
       console.error('[WebGLMorphRenderer] Failed to create programs');
       return;
     }
@@ -165,8 +177,9 @@ export class WebGLMorphRenderer {
     }
     this.setupFramebuffer();
     this.setupTraceFramebuffer();
+    this.setupBloom();
     
-    console.log('[WebGLMorphRenderer] WebGL initialization complete with trace extraction');
+    console.log('[WebGLMorphRenderer] WebGL initialization complete with trace extraction and bloom');
   }
 
   private setupGeometry(): void {
@@ -257,6 +270,54 @@ export class WebGLMorphRenderer {
     );
   }
 
+  private recreateTraceFramebuffer(): void {
+    if (!this.gl || !this.canvas) return;
+    
+    // Reallocate trace textures with new canvas size
+    [this.traceTextureCurrent, this.traceTexturePrevious].forEach(texture => {
+      if (!texture) return;
+      this.gl!.bindTexture(this.gl!.TEXTURE_2D, texture);
+      this.gl!.texImage2D(
+        this.gl!.TEXTURE_2D, 0, this.gl!.RGBA,
+        this.canvas!.width, this.canvas!.height, 0,
+        this.gl!.RGBA, this.gl!.UNSIGNED_BYTE, null
+      );
+    });
+  }
+
+  private recreateBloomFramebuffer(): void {
+    if (!this.gl || !this.canvas || !this.bloomTexture || !this.bloomFramebuffer) return;
+    
+    // Reallocate downsampled bloom texture
+    const bloomWidth = Math.floor(this.canvas.width / 4);
+    const bloomHeight = Math.floor(this.canvas.height / 4);
+    
+    this.gl.bindTexture(this.gl.TEXTURE_2D, this.bloomTexture);
+    this.gl.texImage2D(
+      this.gl.TEXTURE_2D, 0, this.gl.RGBA,
+      bloomWidth, bloomHeight, 0,
+      this.gl.RGBA, this.gl.UNSIGNED_BYTE, null
+    );
+    
+    // Reattach to framebuffer
+    this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, this.bloomFramebuffer);
+    this.gl.framebufferTexture2D(
+      this.gl.FRAMEBUFFER,
+      this.gl.COLOR_ATTACHMENT0,
+      this.gl.TEXTURE_2D,
+      this.bloomTexture,
+      0
+    );
+    
+    // Verify framebuffer is still complete
+    const status = this.gl.checkFramebufferStatus(this.gl.FRAMEBUFFER);
+    if (status !== this.gl.FRAMEBUFFER_COMPLETE) {
+      console.error('[WebGLMorphRenderer] ❌ Bloom framebuffer incomplete after resize:', status);
+    }
+    
+    this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
+  }
+
   private setupTraceTextures(): void {
     if (!this.gl) return;
     
@@ -292,6 +353,53 @@ export class WebGLMorphRenderer {
     });
     
     console.log('[WebGLMorphRenderer] Trace framebuffer initialized');
+  }
+
+  private setupBloom(): void {
+    if (!this.gl || !this.canvas) return;
+    
+    // Create downsampled framebuffer (1/4 resolution)
+    this.bloomFramebuffer = this.gl.createFramebuffer();
+    this.bloomTexture = this.gl.createTexture();
+    
+    // Configure bloom texture
+    this.gl.bindTexture(this.gl.TEXTURE_2D, this.bloomTexture);
+    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE);
+    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE);
+    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.LINEAR);
+    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.LINEAR);
+    
+    // Allocate downsampled texture (1/4 resolution)
+    const bloomWidth = Math.floor(this.canvas.width / 4);
+    const bloomHeight = Math.floor(this.canvas.height / 4);
+    
+    this.gl.texImage2D(
+      this.gl.TEXTURE_2D, 0, this.gl.RGBA,
+      bloomWidth, bloomHeight, 0,
+      this.gl.RGBA, this.gl.UNSIGNED_BYTE, null
+    );
+    
+    // CRITICAL FIX: Attach texture to framebuffer
+    this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, this.bloomFramebuffer);
+    this.gl.framebufferTexture2D(
+      this.gl.FRAMEBUFFER,
+      this.gl.COLOR_ATTACHMENT0,
+      this.gl.TEXTURE_2D,
+      this.bloomTexture,
+      0
+    );
+    
+    // Verify framebuffer is complete
+    const status = this.gl.checkFramebufferStatus(this.gl.FRAMEBUFFER);
+    if (status !== this.gl.FRAMEBUFFER_COMPLETE) {
+      console.error('[WebGLMorphRenderer] ❌ Bloom framebuffer incomplete:', status);
+      return;
+    }
+    
+    // Unbind framebuffer
+    this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
+    
+    console.log(`[WebGLMorphRenderer] ✅ Bloom framebuffer complete: ${bloomWidth}x${bloomHeight}`);
   }
 
   private async loadImage(url: string): Promise<HTMLImageElement> {
@@ -598,6 +706,57 @@ export class WebGLMorphRenderer {
       
       this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
       
+      // ====== PASS 2.5: BLOOM EXTRACTION (NEW) ======
+      if (this.bloomProgram && this.bloomFramebuffer && this.bloomTexture) {
+        // Render downsampled bloom to bloomTexture
+        this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, this.bloomFramebuffer);
+        const bloomWidth = Math.floor(this.canvas.width / 4);
+        const bloomHeight = Math.floor(this.canvas.height / 4);
+        this.gl.viewport(0, 0, bloomWidth, bloomHeight);
+        
+        this.gl.useProgram(this.bloomProgram);
+        
+        // Set vertex attributes for bloom program
+        const bloomPosLoc = this.gl.getAttribLocation(this.bloomProgram, 'a_position');
+        const bloomTexLoc = this.gl.getAttribLocation(this.bloomProgram, 'a_texCoord');
+        
+        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.positionBuffer);
+        this.gl.enableVertexAttribArray(bloomPosLoc);
+        this.gl.vertexAttribPointer(bloomPosLoc, 2, this.gl.FLOAT, false, 0, 0);
+        
+        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.texCoordBuffer);
+        this.gl.enableVertexAttribArray(bloomTexLoc);
+        this.gl.vertexAttribPointer(bloomTexLoc, 2, this.gl.FLOAT, false, 0, 0);
+        
+        // Bind flow field output as input
+        this.gl.activeTexture(this.gl.TEXTURE0);
+        this.gl.bindTexture(this.gl.TEXTURE_2D, this.renderTexture);
+        
+        // Set uniforms
+        this.gl.uniform1i(this.gl.getUniformLocation(this.bloomProgram, 'u_image'), 0);
+        this.gl.uniform2f(this.gl.getUniformLocation(this.bloomProgram, 'u_resolution'), bloomWidth, bloomHeight);
+        
+        // DNA[48] controls bloom intensity (0-3 → 0-0.8)
+        const bloomIntensity = ((dna[48] ?? 1.0) / 3) * 0.8 * burnIntensity;
+        this.gl.uniform1f(this.gl.getUniformLocation(this.bloomProgram, 'u_bloomIntensity'), bloomIntensity);
+        this.gl.uniform1f(this.gl.getUniformLocation(this.bloomProgram, 'u_bloomThreshold'), 0.6);
+        
+        // Attach bloom texture to framebuffer
+        this.gl.framebufferTexture2D(
+          this.gl.FRAMEBUFFER,
+          this.gl.COLOR_ATTACHMENT0,
+          this.gl.TEXTURE_2D,
+          this.bloomTexture,
+          0
+        );
+        
+        // Draw bloom
+        this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
+        
+        // Restore viewport for main render
+        this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+      }
+      
       // ====== PASS 3: Feedback (UNCHANGED) ======
       this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
       this.gl.useProgram(this.feedbackProgram);
@@ -618,6 +777,37 @@ export class WebGLMorphRenderer {
       
       this.gl.bindTexture(this.gl.TEXTURE_2D, this.feedbackTexture);
       this.gl.copyTexImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, 0, 0, this.canvas.width, this.canvas.height, 0);
+      
+      // ====== PASS 3.5: BLOOM COMPOSITE (NEW) ======
+      // Composite bloom additively on top of the final image
+      if (this.bloomTexture && this.compositeProgram) {
+        this.gl.enable(this.gl.BLEND);
+        this.gl.blendFunc(this.gl.ONE, this.gl.ONE); // Additive blend
+        
+        this.gl.useProgram(this.compositeProgram);
+        
+        // Set vertex attributes for composite program
+        const compositePosLoc = this.gl.getAttribLocation(this.compositeProgram, 'a_position');
+        const compositeTexLoc = this.gl.getAttribLocation(this.compositeProgram, 'a_texCoord');
+        
+        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.positionBuffer);
+        this.gl.enableVertexAttribArray(compositePosLoc);
+        this.gl.vertexAttribPointer(compositePosLoc, 2, this.gl.FLOAT, false, 0, 0);
+        
+        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.texCoordBuffer);
+        this.gl.enableVertexAttribArray(compositeTexLoc);
+        this.gl.vertexAttribPointer(compositeTexLoc, 2, this.gl.FLOAT, false, 0, 0);
+        
+        // Bind bloom texture
+        this.gl.activeTexture(this.gl.TEXTURE0);
+        this.gl.bindTexture(this.gl.TEXTURE_2D, this.bloomTexture);
+        this.gl.uniform1i(this.gl.getUniformLocation(this.compositeProgram, 'u_texture'), 0);
+        
+        // Draw bloom additive
+        this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
+        
+        this.gl.disable(this.gl.BLEND);
+      }
       
       // Particle system pass (G-Force-like tracing effect)
       if (this.particleSystem && audioIntensity > 0) {
@@ -661,13 +851,21 @@ export class WebGLMorphRenderer {
     if (this.gl) {
       if (this.flowProgram) this.gl.deleteProgram(this.flowProgram);
       if (this.feedbackProgram) this.gl.deleteProgram(this.feedbackProgram);
+      if (this.traceProgram) this.gl.deleteProgram(this.traceProgram);
+      if (this.bloomProgram) this.gl.deleteProgram(this.bloomProgram);
+      if (this.compositeProgram) this.gl.deleteProgram(this.compositeProgram);
       if (this.positionBuffer) this.gl.deleteBuffer(this.positionBuffer);
       if (this.texCoordBuffer) this.gl.deleteBuffer(this.texCoordBuffer);
       if (this.imageTextureA) this.gl.deleteTexture(this.imageTextureA);
       if (this.imageTextureB) this.gl.deleteTexture(this.imageTextureB);
       if (this.feedbackTexture) this.gl.deleteTexture(this.feedbackTexture);
       if (this.renderTexture) this.gl.deleteTexture(this.renderTexture);
+      if (this.traceTextureCurrent) this.gl.deleteTexture(this.traceTextureCurrent);
+      if (this.traceTexturePrevious) this.gl.deleteTexture(this.traceTexturePrevious);
+      if (this.bloomTexture) this.gl.deleteTexture(this.bloomTexture);
       if (this.framebuffer) this.gl.deleteFramebuffer(this.framebuffer);
+      if (this.traceFramebuffer) this.gl.deleteFramebuffer(this.traceFramebuffer);
+      if (this.bloomFramebuffer) this.gl.deleteFramebuffer(this.bloomFramebuffer);
     }
     
     this.imageCache.clear();

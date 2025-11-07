@@ -773,3 +773,51 @@ void main() {
   gl_FragColor = vec4(accumulated, accumulated, accumulated, 1.0);
 }
 `;
+
+// ====== KAWASE BLOOM SHADER ======
+// Single-pass bloom for dreamy glow around bright regions
+export const bloomFragmentShader = `
+precision highp float;
+
+uniform sampler2D u_image;
+uniform vec2 u_resolution;
+uniform float u_bloomIntensity;
+uniform float u_bloomThreshold;
+
+varying vec2 v_texCoord;
+
+void main() {
+  vec2 texelSize = 1.0 / u_resolution;
+  
+  // Kawase blur: sample 4 diagonal neighbors
+  float offset = 1.5; // Controls blur radius
+  vec3 color = vec3(0.0);
+  
+  color += texture2D(u_image, v_texCoord + vec2(-offset, -offset) * texelSize).rgb;
+  color += texture2D(u_image, v_texCoord + vec2( offset, -offset) * texelSize).rgb;
+  color += texture2D(u_image, v_texCoord + vec2(-offset,  offset) * texelSize).rgb;
+  color += texture2D(u_image, v_texCoord + vec2( offset,  offset) * texelSize).rgb;
+  
+  color *= 0.25; // Average
+  
+  // Extract bright regions only
+  float brightness = max(color.r, max(color.g, color.b));
+  float bloomMask = smoothstep(u_bloomThreshold - 0.1, u_bloomThreshold + 0.1, brightness);
+  
+  // Apply bloom with intensity
+  gl_FragColor = vec4(color * bloomMask * u_bloomIntensity, 1.0);
+}
+`;
+
+// ====== SIMPLE COMPOSITING SHADER ======
+// Pass-through shader for rendering textures with blending
+export const compositeFragmentShader = `
+precision highp float;
+
+uniform sampler2D u_texture;
+varying vec2 v_texCoord;
+
+void main() {
+  gl_FragColor = texture2D(u_texture, v_texCoord);
+}
+`;

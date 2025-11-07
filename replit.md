@@ -29,7 +29,11 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 - **Image Generation**: DALL-E 3 creates 1024x1024 artwork.
 - **Permanent Storage**: Images are downloaded from DALL-E and stored permanently in Replit Object Storage with a comprehensive triple verification and retry pipeline to ensure persistence and integrity.
 - **DNA Morphing System**: Each artwork has a 50-point DNA vector enabling smooth, procedural morphing between frames over 5-minute cycles, with audio-reactive modulation.
-- **Visual Effects System**: Includes displacement and flow effects (curl noise, luminance weighting), enhanced Ken Burns effect, and a beat-triggered particle system (bass peak detection, edge-weighted emission).
+- **Visual Effects System**: 
+  - **Trace Extraction (NEW)**: Three-pass rendering with Frame B alpha/luminance extraction, Sobel edge detection, 5×5 Gaussian blur, and temporal accumulation (0.85-0.95 decay) creates ethereal trailing ribbons. Multiply blend composite makes Frame B appear to "birth" from behind Frame A with DNA-controlled strength and parallax offset.
+  - **Displacement & Flow**: Curl noise flow fields with luminance weighting
+  - **Ken Burns Effect**: Enhanced zoom and parallax translation
+  - **Particle System**: Beat-triggered particles with bass peak detection and edge-weighted emission
 - **Tiered Rendering**: Adaptive rendering based on device capabilities (RAM, GPU, WebGL/WebGPU support) for optimal performance across various devices.
 
 ### Data Models
