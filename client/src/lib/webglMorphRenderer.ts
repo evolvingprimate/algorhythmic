@@ -430,7 +430,7 @@ export class WebGLMorphRenderer {
       const flowSpeed = (dna[44] ?? 1.5) * 0.3 * audioIntensity;
       const flowScale = (dna[45] ?? 2.0) * 2.0;
       const warpIntensity = (dna[46] ?? 1.0) * 0.02 * audioIntensity;
-      const colorShiftRate = (dna[47] ?? 1.0) * 0.5 * audioIntensity;
+      const colorShiftRate = 0.0; // Disabled - user feedback: color shift too fast
       const detailLevel = (dna[48] ?? 1.0) * audioIntensity;
       const anomalyFactor = (dna[49] ?? 0.5) * audioIntensity;
       
