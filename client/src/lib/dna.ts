@@ -33,6 +33,14 @@ export function smoothstepBellCurve(t: number): number {
   return smoothstep(smoothstep(t));
 }
 
+// Smootherstep: 6t^5 - 15t^4 + 10t^3
+// Double-smoothstep equivalent with exact 0→1 range
+// Perfect for DJ crossfades with gentle holds and clean 50/50 peak
+export function smootherstep(t: number): number {
+  const clamped = Math.max(0, Math.min(1, t));
+  return clamped * clamped * clamped * (clamped * (clamped * 6 - 15) + 10);
+}
+
 export function sigmoid(t: number, steepness: number = 10): number {
   return 1 / (1 + Math.exp(-steepness * (t - 0.5)));
 }

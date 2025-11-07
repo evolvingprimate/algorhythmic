@@ -740,7 +740,11 @@ export default function Display() {
           morphState.currentDNA,
           scaledAudio,
           isPlaying ? morphState.audioIntensity : 0.0, // No audio effects when paused
-          isPlaying ? morphState.beatBurst : 0.0       // No beat bursts when paused
+          isPlaying ? morphState.beatBurst : 0.0,      // No beat bursts when paused
+          // DJ Crossfade & Ken Burns parameters
+          morphState.zoomBias,
+          morphState.parallaxStrength,
+          morphState.burnIntensity
         );
       } else {
         // STATIC MODE (single frame)
@@ -760,7 +764,11 @@ export default function Display() {
           staticDNA,
           null, // No audio
           0.0,  // No audio intensity
-          0.0   // No beat burst
+          0.0,  // No beat burst
+          // DJ Crossfade & Ken Burns parameters (all 0 for static mode)
+          0.0,  // zoomBias
+          0.0,  // parallaxStrength
+          0.0   // burnIntensity
         );
       }
 

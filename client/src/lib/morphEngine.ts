@@ -1,4 +1,4 @@
-import { DNAVector, DNAFrame, interpolateDNA, applyAudioReactivity, smoothstepBellCurve, sigmoid } from './dna';
+import { DNAVector, DNAFrame, interpolateDNA, applyAudioReactivity, smoothstepBellCurve, sigmoid, smootherstep } from './dna';
 import type { AudioAnalysis } from '@shared/schema';
 
 export type MorphPhase = 'hold' | 'ramp' | 'morph';
@@ -14,6 +14,12 @@ export interface MorphState {
   audioIntensity: number;
   frameForeshadowMix: number;
   beatBurst: number; // 0-1 impulse that decays over 180ms
+  // DJ Crossfade & Visual Effects
+  opacityA: number; // 0-1: Frame A opacity
+  opacityB: number; // 0-1: Frame B opacity
+  zoomBias: number; // 0-1: Ken Burns zoom (0 at holds, 1 at peak burn)
+  parallaxStrength: number; // 0-1: Parallax effect intensity
+  burnIntensity: number; // 0-1: Peak "burn" effect intensity
 }
 
 export class MorphEngine {
@@ -97,6 +103,11 @@ export class MorphEngine {
         audioIntensity: 0,
         frameForeshadowMix: 0,
         beatBurst: 0,
+        opacityA: 1.0,
+        opacityB: 0.0,
+        zoomBias: 0.0,
+        parallaxStrength: 0.0,
+        burnIntensity: 0.0,
       };
     }
 
@@ -115,6 +126,11 @@ export class MorphEngine {
         audioIntensity: 0,
         frameForeshadowMix: 0,
         beatBurst: 0,
+        opacityA: 1.0,
+        opacityB: 0.0,
+        zoomBias: 0.0,
+        parallaxStrength: 0.0,
+        burnIntensity: 0.0,
       };
     }
 
@@ -137,6 +153,13 @@ export class MorphEngine {
     let morphProgress: number = 0;
     let frameForeshadowMix: number = 0;
     let currentDNA: DNAVector;
+    
+    // DJ Crossfade variables
+    let opacityA: number = 1.0;
+    let opacityB: number = 0.0;
+    let zoomBias: number = 0.0;
+    let parallaxStrength: number = 0.0;
+    let burnIntensity: number = 0.0;
 
     if (cyclePosition < this.HOLD_DURATION) {
       // Pure hold phase: completely static, no effects (60s pristine viewing)
@@ -146,6 +169,13 @@ export class MorphEngine {
       morphProgress = 0;
       frameForeshadowMix = 0;
       currentDNA = [...currentFrame.dnaVector];
+      
+      // DJ Crossfade: Pure Frame A during hold
+      opacityA = 1.0;
+      opacityB = 0.0;
+      zoomBias = 0.0;
+      parallaxStrength = 0.0;
+      burnIntensity = 0.0;
       
     } else if (cyclePosition < this.HOLD_DURATION + this.RAMP_DURATION) {
       // Ramp-up phase: effects activate using bell-curve sigmoid (30s)
@@ -160,8 +190,15 @@ export class MorphEngine {
       frameForeshadowMix = 0;
       currentDNA = [...currentFrame.dnaVector];
       
+      // DJ Crossfade: Still pure Frame A during ramp
+      opacityA = 1.0;
+      opacityB = 0.0;
+      zoomBias = 0.0;
+      parallaxStrength = 0.0;
+      burnIntensity = 0.0;
+      
     } else {
-      // Full morph phase: blend from frame A to frame B (210s)
+      // Full morph phase: DJ-style crossfade from Frame A to Frame B (210s)
       phase = 'morph';
       const morphElapsed = cyclePosition - this.HOLD_DURATION - this.RAMP_DURATION;
       const rawMorphProgress = Math.min(morphElapsed / this.MORPH_DURATION, 1.0);
@@ -170,6 +207,29 @@ export class MorphEngine {
       morphProgress = smoothstepBellCurve(rawMorphProgress);
       phaseProgress = rawMorphProgress;
       audioIntensity = 1.0;
+      
+      // ====== DJ CROSSFADE CURVE ======
+      // Inspired by DJ mixing: HOLD A → BLEND IN → PEAK BURN (50/50) → BLEND OUT → HOLD B
+      
+      // Use smootherstep for exact 0→1 with gentle holds (6t^5 - 15t^4 + 10t^3)
+      const crossfadeProgress = smootherstep(rawMorphProgress);
+      
+      // Opacity curve: Frame A fades from 1→0, Frame B fades from 0→1
+      opacityA = 1.0 - crossfadeProgress;
+      opacityB = crossfadeProgress;
+      
+      // Ken Burns zoom: Bell curve that peaks at 50/50 blend
+      // 0 at start (pure A), 1.0 at midpoint (50/50 burn), 0 at end (pure B)
+      const burnPosition = Math.abs(crossfadeProgress - 0.5) * 2.0; // 0 at 50/50, 1 at edges
+      zoomBias = smootherstep(1.0 - burnPosition); // Smooth bell curve, exact 0→1→0
+      
+      // Parallax strength: Increases during blend, peaks at burn
+      parallaxStrength = zoomBias;
+      
+      // Burn intensity: Peaks at exact 50/50 crossfade point
+      // Maximum intensity when opacityA ≈ opacityB (both near 0.5)
+      const blendBalance = 1.0 - Math.abs(opacityA - opacityB);
+      burnIntensity = blendBalance * blendBalance; // Squared for sharper peak
       
       // Frame foreshadowing: Start showing next frame at 20% into the blend
       if (rawMorphProgress >= 0.2) {
@@ -247,6 +307,12 @@ export class MorphEngine {
       audioIntensity,
       frameForeshadowMix,
       beatBurst: this.beatBurstValue,
+      // DJ Crossfade & Visual Effects
+      opacityA,
+      opacityB,
+      zoomBias,
+      parallaxStrength,
+      burnIntensity,
     };
   }
 

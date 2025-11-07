@@ -32,6 +32,11 @@ uniform float u_trebleLevel;
 uniform float u_amplitude;
 uniform float u_beatBurst; // 0-1 impulse that decays over 180ms
 
+// DJ Crossfade & Ken Burns parameters
+uniform float u_zoomBias; // 0-1: Ken Burns zoom (0 at holds, 1 at peak burn)
+uniform float u_parallaxStrength; // 0-1: Parallax effect intensity
+uniform float u_burnIntensity; // 0-1: Peak "burn" effect intensity
+
 varying vec2 v_texCoord;
 
 // 3D Simplex noise
@@ -323,19 +328,27 @@ void main() {
   // Apply easing to morph progress for smoother transitions
   float easedProgress = easeInOutCubic(u_morphProgress);
   
-  // BELL-CURVE KEN BURNS: Zoom IN (0-50%), peak at 50%, then OUT (50-100%)
-  // This syncs with the morph blend - closest to screen at 50% A/B mix
-  float bellCurveZoom = abs(easedProgress - 0.5) * 2.0; // 0 at edges, 1.0 at center
-  bellCurveZoom = 1.0 - bellCurveZoom; // Invert: 1.0 at center, 0 at edges
-  bellCurveZoom = easeInOutCubic(bellCurveZoom); // Smooth the curve
+  // ====== DJ-STYLE KEN BURNS WITH PARALLAX ======
+  // Uses u_zoomBias from MorphEngine: 0 at holds, 1 at peak burn
   
-  // Zoom from 1.0x (start/end) to 1.5x (50% peak) - very prominent!
-  float kenBurnsScale = 1.0 + (bellCurveZoom * 0.5);
+  // Zoom from 1.0x (holds) to 1.2x (peak burn) - enhanced zoom range for G-force feel
+  float maxZoom = 1.2 + (u_burnIntensity * 0.3); // Extra zoom boost during burn
+  float kenBurnsScale = 1.0 + (u_zoomBias * (maxZoom - 1.0));
   vec2 uvCentered = uv - 0.5;
   
-  // Add subtle parallax translation that also follows bell curve
-  vec2 parallax = uvCentered * bellCurveZoom * 0.08;
-  vec2 uvZoomed = uvCentered / kenBurnsScale + 0.5 + parallax;
+  // ====== PARALLAX LAYERING ======
+  // Frame A (foreground): Tighter zoom, faster translation
+  // Frame B (background): Shallower zoom, slower movement
+  
+  // Frame A (foreground) - more zoom, more movement
+  float zoomFactorA = 1.0 + (u_zoomBias * 0.15) * (1.0 + u_parallaxStrength * 0.3);
+  vec2 parallaxA = uvCentered * u_zoomBias * u_parallaxStrength * 0.12; // Faster
+  vec2 uvA_zoomed = uvCentered / zoomFactorA + 0.5 + parallaxA;
+  
+  // Frame B (background) - less zoom, less movement
+  float zoomFactorB = 1.0 + (u_zoomBias * 0.08) * (1.0 + u_parallaxStrength * 0.15);
+  vec2 parallaxB = uvCentered * u_zoomBias * u_parallaxStrength * 0.06; // Slower
+  vec2 uvB_zoomed = uvCentered / zoomFactorB + 0.5 + parallaxB;
   
   // ====== ENHANCED AUDIO CONTROL MAPPING ======
   // Derive mid-frequency from bass and treble
@@ -378,8 +391,8 @@ void main() {
   // ====== EDGE-GUIDED DISPLACEMENT ======
   // Detect edges in both images to prevent shearing across strong lines
   float texelSize = 1.0 / 1024.0; // Assuming 1024x1024 textures
-  vec3 edgeInfoA = sobelEdgeDetect(u_imageA, uvZoomed, texelSize);
-  vec3 edgeInfoB = sobelEdgeDetect(u_imageB, uv, texelSize);
+  vec3 edgeInfoA = sobelEdgeDetect(u_imageA, uvA_zoomed, texelSize);
+  vec3 edgeInfoB = sobelEdgeDetect(u_imageB, uvB_zoomed, texelSize);
   
   // Extract edge data
   float edgeStrengthA = edgeInfoA.x;
@@ -401,11 +414,14 @@ void main() {
   float flowMagnitude = flowMag * (1.0 + 0.45 * u_beatBurst);
   
   // Apply smooth, edge-guided displacement with beat bursts
-  vec2 displacement = guidedFlow * flowMagnitude * edgeSoftness * 0.02;
+  // Enhanced displacement during burn for G-force effect
+  float displacementScale = 0.02 * (1.0 + u_burnIntensity * 0.5);
+  vec2 displacement = guidedFlow * flowMagnitude * edgeSoftness * displacementScale;
   
-  // Sample both images with edge-aware displacement
-  vec2 uvA = uvZoomed + displacement * (1.0 - easedProgress) * 0.5;
-  vec2 uvB = uv + displacement * easedProgress * 0.5;
+  // Sample both images with parallax-layered UVs + edge-aware displacement
+  // Frame A (foreground) gets more displacement
+  vec2 uvA = uvA_zoomed + displacement * (1.0 + u_parallaxStrength * 0.3);
+  vec2 uvB = uvB_zoomed + displacement * (1.0 - u_parallaxStrength * 0.2);
   
   // Gentle anomaly effect (optional chaotic regions)
   if(u_anomalyFactor > 0.7) {
@@ -413,6 +429,43 @@ void main() {
     float anomalyWeight = smoothstep(0.5, 0.7, anomaly); // Soft threshold
     uvA += vec2(anomaly * 0.01 * anomalyWeight);
     uvB -= vec2(anomaly * 0.01 * anomalyWeight);
+  }
+  
+  // ====== G-FORCE MOTION BLUR ======
+  // Sample textures multiple times along displacement vector for motion blur effect
+  // Intensity increases during burn and with audio
+  float motionBlurStrength = u_burnIntensity * 0.4 + u_amplitude * 0.2;
+  int motionBlurSamples = 5; // Number of samples along velocity vector
+  
+  vec3 blurredA = vec3(0.0);
+  vec3 blurredB = vec3(0.0);
+  
+  if(motionBlurStrength > 0.01) {
+    // Sample along displacement vector
+    vec2 blurStep = displacement * motionBlurStrength / float(motionBlurSamples);
+    float totalWeight = 0.0;
+    
+    for(int i = 0; i < 5; i++) {
+      if(i >= motionBlurSamples) break;
+      
+      float t = float(i) / float(motionBlurSamples - 1); // 0 to 1
+      float weight = 1.0 - abs(t - 0.5) * 2.0; // Bell curve weight
+      weight = weight * weight; // Squared for sharper falloff
+      
+      vec2 offsetA = blurStep * (t - 0.5) * 2.0; // -1 to +1 range
+      vec2 offsetB = blurStep * (t - 0.5) * 2.0;
+      
+      blurredA += texture2D(u_imageA, uvA + offsetA).rgb * weight;
+      blurredB += texture2D(u_imageB, uvB + offsetB).rgb * weight;
+      totalWeight += weight;
+    }
+    
+    blurredA /= max(totalWeight, 0.001);
+    blurredB /= max(totalWeight, 0.001);
+  } else {
+    // No motion blur, just sample normally
+    blurredA = texture2D(u_imageA, uvA).rgb;
+    blurredB = texture2D(u_imageB, uvB).rgb;
   }
   
   // ====== TRUE LAPLACIAN PYRAMID MULTIBAND BLENDING ======
@@ -425,11 +478,12 @@ void main() {
   float tFine = smoothstep(0.30, 0.70, easedProgress);   // Finest: fastest (details)
   
   // === Build Gaussian Pyramid (progressively blurred levels) ===
-  vec3 A_G0 = texture2D(u_imageA, uvA).rgb;              // Level 0: Full detail
+  // Use motion-blurred samples for enhanced G-force effect
+  vec3 A_G0 = blurredA;                                  // Level 0: Full detail (with motion blur)
   vec3 A_G1 = gaussianBlur(u_imageA, uvA, 0.003);        // Level 1: Slight blur
   vec3 A_G2 = gaussianBlur(u_imageA, uvA, 0.008);        // Level 2: More blur
   
-  vec3 B_G0 = texture2D(u_imageB, uvB).rgb;
+  vec3 B_G0 = blurredB;                                  // Level 0: Full detail (with motion blur)
   vec3 B_G1 = gaussianBlur(u_imageB, uvB, 0.003);
   vec3 B_G2 = gaussianBlur(u_imageB, uvB, 0.008);
   
