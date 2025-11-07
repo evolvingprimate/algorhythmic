@@ -286,6 +286,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Recent artworks endpoint (for display page morphing)
+  app.get("/api/recent-artworks", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : 20;
+      const recentArt = await storage.getUserRecentArt(userId, limit);
+      res.json(recentArt);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   app.post("/api/gallery/:artId/toggle", isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
