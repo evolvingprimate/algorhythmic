@@ -179,7 +179,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const imageUrl = await objectStorageService.storeImageFromUrl(dalleUrl);
       console.log('[ArtGeneration] ✅ Image stored and verified:', imageUrl);
 
+      // DATABASE INTEGRITY CHECK: Validate imageUrl is a permanent storage path
+      if (!imageUrl.startsWith('/public-objects/')) {
+        throw new Error(
+          `Database integrity violation: imageUrl must be permanent storage path, got: ${imageUrl}`
+        );
+      }
+      console.log('[ArtGeneration] ✅ Database integrity check passed');
+
       // Save session with music info, explanation, and DNA vector
+      console.log('[ArtGeneration] 💾 Saving to database...');
       const session = await storage.createArtSession({
         sessionId,
         userId,
@@ -195,9 +204,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         isSaved: false,
       });
 
+      console.log('[ArtGeneration] ✅ Database save complete, session ID:', session.id);
+
       // Increment daily usage (user is always authenticated here)
       const today = new Date().toISOString().split('T')[0];
       await storage.incrementDailyUsage(userId, today);
+      console.log('[ArtGeneration] ✅ Daily usage incremented');
+
+      console.log('[ArtGeneration] 🎉 Complete pipeline success: DALL-E → Storage → Verification → Database');
 
       res.json({
         imageUrl,
