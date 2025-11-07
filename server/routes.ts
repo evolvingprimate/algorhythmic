@@ -168,20 +168,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       // Generate image using DALL-E
+      console.log('[ArtGeneration] 🎨 Generating image with DALL-E...');
       const dalleUrl = await generateArtImage(result.prompt);
+      console.log('[ArtGeneration] ✅ DALL-E generation complete:', dalleUrl);
       
-      // Store image permanently in object storage
+      // Store image permanently in object storage with verification
+      // CRITICAL: This must succeed - no fallback to temporary DALL-E URLs
+      console.log('[ArtGeneration] 💾 Storing image permanently in Replit Object Storage...');
       const objectStorageService = new ObjectStorageService();
-      let imageUrl = dalleUrl;
-      
-      try {
-        console.log('[ArtGeneration] Storing image in object storage...');
-        imageUrl = await objectStorageService.storeImageFromUrl(dalleUrl);
-        console.log('[ArtGeneration] Image stored permanently:', imageUrl);
-      } catch (storageError) {
-        console.error('[ArtGeneration] Failed to store in object storage, using DALL-E URL:', storageError);
-        // Fall back to DALL-E URL if storage fails
-      }
+      const imageUrl = await objectStorageService.storeImageFromUrl(dalleUrl);
+      console.log('[ArtGeneration] ✅ Image stored and verified:', imageUrl);
 
       // Save session with music info, explanation, and DNA vector
       const session = await storage.createArtSession({
