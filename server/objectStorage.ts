@@ -108,54 +108,114 @@ export class ObjectStorageService {
     }
   }
 
-  // Download image from DALL-E URL and store in object storage
-  async storeImageFromUrl(imageUrl: string): Promise<string> {
-    try {
-      const publicPaths = this.getPublicObjectSearchPaths();
-      if (publicPaths.length === 0) {
-        throw new Error("No public object search paths configured");
+  // Download image from DALL-E URL and store in object storage with verification
+  async storeImageFromUrl(imageUrl: string, maxRetries: number = 3): Promise<string> {
+    let lastError: Error | null = null;
+
+    // Retry logic: Try up to maxRetries times
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`[ObjectStorage] 📥 Attempt ${attempt}/${maxRetries}: Downloading from DALL-E...`);
+        
+        const publicPaths = this.getPublicObjectSearchPaths();
+        if (publicPaths.length === 0) {
+          throw new Error("No public object search paths configured");
+        }
+
+        // Use the first public path for storing generated artwork
+        const publicPath = publicPaths[0];
+        
+        // Generate unique filename with UUID
+        const imageId = randomUUID();
+        const fileName = `artwork-${imageId}.png`;
+        const fullPath = `${publicPath}/${fileName}`;
+
+        const { bucketName, objectName } = parseObjectPath(fullPath);
+        const bucket = objectStorageClient.bucket(bucketName);
+        const file = bucket.file(objectName);
+
+        // Download image from DALL-E URL
+        const response = await fetch(imageUrl);
+        if (!response.ok) {
+          throw new Error(`Failed to download image: ${response.statusText}`);
+        }
+
+        const arrayBuffer = await response.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        const downloadedSize = buffer.length;
+        
+        console.log(`[ObjectStorage] ✅ Downloaded ${downloadedSize} bytes`);
+
+        // Upload to object storage
+        console.log(`[ObjectStorage] ⬆️  Uploading to storage: ${fullPath}`);
+        await file.save(buffer, {
+          metadata: {
+            contentType: 'image/png',
+            cacheControl: 'public, max-age=31536000', // 1 year cache
+          },
+        });
+
+        console.log(`[ObjectStorage] 🔍 Verifying upload...`);
+
+        // VERIFICATION STEP 1: Check file exists
+        const [exists] = await file.exists();
+        if (!exists) {
+          throw new Error('Verification failed: File does not exist after upload');
+        }
+        console.log(`[ObjectStorage] ✅ File exists`);
+
+        // VERIFICATION STEP 2: Check file metadata and size
+        const [metadata] = await file.getMetadata();
+        const uploadedSize = typeof metadata.size === 'number' 
+          ? metadata.size 
+          : parseInt(metadata.size || '0', 10);
+        
+        if (uploadedSize !== downloadedSize) {
+          throw new Error(
+            `Verification failed: Size mismatch (downloaded: ${downloadedSize}, uploaded: ${uploadedSize})`
+          );
+        }
+        console.log(`[ObjectStorage] ✅ Size verified: ${uploadedSize} bytes`);
+
+        // VERIFICATION STEP 3: Try reading first few bytes to ensure file is accessible
+        const stream = file.createReadStream({ start: 0, end: 1023 }); // Read first 1KB
+        const chunks: Buffer[] = [];
+        
+        await new Promise<void>((resolve, reject) => {
+          stream.on('data', (chunk) => chunks.push(chunk));
+          stream.on('end', () => resolve());
+          stream.on('error', (err) => reject(err));
+          setTimeout(() => reject(new Error('Read timeout after 5s')), 5000);
+        });
+
+        const readBytes = Buffer.concat(chunks).length;
+        if (readBytes === 0) {
+          throw new Error('Verification failed: Could not read file data');
+        }
+        console.log(`[ObjectStorage] ✅ File is readable (read ${readBytes} bytes)`);
+
+        // All verifications passed!
+        const publicUrl = `/public-objects/${fileName}`;
+        console.log(`[ObjectStorage] 🎉 Storage verified successfully: ${publicUrl}`);
+        return publicUrl;
+
+      } catch (error) {
+        lastError = error as Error;
+        console.error(`[ObjectStorage] ❌ Attempt ${attempt}/${maxRetries} failed:`, error);
+        
+        if (attempt < maxRetries) {
+          const delayMs = attempt * 1000; // Exponential backoff: 1s, 2s, 3s
+          console.log(`[ObjectStorage] ⏳ Retrying in ${delayMs}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
       }
-
-      // Use the first public path for storing generated artwork
-      const publicPath = publicPaths[0];
-      
-      // Generate unique filename with UUID
-      const imageId = randomUUID();
-      const fileName = `artwork-${imageId}.png`;
-      const fullPath = `${publicPath}/${fileName}`;
-
-      const { bucketName, objectName } = parseObjectPath(fullPath);
-      const bucket = objectStorageClient.bucket(bucketName);
-      const file = bucket.file(objectName);
-
-      // Download image from DALL-E URL
-      console.log('[ObjectStorage] Downloading image from DALL-E:', imageUrl);
-      const response = await fetch(imageUrl);
-      if (!response.ok) {
-        throw new Error(`Failed to download image: ${response.statusText}`);
-      }
-
-      const arrayBuffer = await response.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
-
-      // Upload to object storage
-      console.log('[ObjectStorage] Uploading to object storage:', fullPath);
-      await file.save(buffer, {
-        metadata: {
-          contentType: 'image/png',
-          cacheControl: 'public, max-age=31536000', // 1 year cache
-        },
-      });
-
-      // Return the public URL path
-      const publicUrl = `/public-objects/${fileName}`;
-      console.log('[ObjectStorage] Stored image successfully:', publicUrl);
-      return publicUrl;
-
-    } catch (error) {
-      console.error('[ObjectStorage] Error storing image:', error);
-      throw error;
     }
+
+    // All retries exhausted
+    console.error(`[ObjectStorage] 💥 All ${maxRetries} attempts failed. Last error:`, lastError);
+    throw new Error(
+      `Failed to store image after ${maxRetries} attempts: ${lastError?.message || 'Unknown error'}`
+    );
   }
 }
 
