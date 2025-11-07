@@ -148,17 +148,45 @@ export default function Display() {
     }
   }, [preferences]);
 
-  // Load most recent artwork on mount as Frame A (to avoid blank screen)
+  // Load multiple recent artworks on mount to enable morphing
   useEffect(() => {
     if (recentArtworks && recentArtworks.length > 0 && morphEngineRef.current && morphEngineRef.current.getFrameCount() === 0) {
+      // Load at least 2 frames (up to 3) from gallery for smooth morphing
+      const framesToLoad = Math.min(3, recentArtworks.length);
+      console.log(`[Display] Loading ${framesToLoad} frames from gallery for morphing`);
+      
+      for (let i = 0; i < framesToLoad; i++) {
+        const artwork = recentArtworks[i];
+        const dnaVector = parseDNAFromSession(artwork);
+        
+        if (dnaVector) {
+          const audioFeatures = artwork.audioFeatures ? JSON.parse(artwork.audioFeatures) : null;
+          const musicInfo = artwork.musicTrack ? {
+            title: artwork.musicTrack,
+            artist: artwork.musicArtist || '',
+            album: artwork.musicAlbum || undefined,
+            release_date: undefined,
+            label: undefined,
+            timecode: undefined,
+            song_link: undefined
+          } : null;
+          
+          morphEngineRef.current.addFrame({
+            imageUrl: artwork.imageUrl,
+            dnaVector,
+            prompt: artwork.prompt,
+            explanation: artwork.generationExplanation || '',
+            artworkId: artwork.id,
+            musicInfo,
+            audioAnalysis: audioFeatures,
+          });
+          
+          console.log(`[Display] Loaded frame ${i + 1}/${framesToLoad}: ${artwork.prompt?.substring(0, 50)}...`);
+        }
+      }
+      
+      // Set UI to display the most recent (first frame)
       const mostRecent = recentArtworks[0];
-      
-      // Check if image is recent (stored images never expire now!)
-      const generatedDate = new Date(mostRecent.createdAt || 0);
-      const hoursSinceGeneration = (Date.now() - generatedDate.getTime()) / (1000 * 60 * 60);
-      
-      console.log('[Display] Loading most recent artwork as Frame A (generated', hoursSinceGeneration.toFixed(1), 'hours ago)');
-      
       const audioFeatures = mostRecent.audioFeatures ? JSON.parse(mostRecent.audioFeatures) : null;
       const musicInfo = mostRecent.musicTrack ? {
         title: mostRecent.musicTrack,
@@ -169,8 +197,7 @@ export default function Display() {
         timecode: undefined,
         song_link: undefined
       } : null;
-
-      // Add to history as Frame A
+      
       const historyItem = {
         imageUrl: mostRecent.imageUrl,
         prompt: mostRecent.prompt,
@@ -190,21 +217,9 @@ export default function Display() {
       setCurrentArtworkId(mostRecent.id);
       setCurrentArtworkSaved(mostRecent.isSaved || false);
       
-      // Add to MorphEngine and start
-      const dnaVector = parseDNAFromSession(mostRecent);
-      if (dnaVector) {
-        morphEngineRef.current.addFrame({
-          imageUrl: mostRecent.imageUrl,
-          dnaVector,
-          prompt: mostRecent.prompt,
-          explanation: mostRecent.generationExplanation || '',
-          artworkId: mostRecent.id,
-          musicInfo,
-          audioAnalysis: audioFeatures,
-        });
-        morphEngineRef.current.start();
-        console.log('[Display] MorphEngine started with recent artwork');
-      }
+      // Start morph engine with loaded frames
+      morphEngineRef.current.start();
+      console.log(`[Display] MorphEngine started with ${morphEngineRef.current.getFrameCount()} frames`);
     }
   }, [recentArtworks]);
 

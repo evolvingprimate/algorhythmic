@@ -454,18 +454,29 @@ void main() {
   // because they're residuals that sum to the original image
   vec3 multiband = blendedCoarse + blendedMid + blendedFine;
   
-  // ====== OKLAB COLOR BLENDING ======
+  // ====== SPATIAL MASKING FOR SELECTIVE COLOR EFFECTS ======
+  // Create masks to prevent whole-screen pulsing (affects only selective areas)
+  
+  // Radial mask: stronger at center, weaker at edges
+  float radialMask = 1.0 - smoothstep(0.0, 0.8, distFromCenter);
+  
+  // Edge-based mask: stronger near detected edges
+  float edgeMask = smoothstep(0.2, 0.5, blendedEdgeStrength);
+  
+  // Combined spatial mask (center + edges get color effects)
+  float spatialMask = max(radialMask * 0.7, edgeMask * 0.5);
+  
+  // ====== OKLAB COLOR BLENDING (SPATIALLY MASKED) ======
   // Perceptually uniform color space prevents muddy grays during transitions
-  // For subtle color enhancement, blend multiband with itself in OKLab
   vec3 oklabMultiband = rgbToOklab(clamp(multiband, 0.0, 1.0));
   
-  // Subtle chroma boost and hue rotation in perceptual space
-  float chromaBoost = 1.0 + u_colorShiftRate * 0.1;
+  // Subtle chroma boost (only in masked areas)
+  float chromaBoost = 1.0 + u_colorShiftRate * 0.1 * spatialMask;
   oklabMultiband.yz *= chromaBoost; // Boost a/b channels (chroma)
   
-  // Subtle hue rotation (rotate in a/b plane)
+  // Subtle hue rotation (only in masked areas)
   // Add color warmth flash on beats
-  float hueShift = u_colorShiftRate * sin(flowTime * 0.5) * 0.1 + 0.02 * u_beatBurst;
+  float hueShift = (u_colorShiftRate * sin(flowTime * 0.5) * 0.1 + 0.02 * u_beatBurst) * spatialMask;
   float cosH = cos(hueShift);
   float sinH = sin(hueShift);
   vec2 rotatedChroma = vec2(
