@@ -151,49 +151,68 @@ export default function Display() {
   // Load multiple recent artworks on mount to enable morphing
   useEffect(() => {
     if (recentArtworks && recentArtworks.length > 0 && morphEngineRef.current.getFrameCount() === 0) {
-      // Load at least 2 frames (up to 3) from gallery for smooth morphing
-      const framesToLoad = Math.min(3, recentArtworks.length);
-      console.log(`[Display] Loading ${framesToLoad} frames from gallery for morphing`);
-      
-      let framesAdded = 0;
-      for (let i = 0; i < framesToLoad; i++) {
-        const artwork = recentArtworks[i];
-        console.log(`[Display] Artwork ${i}: has dnaVector:`, !!artwork.dnaVector, artwork.dnaVector ? `(${typeof artwork.dnaVector})` : '');
+      // Load and VALIDATE frames asynchronously
+      const loadValidatedFrames = async () => {
+        const framesToLoad = Math.min(3, recentArtworks.length);
+        console.log(`[Display] Loading and validating ${framesToLoad} frames from gallery`);
         
-        let dnaVector = parseDNAFromSession(artwork);
-        
-        // Fallback: If no DNA vector, generate default one
-        if (!dnaVector) {
-          console.warn(`[Display] Artwork ${i} missing DNA vector, generating default`);
-          dnaVector = Array(50).fill(0).map(() => Math.random() * 3);
+        let framesAdded = 0;
+        for (let i = 0; i < recentArtworks.length && framesAdded < framesToLoad; i++) {
+          const artwork = recentArtworks[i];
+          
+          // CRITICAL: Validate image URL before adding frame
+          const isValid = await validateImageUrl(artwork.imageUrl);
+          if (!isValid) {
+            console.error(`[Display] ❌ Artwork ${i} has invalid/broken image URL: ${artwork.imageUrl}`);
+            continue; // Skip this artwork
+          }
+          
+          console.log(`[Display] ✅ Image validated: ${artwork.imageUrl}`);
+          
+          let dnaVector = parseDNAFromSession(artwork);
+          
+          // Fallback: If no DNA vector, generate default one
+          if (!dnaVector) {
+            console.warn(`[Display] Artwork ${i} missing DNA vector, generating default`);
+            dnaVector = Array(50).fill(0).map(() => Math.random() * 3);
+          }
+          
+          const audioFeatures = artwork.audioFeatures ? JSON.parse(artwork.audioFeatures) : null;
+          const musicInfo = artwork.musicTrack ? {
+            title: artwork.musicTrack,
+            artist: artwork.musicArtist || '',
+            album: artwork.musicAlbum || undefined,
+            release_date: undefined,
+            label: undefined,
+            timecode: undefined,
+            song_link: undefined
+          } : null;
+          
+          morphEngineRef.current.addFrame({
+            imageUrl: artwork.imageUrl,
+            dnaVector,
+            prompt: artwork.prompt,
+            explanation: artwork.generationExplanation || '',
+            artworkId: artwork.id,
+            musicInfo,
+            audioAnalysis: audioFeatures,
+          });
+          
+          framesAdded++;
+          console.log(`[Display] ✅ Loaded frame ${framesAdded}/${framesToLoad}: ${artwork.prompt?.substring(0, 50)}...`);
         }
         
-        const audioFeatures = artwork.audioFeatures ? JSON.parse(artwork.audioFeatures) : null;
-        const musicInfo = artwork.musicTrack ? {
-          title: artwork.musicTrack,
-          artist: artwork.musicArtist || '',
-          album: artwork.musicAlbum || undefined,
-          release_date: undefined,
-          label: undefined,
-          timecode: undefined,
-          song_link: undefined
-        } : null;
+        if (framesAdded === 0) {
+          console.error('[Display] ❌ NO VALID FRAMES FOUND! All images failed validation.');
+          toast({
+            title: "Image Loading Error",
+            description: "Unable to load any artwork. Please try generating new art.",
+            variant: "destructive",
+          });
+          return;
+        }
         
-        morphEngineRef.current.addFrame({
-          imageUrl: artwork.imageUrl,
-          dnaVector,
-          prompt: artwork.prompt,
-          explanation: artwork.generationExplanation || '',
-          artworkId: artwork.id,
-          musicInfo,
-          audioAnalysis: audioFeatures,
-        });
-        
-        framesAdded++;
-        console.log(`[Display] ✅ Loaded frame ${framesAdded}/${framesToLoad}: ${artwork.prompt?.substring(0, 50)}...`);
-      }
-      
-      console.log(`[Display] Total frames loaded: ${framesAdded}`);
+        console.log(`[Display] Total valid frames loaded: ${framesAdded}`);
       
       // Set UI to display the most recent (first frame)
       const mostRecent = recentArtworks[0];
