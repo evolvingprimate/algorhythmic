@@ -83,7 +83,7 @@ export default function Display() {
   
   const audioAnalyzerRef = useRef<AudioAnalyzer | null>(null);
   const wsClientRef = useRef<WebSocketClient | null>(null);
-  const morphEngineRef = useRef<MorphEngine | null>(null);
+  const morphEngineRef = useRef<MorphEngine>(new MorphEngine()); // Initialize immediately
   const rendererRef = useRef<WebGLMorphRenderer | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const hideControlsTimeoutRef = useRef<number>();
@@ -150,40 +150,50 @@ export default function Display() {
 
   // Load multiple recent artworks on mount to enable morphing
   useEffect(() => {
-    if (recentArtworks && recentArtworks.length > 0 && morphEngineRef.current && morphEngineRef.current.getFrameCount() === 0) {
+    if (recentArtworks && recentArtworks.length > 0 && morphEngineRef.current.getFrameCount() === 0) {
       // Load at least 2 frames (up to 3) from gallery for smooth morphing
       const framesToLoad = Math.min(3, recentArtworks.length);
       console.log(`[Display] Loading ${framesToLoad} frames from gallery for morphing`);
       
+      let framesAdded = 0;
       for (let i = 0; i < framesToLoad; i++) {
         const artwork = recentArtworks[i];
-        const dnaVector = parseDNAFromSession(artwork);
+        console.log(`[Display] Artwork ${i}: has dnaVector:`, !!artwork.dnaVector, artwork.dnaVector ? `(${typeof artwork.dnaVector})` : '');
         
-        if (dnaVector) {
-          const audioFeatures = artwork.audioFeatures ? JSON.parse(artwork.audioFeatures) : null;
-          const musicInfo = artwork.musicTrack ? {
-            title: artwork.musicTrack,
-            artist: artwork.musicArtist || '',
-            album: artwork.musicAlbum || undefined,
-            release_date: undefined,
-            label: undefined,
-            timecode: undefined,
-            song_link: undefined
-          } : null;
-          
-          morphEngineRef.current.addFrame({
-            imageUrl: artwork.imageUrl,
-            dnaVector,
-            prompt: artwork.prompt,
-            explanation: artwork.generationExplanation || '',
-            artworkId: artwork.id,
-            musicInfo,
-            audioAnalysis: audioFeatures,
-          });
-          
-          console.log(`[Display] Loaded frame ${i + 1}/${framesToLoad}: ${artwork.prompt?.substring(0, 50)}...`);
+        let dnaVector = parseDNAFromSession(artwork);
+        
+        // Fallback: If no DNA vector, generate default one
+        if (!dnaVector) {
+          console.warn(`[Display] Artwork ${i} missing DNA vector, generating default`);
+          dnaVector = Array(50).fill(0).map(() => Math.random() * 3);
         }
+        
+        const audioFeatures = artwork.audioFeatures ? JSON.parse(artwork.audioFeatures) : null;
+        const musicInfo = artwork.musicTrack ? {
+          title: artwork.musicTrack,
+          artist: artwork.musicArtist || '',
+          album: artwork.musicAlbum || undefined,
+          release_date: undefined,
+          label: undefined,
+          timecode: undefined,
+          song_link: undefined
+        } : null;
+        
+        morphEngineRef.current.addFrame({
+          imageUrl: artwork.imageUrl,
+          dnaVector,
+          prompt: artwork.prompt,
+          explanation: artwork.generationExplanation || '',
+          artworkId: artwork.id,
+          musicInfo,
+          audioAnalysis: audioFeatures,
+        });
+        
+        framesAdded++;
+        console.log(`[Display] ✅ Loaded frame ${framesAdded}/${framesToLoad}: ${artwork.prompt?.substring(0, 50)}...`);
       }
+      
+      console.log(`[Display] Total frames loaded: ${framesAdded}`);
       
       // Set UI to display the most recent (first frame)
       const mostRecent = recentArtworks[0];
@@ -452,12 +462,11 @@ export default function Display() {
     };
   }, []);
 
-  // Initialize MorphEngine and Renderer
+  // Initialize Renderer (MorphEngine already initialized synchronously)
   useEffect(() => {
     const device = detectDeviceCapabilities();
     console.log(`[Display] Device tier ${device.tier} detected, max FPS: ${device.maxFPS}`);
     
-    morphEngineRef.current = new MorphEngine();
     rendererRef.current = new WebGLMorphRenderer('morphing-canvas-container');
     
     return () => {
