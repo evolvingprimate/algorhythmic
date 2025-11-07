@@ -40,7 +40,7 @@ import { WebSocketClient } from "@/lib/websocket-client";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
 import { MorphEngine } from "@/lib/morphEngine";
-import { Tier1Renderer } from "@/lib/tier1Renderer";
+import { WebGLMorphRenderer } from "@/lib/webglMorphRenderer";
 import { detectDeviceCapabilities } from "@/lib/deviceDetection";
 import { parseDNAFromSession } from "@/lib/dna";
 import type { AudioAnalysis, ArtVote, ArtPreference, MusicIdentification } from "@shared/schema";
@@ -84,7 +84,7 @@ export default function Display() {
   const audioAnalyzerRef = useRef<AudioAnalyzer | null>(null);
   const wsClientRef = useRef<WebSocketClient | null>(null);
   const morphEngineRef = useRef<MorphEngine | null>(null);
-  const rendererRef = useRef<Tier1Renderer | null>(null);
+  const rendererRef = useRef<WebGLMorphRenderer | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const hideControlsTimeoutRef = useRef<number>();
   const generationTimeoutRef = useRef<number>();
@@ -443,7 +443,7 @@ export default function Display() {
     console.log(`[Display] Device tier ${device.tier} detected, max FPS: ${device.maxFPS}`);
     
     morphEngineRef.current = new MorphEngine();
-    rendererRef.current = new Tier1Renderer('morphing-canvas-container');
+    rendererRef.current = new WebGLMorphRenderer('morphing-canvas-container');
     
     return () => {
       if (animationFrameRef.current) {
