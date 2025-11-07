@@ -150,18 +150,14 @@ export default function Display() {
 
   // Load most recent artwork on mount as Frame A (to avoid blank screen)
   useEffect(() => {
-    if (recentArtworks && recentArtworks.length > 0 && !currentImage) {
+    if (recentArtworks && recentArtworks.length > 0 && morphEngineRef.current && morphEngineRef.current.getFrameCount() === 0) {
       const mostRecent = recentArtworks[0];
       
-      // Check if image is recent (DALL-E URLs expire after 2 hours)
-      // Only show if generated within last hour to be safe
+      // Check if image is recent (stored images never expire now!)
       const generatedDate = new Date(mostRecent.createdAt || 0);
       const hoursSinceGeneration = (Date.now() - generatedDate.getTime()) / (1000 * 60 * 60);
       
-      if (hoursSinceGeneration > 1) {
-        console.log('[Display] Skipping expired Frame A (generated', hoursSinceGeneration.toFixed(1), 'hours ago). Generate new artwork to begin.');
-        return;
-      }
+      console.log('[Display] Loading most recent artwork as Frame A (generated', hoursSinceGeneration.toFixed(1), 'hours ago)');
       
       const audioFeatures = mostRecent.audioFeatures ? JSON.parse(mostRecent.audioFeatures) : null;
       const musicInfo = mostRecent.musicTrack ? {
@@ -187,7 +183,6 @@ export default function Display() {
 
       setImageHistory([historyItem]);
       setHistoryIndex(0);
-      setCurrentImage(mostRecent.imageUrl);
       setCurrentPrompt(mostRecent.prompt);
       setCurrentExplanation(mostRecent.generationExplanation || '');
       setCurrentMusicInfo(musicInfo);
@@ -195,9 +190,23 @@ export default function Display() {
       setCurrentArtworkId(mostRecent.id);
       setCurrentArtworkSaved(mostRecent.isSaved || false);
       
-      console.log('[Display] Loaded recent artwork as Frame A (generated', hoursSinceGeneration.toFixed(1), 'hours ago)');
+      // Add to MorphEngine and start
+      const dnaVector = parseDNAFromSession(mostRecent);
+      if (dnaVector) {
+        morphEngineRef.current.addFrame({
+          imageUrl: mostRecent.imageUrl,
+          dnaVector,
+          prompt: mostRecent.prompt,
+          explanation: mostRecent.generationExplanation || '',
+          artworkId: mostRecent.id,
+          musicInfo,
+          audioAnalysis: audioFeatures,
+        });
+        morphEngineRef.current.start();
+        console.log('[Display] MorphEngine started with recent artwork');
+      }
     }
-  }, [recentArtworks, currentImage]);
+  }, [recentArtworks]);
 
   // Fetch voting history
   const { data: votes } = useQuery<ArtVote[]>({
@@ -299,8 +308,7 @@ export default function Display() {
         return newHistory;
       });
       
-      // Update current display
-      setCurrentImage(data.imageUrl);
+      // Update current display metadata (not image - canvas handles that)
       setCurrentPrompt(data.prompt);
       setCurrentExplanation(data.explanation);
       setCurrentMusicInfo(data.musicInfo);
@@ -400,7 +408,7 @@ export default function Display() {
         clearTimeout(hideControlsTimeoutRef.current);
       }
       hideControlsTimeoutRef.current = window.setTimeout(() => {
-        if (currentImage) {
+        if (morphEngineRef.current && morphEngineRef.current.getFrameCount() > 0) {
           setShowControls(false);
         }
       }, 3000);
@@ -413,7 +421,7 @@ export default function Display() {
         clearTimeout(hideControlsTimeoutRef.current);
       }
     };
-  }, [currentImage]);
+  }, []);
 
   // Initialize WebSocket
   useEffect(() => {
@@ -560,7 +568,8 @@ export default function Display() {
 
     // Check minimum time between generations using the ref
     const now = Date.now();
-    const minInterval = currentImage ? generationInterval * 60000 : 0;
+    const hasFrames = morphEngineRef.current && morphEngineRef.current.getFrameCount() > 0;
+    const minInterval = hasFrames ? generationInterval * 60000 : 0;
     const timeSinceLastGen = now - lastGenerationTime.current;
     
     // Start generation 60 seconds before the interval ends so the image is ready at 00:00
@@ -725,22 +734,13 @@ export default function Display() {
     <div className="h-screen w-screen overflow-hidden bg-background relative">
       {/* Art Canvas */}
       <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-background via-primary/5 to-background">
-        {/* Fallback: Regular image (visible while morphing debugs) */}
-        {currentImage && (
-          <img 
-            src={currentImage} 
-            alt="Generated artwork"
-            className="w-full h-full object-cover absolute inset-0"
-          />
-        )}
-        {/* Morphing Canvas Container - always present for renderer initialization (hidden for now) */}
+        {/* Morphing Canvas Container - PRIMARY DISPLAY */}
         <div 
           id="morphing-canvas-container"
-          className="w-full h-full absolute inset-0"
-          style={{ display: 'none' }}
+          className="w-full h-full absolute inset-0 z-10"
         />
         {/* Audio reactive glow effect */}
-        {currentImage && (
+        {morphEngineRef.current && morphEngineRef.current.getFrameCount() > 0 && (
           <div 
             className="absolute inset-0 pointer-events-none transition-shadow duration-300"
             style={{
@@ -748,7 +748,7 @@ export default function Display() {
             }}
           />
         )}
-        {!currentImage && (
+        {(!morphEngineRef.current || morphEngineRef.current.getFrameCount() === 0) && (
           <div className="flex flex-col items-center justify-center gap-6 max-w-lg px-4 text-center">
             <Sparkles className="h-20 w-20 text-primary" />
             <h1 className="text-4xl md:text-5xl font-bold">Ready to Create</h1>
@@ -963,7 +963,7 @@ export default function Display() {
             </div>
 
             {/* Action Buttons */}
-            {currentImage && (
+            {morphEngineRef.current && morphEngineRef.current.getFrameCount() > 0 && (
               <div className="flex items-center gap-3">
                 {/* History Navigation */}
                 <div className="flex items-center gap-2 border-r pr-3">
@@ -1042,7 +1042,7 @@ export default function Display() {
       </div>
 
       {/* Metadata Overlay */}
-      {currentImage && currentAudioAnalysis && (
+      {morphEngineRef.current && morphEngineRef.current.getFrameCount() > 0 && currentAudioAnalysis && (
         <div 
           className={`fixed bottom-24 left-4 z-40 transition-opacity duration-300 ${
             showControls ? "opacity-100" : "opacity-0"
@@ -1066,7 +1066,7 @@ export default function Display() {
       )}
 
       {/* Countdown Timer Overlay */}
-      {isPlaying && showCountdown && timeUntilNext > 0 && currentImage && (
+      {isPlaying && showCountdown && timeUntilNext > 0 && morphEngineRef.current && morphEngineRef.current.getFrameCount() > 0 && (
         <div className="fixed top-4 right-4 z-40">
           <div className="bg-background/80 backdrop-blur-md rounded-md px-3 py-2 flex items-center gap-2">
             <Clock className="h-4 w-4 text-muted-foreground" />
