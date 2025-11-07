@@ -775,8 +775,8 @@ export class WebGLMorphRenderer {
         this.gl.bindTexture(this.gl.TEXTURE_2D, this.traceTextureCurrent);
         this.gl.uniform1i(this.gl.getUniformLocation(this.flowProgram, 'u_traceTexture'), 2);
         
-        // DNA[47]: Trace multiply strength (0-3 → 0-0.5 range)
-        const traceMultiplyStrength = ((dna[47] ?? 0) / 3) * 0.5;
+        // DNA[47]: Trace multiply strength (0-3 → 0-0.5 range, clamped for safety)
+        const traceMultiplyStrength = Math.min(Math.max(((dna[47] ?? 0) / 3) * 0.5, 0), 1);
         this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_traceMultiplyStrength'), traceMultiplyStrength);
         
         // Trace parallax offset in pixels (uses parallaxStrength)

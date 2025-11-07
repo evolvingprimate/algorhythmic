@@ -545,16 +545,25 @@ void main() {
   float detail = snoise(vec3(uv * 8.0 * trebleDetail, flowTime * 0.15)) * 0.5 + 0.5;
   finalColor += (detail - 0.5) * sparkleGain * u_amplitude; // Enhanced sparkle control
   
-  // ====== DREAMY BIRTHING EFFECT: TRACE MULTIPLY BLEND ======
+  // ====== DREAMY BIRTHING EFFECT: ADDITIVE TRACE WITH BRIGHTNESS FLOOR ======
   // Sample the Frame B trace with parallax offset for depth
   vec2 traceUV = uv + vec2(u_traceParallaxOffset) / u_resolution;
   float traceMask = texture2D(u_traceTexture, traceUV).r;
   
-  // FIXED: Use additive trace blending instead of destructive multiplication
-  // Apply trace as a subtle darkening modifier that preserves luminance floor
-  // traceMask ranges 0-1, we scale it to preserve base brightness
-  float traceDarken = traceMask * u_traceMultiplyStrength * 0.3; // Max 30% darkening
-  finalColor *= mix(1.0, 0.7, traceDarken); // Never darker than 70% of original
+  // CRITICAL FIX: Additive trace blending with proportional brightness floor
+  // This prevents black frames while maintaining the dreamy birthing effect
+  float traceWeight = clamp(traceMask * u_traceMultiplyStrength, 0.0, 1.0);
+  
+  // Floor scales with trace influence (0% when no trace, 30% at full trace)
+  // This preserves dark regions when trace is absent
+  float minFloor = mix(0.0, 0.3, traceWeight);
+  vec3 floored = max(finalColor, vec3(minFloor));
+  
+  // Add trace as a subtle lift (additive, not multiplicative)
+  vec3 traceLift = vec3(traceWeight) * 0.25;
+  
+  // Blend the floored color with the trace lift
+  finalColor = clamp(mix(floored, floored + traceLift, traceWeight), 0.0, 1.0);
   
   // Add subtle glow from trace for ethereal birthing effect
   vec3 traceGlow = vec3(traceMask) * u_traceMultiplyStrength * 0.15;
