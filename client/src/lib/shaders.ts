@@ -573,6 +573,11 @@ void main() {
   float vignette = smoothstep(0.8, 0.2, length(pixel - 0.5));
   finalColor *= mix(0.8, 1.0, vignette);
   
+  // ====== ABSOLUTE FINAL SAFETY FLOOR ======
+  // CRITICAL: Guarantee no black frames - clamp to minimum 2% brightness
+  // This is the LAST line of defense against any mathematical edge cases
+  finalColor = max(finalColor, vec3(0.02));
+  
   gl_FragColor = vec4(finalColor, 1.0);
 }
 `;
@@ -623,6 +628,11 @@ void main() {
   // Reduced near edges to prevent ghosting
   float feedbackWeight = 0.07 * (1.0 - edgeMask * 0.5);
   vec4 result = mix(current, previous, feedbackWeight);
+  
+  // ====== ABSOLUTE FINAL SAFETY FLOOR (FEEDBACK PASS) ======
+  // CRITICAL: Prevent feedback buffer from producing black frames
+  // Feedback can decay toward 0, so clamp before output
+  result.rgb = max(result.rgb, vec3(0.02));
   
   gl_FragColor = result;
 }
@@ -841,6 +851,8 @@ uniform vec2 u_resolution;
 varying vec2 v_texCoord;
 
 void main() {
+  vec3 finalColor;
+  
   // ====== CHROMATIC DRIFT POST-PROCESS ======
   // Apply subtle RGB channel separation for hallucinatory out-of-focus feel
   // Samples final composited framebuffer with horizontal offsets
@@ -852,10 +864,31 @@ void main() {
     float g = texture2D(u_texture, v_texCoord).g;                       // Green centered
     float b = texture2D(u_texture, v_texCoord + driftOffset * 0.5).b; // Blue shifts right
     
-    gl_FragColor = vec4(r, g, b, 1.0);
+    finalColor = vec3(r, g, b);
   } else {
     // No chromatic drift, pass through
-    gl_FragColor = texture2D(u_texture, v_texCoord);
+    finalColor = texture2D(u_texture, v_texCoord).rgb;
   }
+  
+  // ====== ABSOLUTE FINAL SAFETY FLOOR (COMPOSITE PASS) ======
+  // CRITICAL: Guarantee no black frames after all post-processing
+  finalColor = max(finalColor, vec3(0.02));
+  
+  gl_FragColor = vec4(finalColor, 1.0);
+}
+`;
+
+// Simple pass-through shader for additive bloom (NO SAFETY FLOOR)
+// Used for bloom composite to avoid adding constant offset with additive blending
+export const bloomPassthroughFragmentShader = `
+precision highp float;
+
+uniform sampler2D u_texture;
+varying vec2 v_texCoord;
+
+void main() {
+  // Pure pass-through for additive blending
+  // NO safety floor - this would add constant offset every frame
+  gl_FragColor = texture2D(u_texture, v_texCoord);
 }
 `;

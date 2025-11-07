@@ -1,6 +1,6 @@
 import { DNAVector } from './dna';
 import type { AudioAnalysis } from '@shared/schema';
-import { vertexShaderSource, flowFieldFragmentShader, feedbackFragmentShader, traceExtractionFragmentShader, bloomFragmentShader, compositeFragmentShader } from './shaders';
+import { vertexShaderSource, flowFieldFragmentShader, feedbackFragmentShader, traceExtractionFragmentShader, bloomFragmentShader, compositeFragmentShader, bloomPassthroughFragmentShader } from './shaders';
 import { ParticleSystem } from './particleSystem';
 
 export interface RendererFrame {
@@ -22,6 +22,7 @@ export class WebGLMorphRenderer {
   private traceProgram: WebGLProgram | null = null;
   private bloomProgram: WebGLProgram | null = null;
   private compositeProgram: WebGLProgram | null = null;
+  private bloomPassthroughProgram: WebGLProgram | null = null;
   
   // Buffers
   private positionBuffer: WebGLBuffer | null = null;
@@ -192,6 +193,15 @@ export class WebGLMorphRenderer {
       }
     } else {
       console.warn('[WebGLMorphRenderer] ⚠️ Composite shader compilation failed (optional, disabling chromatic drift)');
+    }
+    
+    if (bloomPassthroughFragmentShader) {
+      this.bloomPassthroughProgram = this.createProgram(vertexShader, bloomPassthroughFragmentShader);
+      if (!this.bloomPassthroughProgram) {
+        console.warn('[WebGLMorphRenderer] ⚠️ Failed to create bloom passthrough program (optional, bloom will use composite shader)');
+      }
+    } else {
+      console.warn('[WebGLMorphRenderer] ⚠️ Bloom passthrough shader compilation failed (optional, bloom will use composite shader)');
     }
     
     // CRITICAL: Only fail if CORE programs fail
@@ -863,58 +873,25 @@ export class WebGLMorphRenderer {
       this.gl.bindTexture(this.gl.TEXTURE_2D, this.feedbackTexture);
       this.gl.copyTexImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, 0, 0, this.canvas.width, this.canvas.height, 0);
       
-      // ====== PASS 3.5: CHROMATIC DRIFT POST-PROCESS (NEW) ======
-      // Apply chromatic aberration to the final composited framebuffer
-      // Calculate morph progress from frame opacities (0 = hold, 1 = full morph)
-      const chromaticMorphProgress = nextFrame ? 1.0 - currentFrame.opacity : 0.0;
-      
-      if (this.compositeProgram && chromaticMorphProgress > 0.0) {
+      // ====== PASS 3.5: COMPOSITE SAFETY PASS (ALWAYS RUNS) ======
+      // CRITICAL: This pass MUST run every frame to apply the composite shader's safety floor
+      // It also applies chromatic drift when appropriate
+      if (this.compositeProgram) {
+        // Calculate morph progress from frame opacities (0 = hold, 1 = full morph)
+        const chromaticMorphProgress = nextFrame ? 1.0 - currentFrame.opacity : 0.0;
+        
         // DNA[47]: Chromatic drift intensity (0-3 → 0-1.5px), scaled by morphProgress
+        // Will be 0 when not morphing or DNA[47] is 0, but we still run the pass for safety floor
         const chromaticDrift = ((dna[47] ?? 0) / 3) * 1.5 * chromaticMorphProgress;
         
-        if (chromaticDrift > 0.0) {
-          // Copy current screen to feedbackTexture for sampling
-          this.gl.bindTexture(this.gl.TEXTURE_2D, this.feedbackTexture);
-          this.gl.copyTexImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, 0, 0, this.canvas.width, this.canvas.height, 0);
-          
-          // Apply chromatic drift using composite shader
-          this.gl.useProgram(this.compositeProgram);
-          
-          // Set vertex attributes
-          const compositePosLoc = this.gl.getAttribLocation(this.compositeProgram, 'a_position');
-          const compositeTexLoc = this.gl.getAttribLocation(this.compositeProgram, 'a_texCoord');
-          
-          this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.positionBuffer);
-          this.gl.enableVertexAttribArray(compositePosLoc);
-          this.gl.vertexAttribPointer(compositePosLoc, 2, this.gl.FLOAT, false, 0, 0);
-          
-          this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.texCoordBuffer);
-          this.gl.enableVertexAttribArray(compositeTexLoc);
-          this.gl.vertexAttribPointer(compositeTexLoc, 2, this.gl.FLOAT, false, 0, 0);
-          
-          // Bind feedback texture (current screen content)
-          this.gl.activeTexture(this.gl.TEXTURE0);
-          this.gl.bindTexture(this.gl.TEXTURE_2D, this.feedbackTexture);
-          
-          // Set uniforms for chromatic drift
-          this.gl.uniform1i(this.gl.getUniformLocation(this.compositeProgram, 'u_texture'), 0);
-          this.gl.uniform1f(this.gl.getUniformLocation(this.compositeProgram, 'u_chromaticDrift'), chromaticDrift);
-          this.gl.uniform2f(this.gl.getUniformLocation(this.compositeProgram, 'u_resolution'), this.canvas.width, this.canvas.height);
-          
-          // Draw with chromatic drift
-          this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
-        }
-      }
-      
-      // ====== PASS 3.6: BLOOM COMPOSITE (NEW) ======
-      // Composite bloom additively on top of the final image (with chromatic drift)
-      if (this.bloomTexture && this.compositeProgram) {
-        this.gl.enable(this.gl.BLEND);
-        this.gl.blendFunc(this.gl.ONE, this.gl.ONE); // Additive blend
+        // Copy current screen to feedbackTexture for sampling
+        this.gl.bindTexture(this.gl.TEXTURE_2D, this.feedbackTexture);
+        this.gl.copyTexImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, 0, 0, this.canvas.width, this.canvas.height, 0);
         
+        // Apply composite shader (chromatic drift + safety floor)
         this.gl.useProgram(this.compositeProgram);
         
-        // Set vertex attributes for composite program
+        // Set vertex attributes
         const compositePosLoc = this.gl.getAttribLocation(this.compositeProgram, 'a_position');
         const compositeTexLoc = this.gl.getAttribLocation(this.compositeProgram, 'a_texCoord');
         
@@ -926,16 +903,48 @@ export class WebGLMorphRenderer {
         this.gl.enableVertexAttribArray(compositeTexLoc);
         this.gl.vertexAttribPointer(compositeTexLoc, 2, this.gl.FLOAT, false, 0, 0);
         
+        // Bind feedback texture (current screen content)
+        this.gl.activeTexture(this.gl.TEXTURE0);
+        this.gl.bindTexture(this.gl.TEXTURE_2D, this.feedbackTexture);
+        
+        // Set uniforms for chromatic drift (0.0 when not needed, still applies safety floor)
+        this.gl.uniform1i(this.gl.getUniformLocation(this.compositeProgram, 'u_texture'), 0);
+        this.gl.uniform1f(this.gl.getUniformLocation(this.compositeProgram, 'u_chromaticDrift'), chromaticDrift);
+        this.gl.uniform2f(this.gl.getUniformLocation(this.compositeProgram, 'u_resolution'), this.canvas.width, this.canvas.height);
+        
+        // Draw (ALWAYS - applies safety floor even when chromatic drift is 0)
+        this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
+      }
+      
+      // ====== PASS 3.6: BLOOM COMPOSITE (NEW) ======
+      // Composite bloom additively on top of the final image
+      // CRITICAL: Use bloomPassthroughProgram (NO safety floor) to avoid adding constant offset
+      if (this.bloomTexture && this.bloomPassthroughProgram) {
+        this.gl.enable(this.gl.BLEND);
+        this.gl.blendFunc(this.gl.ONE, this.gl.ONE); // Additive blend
+        
+        this.gl.useProgram(this.bloomPassthroughProgram);
+        
+        // Set vertex attributes for bloom passthrough program
+        const bloomPosLoc = this.gl.getAttribLocation(this.bloomPassthroughProgram, 'a_position');
+        const bloomTexLoc = this.gl.getAttribLocation(this.bloomPassthroughProgram, 'a_texCoord');
+        
+        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.positionBuffer);
+        this.gl.enableVertexAttribArray(bloomPosLoc);
+        this.gl.vertexAttribPointer(bloomPosLoc, 2, this.gl.FLOAT, false, 0, 0);
+        
+        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.texCoordBuffer);
+        this.gl.enableVertexAttribArray(bloomTexLoc);
+        this.gl.vertexAttribPointer(bloomTexLoc, 2, this.gl.FLOAT, false, 0, 0);
+        
         // Bind bloom texture
         this.gl.activeTexture(this.gl.TEXTURE0);
         this.gl.bindTexture(this.gl.TEXTURE_2D, this.bloomTexture);
         
-        // Set uniforms (no chromatic drift for bloom composite)
-        this.gl.uniform1i(this.gl.getUniformLocation(this.compositeProgram, 'u_texture'), 0);
-        this.gl.uniform1f(this.gl.getUniformLocation(this.compositeProgram, 'u_chromaticDrift'), 0.0);
-        this.gl.uniform2f(this.gl.getUniformLocation(this.compositeProgram, 'u_resolution'), this.canvas.width, this.canvas.height);
+        // Set uniforms (simple passthrough, no safety floor)
+        this.gl.uniform1i(this.gl.getUniformLocation(this.bloomPassthroughProgram, 'u_texture'), 0);
         
-        // Draw bloom additive
+        // Draw bloom additive (pure bloom, no constant offset)
         this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
         
         this.gl.disable(this.gl.BLEND);
@@ -986,6 +995,7 @@ export class WebGLMorphRenderer {
       if (this.traceProgram) this.gl.deleteProgram(this.traceProgram);
       if (this.bloomProgram) this.gl.deleteProgram(this.bloomProgram);
       if (this.compositeProgram) this.gl.deleteProgram(this.compositeProgram);
+      if (this.bloomPassthroughProgram) this.gl.deleteProgram(this.bloomPassthroughProgram);
       if (this.positionBuffer) this.gl.deleteBuffer(this.positionBuffer);
       if (this.texCoordBuffer) this.gl.deleteBuffer(this.texCoordBuffer);
       if (this.imageTextureA) this.gl.deleteTexture(this.imageTextureA);
