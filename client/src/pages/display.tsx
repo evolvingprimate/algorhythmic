@@ -457,6 +457,9 @@ export default function Display() {
   // Render loop for DNA morphing
   useEffect(() => {
     let frameCount = 0;
+    const HOLD_DURATION = 60000; // 1 minute
+    const RAMP_DURATION = 30000; // 30 seconds
+    
     const renderLoop = () => {
       if (!morphEngineRef.current || !rendererRef.current || !isPlaying) {
         animationFrameRef.current = requestAnimationFrame(renderLoop);
@@ -467,9 +470,37 @@ export default function Display() {
       const currentFrame = morphEngineRef.current.getCurrentFrame();
       const nextFrame = morphEngineRef.current.getNextFrame();
 
+      // Calculate audio intensity based on cycle position
+      const debugInfo = morphEngineRef.current.getDebugInfo();
+      const elapsed = Date.now() - debugInfo.phaseStartTime;
+      const cyclePosition = elapsed % 300000; // 5-minute cycle
+      
+      let audioIntensity = 0;
+      if (cyclePosition < HOLD_DURATION) {
+        // Hold phase: NO audio effects
+        audioIntensity = 0;
+      } else if (cyclePosition < HOLD_DURATION + RAMP_DURATION) {
+        // Ramp-up phase: gradually increase from 0 to 1
+        const rampElapsed = cyclePosition - HOLD_DURATION;
+        audioIntensity = rampElapsed / RAMP_DURATION;
+      } else {
+        // Full morph phase: full audio reactivity
+        audioIntensity = 1.0;
+      }
+
+      // Scale audio analysis by intensity
+      const scaledAudio = currentAudioAnalysis && audioIntensity > 0 ? {
+        frequency: currentAudioAnalysis.frequency,
+        bassLevel: currentAudioAnalysis.bassLevel * audioIntensity,
+        amplitude: currentAudioAnalysis.amplitude * audioIntensity,
+        tempo: currentAudioAnalysis.tempo,
+        trebleLevel: currentAudioAnalysis.trebleLevel * audioIntensity,
+        mood: currentAudioAnalysis.mood,
+      } : null;
+
       // Log every 5 seconds (300 frames at 60fps)
       if (frameCount % 300 === 0) {
-        console.log(`[RenderLoop] Phase: ${morphState.phase}, Progress: ${(morphState.phaseProgress * 100).toFixed(1)}%, Frames: ${morphEngineRef.current.getFrameCount()}`);
+        console.log(`[RenderLoop] Phase: ${morphState.phase}, Progress: ${(morphState.phaseProgress * 100).toFixed(1)}%, AudioIntensity: ${(audioIntensity * 100).toFixed(0)}%, Frames: ${morphEngineRef.current.getFrameCount()}`);
       }
       frameCount++;
 
@@ -481,7 +512,7 @@ export default function Display() {
           { imageUrl: currentFrame.imageUrl, opacity: currentOpacity },
           nextFrame ? { imageUrl: nextFrame.imageUrl, opacity: nextOpacity } : null,
           morphState.currentDNA,
-          currentAudioAnalysis
+          scaledAudio
         );
       }
 
