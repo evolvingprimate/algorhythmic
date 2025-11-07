@@ -206,6 +206,36 @@ vec3 gaussianBlur(sampler2D tex, vec2 uv, float radius) {
   return color;
 }
 
+// Sobel edge detection for edge-guided flow
+// Returns: (edgeStrength, edgeTangentX, edgeTangentY)
+vec3 sobelEdgeDetect(sampler2D tex, vec2 uv, float texelSize) {
+  // Sample 3x3 neighborhood
+  float tl = luminance(texture2D(tex, uv + vec2(-texelSize, -texelSize)).rgb);
+  float tc = luminance(texture2D(tex, uv + vec2(0.0, -texelSize)).rgb);
+  float tr = luminance(texture2D(tex, uv + vec2(texelSize, -texelSize)).rgb);
+  
+  float ml = luminance(texture2D(tex, uv + vec2(-texelSize, 0.0)).rgb);
+  float mr = luminance(texture2D(tex, uv + vec2(texelSize, 0.0)).rgb);
+  
+  float bl = luminance(texture2D(tex, uv + vec2(-texelSize, texelSize)).rgb);
+  float bc = luminance(texture2D(tex, uv + vec2(0.0, texelSize)).rgb);
+  float br = luminance(texture2D(tex, uv + vec2(texelSize, texelSize)).rgb);
+  
+  // Sobel kernels
+  // Gx: [-1 0 1; -2 0 2; -1 0 1]
+  float Gx = -tl + tr - 2.0*ml + 2.0*mr - bl + br;
+  // Gy: [-1 -2 -1; 0 0 0; 1 2 1]
+  float Gy = -tl - 2.0*tc - tr + bl + 2.0*bc + br;
+  
+  // Edge strength (gradient magnitude)
+  float edgeStrength = length(vec2(Gx, Gy));
+  
+  // Edge tangent (perpendicular to gradient for flow along edges)
+  vec2 edgeTangent = normalize(vec2(-Gy, Gx) + vec2(0.001)); // Small offset to avoid zero
+  
+  return vec3(edgeStrength, edgeTangent);
+}
+
 void main() {
   vec2 uv = v_texCoord;
   vec2 pixel = gl_FragCoord.xy / u_resolution;
@@ -245,10 +275,30 @@ void main() {
   float lowFreqNoise = snoise(vec3(uv * 2.0, flowTime * 0.1));
   vec2 fluidFlow = curl + vec2(lowFreqNoise * 0.3);
   
-  // Apply smooth, luminance-weighted displacement
-  vec2 displacement = fluidFlow * u_warpIntensity * (1.0 + bassWarp) * edgeSoftness * 0.02;
+  // ====== EDGE-GUIDED DISPLACEMENT ======
+  // Detect edges in both images to prevent shearing across strong lines
+  float texelSize = 1.0 / 1024.0; // Assuming 1024x1024 textures
+  vec3 edgeInfoA = sobelEdgeDetect(u_imageA, uvZoomed, texelSize);
+  vec3 edgeInfoB = sobelEdgeDetect(u_imageB, uv, texelSize);
   
-  // Sample both images with gentle displacement
+  // Extract edge data
+  float edgeStrengthA = edgeInfoA.x;
+  float edgeStrengthB = edgeInfoB.x;
+  vec2 edgeTangentA = edgeInfoA.yz;
+  vec2 edgeTangentB = edgeInfoB.yz;
+  
+  // Blend edge tangents based on morph progress
+  float blendedEdgeStrength = mix(edgeStrengthA, edgeStrengthB, easedProgress);
+  vec2 blendedEdgeTangent = normalize(mix(edgeTangentA, edgeTangentB, easedProgress));
+  
+  // Steer flow to align with edges (stronger edges = more alignment)
+  float edgeWeight = smoothstep(0.1, 0.5, blendedEdgeStrength); // Only strong edges guide flow
+  vec2 guidedFlow = mix(fluidFlow, blendedEdgeTangent * length(fluidFlow), edgeWeight);
+  
+  // Apply smooth, edge-guided displacement
+  vec2 displacement = guidedFlow * u_warpIntensity * (1.0 + bassWarp) * edgeSoftness * 0.02;
+  
+  // Sample both images with edge-aware displacement
   vec2 uvA = uvZoomed + displacement * (1.0 - easedProgress) * 0.5;
   vec2 uvB = uv + displacement * easedProgress * 0.5;
   
