@@ -94,23 +94,28 @@ export class Tier1Renderer {
     try {
       const currentImg = await this.loadImage(currentFrame.imageUrl);
 
-      ctx.save();
+      // DNA-driven morph parameters (points 45-50 are audio-reactive)
+      const warpElasticity = dna[44] || 1.0;      // Controls scale/distortion
+      const particleDensity = dna[45] || 1.0;     // Future: particle count
+      const dissolveSpeed = dna[46] || 1.0;       // Controls transition smoothness
+      const echoTrail = dna[47] || 0.5;           // Afterimage effect
+      const boundaryFuzz = dna[48] || 0.5;        // Blur amount
+      const reactivityGain = dna[49] || 1.0;      // Audio sensitivity
 
-      const warpElasticity = dna[44] || 1.0;
-      const boundaryFuzz = dna[48] || 0.5;
+      // Audio reactivity
       const bassReactivity = audioAnalysis ? (audioAnalysis.bassLevel / 100) : 0;
-      const scale = 1 + (warpElasticity - 1) * bassReactivity * 0.1;
-      
-      ctx.translate(width / 2, height / 2);
-      ctx.scale(scale, scale);
-      ctx.translate(-width / 2, -height / 2);
+      const trebleReactivity = audioAnalysis ? (audioAnalysis.trebleLevel / 100) : 0;
+      const amplitude = audioAnalysis ? (audioAnalysis.amplitude / 100) : 0;
 
-      if (boundaryFuzz > 0.3) {
-        ctx.filter = `blur(${boundaryFuzz * 3}px)`;
-      }
+      // Enhanced effects
+      const scale = 1 + (warpElasticity - 1) * bassReactivity * 0.2 * reactivityGain;
+      const rotation = trebleReactivity * 0.02 * reactivityGain; // Subtle rotation
+      const blur = boundaryFuzz * 2 + amplitude * 3 * reactivityGain;
+      const brightness = 1.0 + amplitude * 0.2 * reactivityGain;
+      const contrast = 1.0 + bassReactivity * 0.3 * reactivityGain;
+      const saturation = 1.0 + trebleReactivity * 0.2 * reactivityGain;
 
-      ctx.globalAlpha = currentFrame.opacity;
-      
+      // Calculate aspect-fit dimensions
       const imgAspect = currentImg.width / currentImg.height;
       const canvasAspect = width / height;
       
@@ -127,28 +132,71 @@ export class Tier1Renderer {
         drawX = 0;
         drawY = (height - drawHeight) / 2;
       }
+
+      // Render current frame with effects
+      ctx.save();
+      
+      // Apply transforms
+      ctx.translate(width / 2, height / 2);
+      ctx.scale(scale, scale);
+      ctx.rotate(rotation);
+      ctx.translate(-width / 2, -height / 2);
+
+      // Apply filters (combined for better performance)
+      const filters = [];
+      if (blur > 0.5) {
+        filters.push(`blur(${Math.min(blur, 10)}px)`);
+      }
+      filters.push(`brightness(${brightness})`);
+      filters.push(`contrast(${contrast})`);
+      filters.push(`saturate(${saturation})`);
+      
+      ctx.filter = filters.join(' ');
+      ctx.globalAlpha = currentFrame.opacity;
       
       ctx.drawImage(currentImg, drawX, drawY, drawWidth, drawHeight);
       
       ctx.restore();
 
+      // Echo trail effect (ghosting/afterimage)
+      if (echoTrail > 1.5 && currentFrame.opacity > 0.5) {
+        ctx.save();
+        ctx.globalAlpha = Math.min(0.3, (echoTrail - 1.5) * 0.2);
+        ctx.filter = `blur(${echoTrail * 2}px)`;
+        ctx.drawImage(currentImg, drawX, drawY, drawWidth, drawHeight);
+        ctx.restore();
+      }
+
+      // Render next frame with crossfade
       if (nextFrame && nextFrame.opacity > 0) {
         const nextImg = await this.loadImage(nextFrame.imageUrl);
         
-        ctx.save();
-        ctx.globalAlpha = nextFrame.opacity;
-        
-        if (imgAspect > canvasAspect) {
+        // Recalculate dimensions for next image
+        const nextImgAspect = nextImg.width / nextImg.height;
+        if (nextImgAspect > canvasAspect) {
           drawHeight = height;
-          drawWidth = height * (nextImg.width / nextImg.height);
+          drawWidth = height * nextImgAspect;
           drawX = (width - drawWidth) / 2;
           drawY = 0;
         } else {
           drawWidth = width;
-          drawHeight = width / (nextImg.width / nextImg.height);
+          drawHeight = width / nextImgAspect;
           drawX = 0;
           drawY = (height - drawHeight) / 2;
         }
+        
+        ctx.save();
+        
+        // Apply subtle zoom-in effect to next frame
+        const nextScale = 1.0 + (1.0 - nextFrame.opacity) * 0.05;
+        ctx.translate(width / 2, height / 2);
+        ctx.scale(nextScale, nextScale);
+        ctx.translate(-width / 2, -height / 2);
+        
+        // Dissolve effect based on DNA
+        const dissolveBlur = (1.0 - nextFrame.opacity) * dissolveSpeed * 5;
+        ctx.filter = `blur(${dissolveBlur}px) brightness(${1.0 + (1.0 - nextFrame.opacity) * 0.2})`;
+        ctx.globalAlpha = nextFrame.opacity;
         
         ctx.drawImage(nextImg, drawX, drawY, drawWidth, drawHeight);
         ctx.restore();
