@@ -1021,14 +1021,20 @@ export default function Display() {
             }}
           />
         )}
-        {(!morphEngineRef.current || morphEngineRef.current.getFrameCount() === 0) && (
+        {!isPlaying && (
           <div className="flex flex-col items-center justify-center gap-6 max-w-lg px-4 text-center z-20 relative">
             <Sparkles className="h-20 w-20 text-primary" />
-            <h1 className="text-4xl md:text-5xl font-bold">Ready to Create</h1>
+            <h1 className="text-4xl md:text-5xl font-bold">
+              {morphEngineRef.current && morphEngineRef.current.getFrameCount() > 0 
+                ? "Start Creating" 
+                : "Ready to Create"}
+            </h1>
             <p className="text-xl text-muted-foreground">
-              {selectedStyles.length === 0 
-                ? "Choose your artistic style to begin"
-                : "Start listening to generate beautiful audio-reactive art"}
+              {morphEngineRef.current && morphEngineRef.current.getFrameCount() > 0
+                ? "Choose your preferences and start listening to create audio-reactive art"
+                : selectedStyles.length === 0 
+                  ? "Choose your artistic style to begin"
+                  : "Start listening to generate beautiful audio-reactive art"}
             </p>
             <Button 
               size="lg" 
