@@ -30,7 +30,8 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 - **Permanent Storage**: Images are downloaded from DALL-E and stored permanently in Replit Object Storage with a comprehensive triple verification and retry pipeline to ensure persistence and integrity.
 - **DNA Morphing System**: Each artwork has a 50-point DNA vector enabling smooth, procedural morphing between frames over 5-minute cycles, with audio-reactive modulation.
 - **Visual Effects System**: 
-  - **Trace Extraction (NEW)**: Three-pass rendering with Frame B alpha/luminance extraction, Sobel edge detection, 5×5 Gaussian blur, and temporal accumulation (0.85-0.95 decay) creates ethereal trailing ribbons. Multiply blend composite makes Frame B appear to "birth" from behind Frame A with DNA-controlled strength and parallax offset.
+  - **Trace Extraction**: Three-pass rendering with Frame B alpha/luminance extraction, Sobel edge detection, 5×5 Gaussian blur, and temporal accumulation (0.85-0.95 decay) creates ethereal trailing ribbons. Multiply blend composite makes Frame B appear to "birth" from behind Frame A with DNA-controlled strength and parallax offset.
+  - **Soft Bloom/Glow**: Single-pass Kawase bloom on downsampled (1/4 resolution) framebuffer extracts bright regions with DNA[48]-controlled intensity, modulated by burnIntensity for dreamy halos around bright areas during transitions.
   - **Displacement & Flow**: Curl noise flow fields with luminance weighting
   - **Ken Burns Effect**: Enhanced zoom and parallax translation
   - **Particle System**: Beat-triggered particles with bass peak detection and edge-weighted emission

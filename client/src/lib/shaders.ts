@@ -42,6 +42,9 @@ uniform float u_burnIntensity; // 0-1: Peak "burn" effect intensity
 uniform float u_traceMultiplyStrength; // 0-1: How much trace affects the image
 uniform float u_traceParallaxOffset; // Pixel offset for trace to create depth
 
+// Chromatic drift effect parameters
+uniform float u_chromaticDrift; // 0-1.5 pixels
+
 varying vec2 v_texCoord;
 
 // 3D Simplex noise
@@ -815,9 +818,26 @@ export const compositeFragmentShader = `
 precision highp float;
 
 uniform sampler2D u_texture;
+uniform float u_chromaticDrift;  // Horizontal drift in pixels
+uniform vec2 u_resolution;
 varying vec2 v_texCoord;
 
 void main() {
-  gl_FragColor = texture2D(u_texture, v_texCoord);
+  // ====== CHROMATIC DRIFT POST-PROCESS ======
+  // Apply subtle RGB channel separation for hallucinatory out-of-focus feel
+  // Samples final composited framebuffer with horizontal offsets
+  if (u_chromaticDrift > 0.0) {
+    vec2 driftOffset = vec2(u_chromaticDrift / u_resolution.x, 0.0);
+    
+    // Sample RGB channels at offset positions (horizontal only)
+    float r = texture2D(u_texture, v_texCoord - driftOffset * 0.5).r; // Red shifts left
+    float g = texture2D(u_texture, v_texCoord).g;                       // Green centered
+    float b = texture2D(u_texture, v_texCoord + driftOffset * 0.5).b; // Blue shifts right
+    
+    gl_FragColor = vec4(r, g, b, 1.0);
+  } else {
+    // No chromatic drift, pass through
+    gl_FragColor = texture2D(u_texture, v_texCoord);
+  }
 }
 `;

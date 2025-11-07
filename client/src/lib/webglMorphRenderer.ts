@@ -704,6 +704,11 @@ export class WebGLMorphRenderer {
         this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_traceParallaxOffset'), traceParallaxOffset);
       }
       
+      // DNA[47]: Chromatic drift intensity (0-3 → 0-1.5 pixels)
+      // Scale by morphProgress for easing effect
+      const chromaticDrift = ((dna[47] ?? 0) / 3) * 1.5 * morphProgress;
+      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_chromaticDrift'), chromaticDrift);
+      
       this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
       
       // ====== PASS 2.5: BLOOM EXTRACTION (NEW) ======
@@ -778,8 +783,48 @@ export class WebGLMorphRenderer {
       this.gl.bindTexture(this.gl.TEXTURE_2D, this.feedbackTexture);
       this.gl.copyTexImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, 0, 0, this.canvas.width, this.canvas.height, 0);
       
-      // ====== PASS 3.5: BLOOM COMPOSITE (NEW) ======
-      // Composite bloom additively on top of the final image
+      // ====== PASS 3.5: CHROMATIC DRIFT POST-PROCESS (NEW) ======
+      // Apply chromatic aberration to the final composited framebuffer
+      if (this.compositeProgram && morphState.morphProgress > 0.0) {
+        // DNA[47]: Chromatic drift intensity (0-3 → 0-1.5px), scaled by morphProgress
+        const chromaticDrift = ((dna[47] ?? 0) / 3) * 1.5 * morphState.morphProgress;
+        
+        if (chromaticDrift > 0.0) {
+          // Copy current screen to feedbackTexture for sampling
+          this.gl.bindTexture(this.gl.TEXTURE_2D, this.feedbackTexture);
+          this.gl.copyTexImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, 0, 0, this.canvas.width, this.canvas.height, 0);
+          
+          // Apply chromatic drift using composite shader
+          this.gl.useProgram(this.compositeProgram);
+          
+          // Set vertex attributes
+          const compositePosLoc = this.gl.getAttribLocation(this.compositeProgram, 'a_position');
+          const compositeTexLoc = this.gl.getAttribLocation(this.compositeProgram, 'a_texCoord');
+          
+          this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.positionBuffer);
+          this.gl.enableVertexAttribArray(compositePosLoc);
+          this.gl.vertexAttribPointer(compositePosLoc, 2, this.gl.FLOAT, false, 0, 0);
+          
+          this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.texCoordBuffer);
+          this.gl.enableVertexAttribArray(compositeTexLoc);
+          this.gl.vertexAttribPointer(compositeTexLoc, 2, this.gl.FLOAT, false, 0, 0);
+          
+          // Bind feedback texture (current screen content)
+          this.gl.activeTexture(this.gl.TEXTURE0);
+          this.gl.bindTexture(this.gl.TEXTURE_2D, this.feedbackTexture);
+          
+          // Set uniforms for chromatic drift
+          this.gl.uniform1i(this.gl.getUniformLocation(this.compositeProgram, 'u_texture'), 0);
+          this.gl.uniform1f(this.gl.getUniformLocation(this.compositeProgram, 'u_chromaticDrift'), chromaticDrift);
+          this.gl.uniform2f(this.gl.getUniformLocation(this.compositeProgram, 'u_resolution'), this.canvas.width, this.canvas.height);
+          
+          // Draw with chromatic drift
+          this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
+        }
+      }
+      
+      // ====== PASS 3.6: BLOOM COMPOSITE (NEW) ======
+      // Composite bloom additively on top of the final image (with chromatic drift)
       if (this.bloomTexture && this.compositeProgram) {
         this.gl.enable(this.gl.BLEND);
         this.gl.blendFunc(this.gl.ONE, this.gl.ONE); // Additive blend
@@ -801,7 +846,11 @@ export class WebGLMorphRenderer {
         // Bind bloom texture
         this.gl.activeTexture(this.gl.TEXTURE0);
         this.gl.bindTexture(this.gl.TEXTURE_2D, this.bloomTexture);
+        
+        // Set uniforms (no chromatic drift for bloom composite)
         this.gl.uniform1i(this.gl.getUniformLocation(this.compositeProgram, 'u_texture'), 0);
+        this.gl.uniform1f(this.gl.getUniformLocation(this.compositeProgram, 'u_chromaticDrift'), 0.0);
+        this.gl.uniform2f(this.gl.getUniformLocation(this.compositeProgram, 'u_resolution'), this.canvas.width, this.canvas.height);
         
         // Draw bloom additive
         this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
