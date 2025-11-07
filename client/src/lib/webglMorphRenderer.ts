@@ -322,7 +322,8 @@ export class WebGLMorphRenderer {
     nextFrame: { imageUrl: string; opacity: number } | null,
     dna: DNAVector,
     audioAnalysis: AudioAnalysis | null,
-    audioIntensity: number = 1.0
+    audioIntensity: number = 1.0,
+    beatBurst: number = 0.0
   ): Promise<void> {
     if (!this.gl || !this.canvas || !this.flowProgram || !this.feedbackProgram) {
       console.warn('[WebGLMorphRenderer] Renderer not ready');
@@ -388,6 +389,7 @@ export class WebGLMorphRenderer {
       this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_bassLevel'), bassLevel);
       this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_trebleLevel'), trebleLevel);
       this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_amplitude'), amplitude);
+      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_beatBurst'), beatBurst);
       
       this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
       

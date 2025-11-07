@@ -13,6 +13,7 @@ export interface MorphState {
   morphProgress: number;
   audioIntensity: number;
   frameForeshadowMix: number;
+  beatBurst: number; // 0-1 impulse that decays over 180ms
 }
 
 export class MorphEngine {
@@ -21,6 +22,14 @@ export class MorphEngine {
   private phaseStartTime: number = 0;
   private isRunning: boolean = false;
   private animationFrameId: number | null = null;
+  
+  // Beat burst tracking
+  private lastBeatTime: number = 0;
+  private beatBurstValue: number = 0;
+  private lastBassLevel: number = 0;
+  private readonly BEAT_DECAY_MS = 180; // 180ms decay as per ChatGPT spec
+  private readonly BEAT_THRESHOLD = 0.6; // Beat triggers when bass > 0.6
+  private readonly BEAT_DELTA_THRESHOLD = 0.1; // AND delta > 0.1
   
   private readonly HOLD_DURATION = 60000; // 1 minute pure static (60s)
   private readonly RAMP_DURATION = 30000; // 30 seconds to ramp up effects (30s)
@@ -87,6 +96,7 @@ export class MorphEngine {
         morphProgress: 0,
         audioIntensity: 0,
         frameForeshadowMix: 0,
+        beatBurst: 0,
       };
     }
 
@@ -104,6 +114,7 @@ export class MorphEngine {
         morphProgress: 0,
         audioIntensity: 0,
         frameForeshadowMix: 0,
+        beatBurst: 0,
       };
     }
 
@@ -193,6 +204,33 @@ export class MorphEngine {
       currentDNA = applyAudioReactivity(currentDNA, scaledAnalysis);
     }
 
+    // ====== BEAT BURST DETECTION ======
+    // Detect beats and create smooth impulse decay over 180ms
+    const now = Date.now();
+    if (audioAnalysis) {
+      const bassLevel = audioAnalysis.bassLevel;
+      const bassDelta = bassLevel - this.lastBassLevel;
+      
+      // Beat triggers when bass > 0.6 AND delta > 0.1
+      if (bassLevel > this.BEAT_THRESHOLD && bassDelta > this.BEAT_DELTA_THRESHOLD) {
+        this.lastBeatTime = now;
+        this.beatBurstValue = 1.0; // Impulse peak
+      }
+      
+      this.lastBassLevel = bassLevel;
+    }
+    
+    // Decay beat burst over 180ms with exponential falloff
+    // τ = 60ms gives e^(-180/60) = e^(-3) ≈ 0.05 (5% after 180ms)
+    const timeSincebeat = now - this.lastBeatTime;
+    if (timeSincebeat < this.BEAT_DECAY_MS) {
+      // Exponential decay: e^(-t/τ) where τ = 60ms
+      const TAU = 60; // Time constant for exponential decay
+      this.beatBurstValue = Math.exp(-timeSincebeat / TAU);
+    } else {
+      this.beatBurstValue = 0.0;
+    }
+
     const totalProgress = cyclePosition / this.TOTAL_CYCLE;
     const nextIndex = this.frames.length > 1 
       ? (this.currentIndex + 1) % this.frames.length 
@@ -208,6 +246,7 @@ export class MorphEngine {
       morphProgress,
       audioIntensity,
       frameForeshadowMix,
+      beatBurst: this.beatBurstValue,
     };
   }
 

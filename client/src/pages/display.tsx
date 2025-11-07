@@ -501,7 +501,8 @@ export default function Display() {
           nextFrame ? { imageUrl: nextFrame.imageUrl, opacity: nextOpacity } : null,
           morphState.currentDNA,
           scaledAudio,
-          morphState.audioIntensity
+          morphState.audioIntensity,
+          morphState.beatBurst
         );
       }
 

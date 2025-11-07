@@ -30,6 +30,7 @@ uniform float u_anomalyFactor;
 uniform float u_bassLevel;
 uniform float u_trebleLevel;
 uniform float u_amplitude;
+uniform float u_beatBurst; // 0-1 impulse that decays over 180ms
 
 varying vec2 v_texCoord;
 
@@ -260,6 +261,14 @@ vec2 curlNoise(vec3 p) {
   return vec2(n3 - n4, n2 - n1) / (2.0 * eps);
 }
 
+// Polar swirl for rotational flow (creates spiraling motion)
+vec2 polarSwirl(vec2 uv, float amount) {
+  vec2 centered = uv - 0.5;
+  float angle = amount * length(centered);
+  // Perpendicular vector rotated by angle strength
+  return vec2(-centered.y, centered.x) * angle;
+}
+
 // Luminance calculation
 float luminance(vec3 color) {
   return dot(color, vec3(0.299, 0.587, 0.114));
@@ -328,9 +337,27 @@ void main() {
   vec2 parallax = uvCentered * bellCurveZoom * 0.08;
   vec2 uvZoomed = uvCentered / kenBurnsScale + 0.5 + parallax;
   
+  // ====== ENHANCED AUDIO CONTROL MAPPING ======
+  // Derive mid-frequency from bass and treble
+  float midLevel = mix(u_bassLevel, u_trebleLevel, 0.5);
+  
+  // Tasteful ceilings: lerp(base, base + factor*audio, ceiling)
+  // This prevents harsh jumps by limiting audio influence
+  float flowMagBase = u_warpIntensity;
+  float flowMagAudioReactive = flowMagBase + 0.35 * u_bassLevel;
+  float flowMag = mix(flowMagBase, flowMagAudioReactive, 0.8); // 80% ceiling
+  
+  float curlScaleBase = u_flowScale * 0.3;
+  float curlScaleAudioReactive = curlScaleBase + 0.50 * midLevel;
+  float curlScale = mix(curlScaleBase, curlScaleAudioReactive, 0.7); // 70% ceiling
+  
+  float sparkleGainBase = 0.02;
+  float sparkleGainAudioReactive = sparkleGainBase + 0.7 * u_trebleLevel;
+  float sparkleGain = mix(sparkleGainBase, sparkleGainAudioReactive, 0.6); // 60% ceiling
+  
   // Low-frequency organic flow (ferrofluid-like)
   float flowTime = u_time * u_flowSpeed * 0.5; // Slower for softer movement
-  vec3 flowPos = vec3(uv * u_flowScale * 0.3, flowTime * 0.08); // Lower frequency
+  vec3 flowPos = vec3(uv * curlScale, flowTime * 0.08); // Lower frequency with audio-reactive scale
   
   // Use curl noise for divergence-free, organic flow
   vec2 curl = curlNoise(flowPos);
@@ -339,12 +366,14 @@ void main() {
   float distFromCenter = length(pixel - 0.5) * 2.0;
   float edgeSoftness = smoothstep(1.0, 0.3, distFromCenter);
   
-  // Audio-reactive warp with subtle modulation
-  float bassWarp = u_bassLevel * 0.03; // Reduced for softer effect
-  
   // Combine curl with low-frequency noise for water-like fluidity
   float lowFreqNoise = snoise(vec3(uv * 2.0, flowTime * 0.1));
   vec2 fluidFlow = curl + vec2(lowFreqNoise * 0.3);
+  
+  // Add polar swirl for organic rotational motion (subtle, audio-reactive)
+  float swirlAmount = 0.04 + u_bassLevel * 0.06; // Base swirl + bass boost
+  vec2 polar = polarSwirl(pixel, swirlAmount);
+  fluidFlow += polar * 0.3; // Blend swirl into flow
   
   // ====== EDGE-GUIDED DISPLACEMENT ======
   // Detect edges in both images to prevent shearing across strong lines
@@ -366,8 +395,13 @@ void main() {
   float edgeWeight = smoothstep(0.1, 0.5, blendedEdgeStrength); // Only strong edges guide flow
   vec2 guidedFlow = mix(fluidFlow, blendedEdgeTangent * length(fluidFlow), edgeWeight);
   
-  // Apply smooth, edge-guided displacement
-  vec2 displacement = guidedFlow * u_warpIntensity * (1.0 + bassWarp) * edgeSoftness * 0.02;
+  // ====== BEAT-TRIGGERED MICRO-BURSTS ======
+  // Flow magnitude spike (×1.45) on beats
+  // Use enhanced flowMag with tasteful ceiling, then add beat burst
+  float flowMagnitude = flowMag * (1.0 + 0.45 * u_beatBurst);
+  
+  // Apply smooth, edge-guided displacement with beat bursts
+  vec2 displacement = guidedFlow * flowMagnitude * edgeSoftness * 0.02;
   
   // Sample both images with edge-aware displacement
   vec2 uvA = uvZoomed + displacement * (1.0 - easedProgress) * 0.5;
@@ -430,7 +464,8 @@ void main() {
   oklabMultiband.yz *= chromaBoost; // Boost a/b channels (chroma)
   
   // Subtle hue rotation (rotate in a/b plane)
-  float hueShift = u_colorShiftRate * sin(flowTime * 0.5) * 0.1;
+  // Add color warmth flash on beats
+  float hueShift = u_colorShiftRate * sin(flowTime * 0.5) * 0.1 + 0.02 * u_beatBurst;
   float cosH = cos(hueShift);
   float sinH = sin(hueShift);
   vec2 rotatedChroma = vec2(
@@ -443,9 +478,10 @@ void main() {
   vec3 finalColor = clamp(oklabToRgb(oklabMultiband), 0.0, 1.0);
   
   // Softer detail layer using low-frequency noise (not harsh fbm)
+  // Use sparkleGain with tasteful ceiling for smooth reactivity
   float trebleDetail = u_trebleLevel * 0.3 + 0.3; // Reduced range
   float detail = snoise(vec3(uv * 8.0 * trebleDetail, flowTime * 0.15)) * 0.5 + 0.5;
-  finalColor += (detail - 0.5) * 0.02 * u_amplitude; // Subtle detail layer
+  finalColor += (detail - 0.5) * sparkleGain * u_amplitude; // Enhanced sparkle control
   
   // Subtle vignette for depth
   float vignette = smoothstep(0.8, 0.2, length(pixel - 0.5));
