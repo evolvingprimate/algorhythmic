@@ -681,38 +681,42 @@ export default function Display() {
     let frameCount = 0;
     
     const renderLoop = () => {
-      if (!morphEngineRef.current || !rendererRef.current || !isPlaying) {
+      if (!morphEngineRef.current || !rendererRef.current) {
         animationFrameRef.current = requestAnimationFrame(renderLoop);
         return;
       }
 
-      const morphState = morphEngineRef.current.getMorphState(currentAudioAnalysis || undefined);
+      // Always get current frame to display, even when paused
       const currentFrame = morphEngineRef.current.getCurrentFrame();
-      const nextFrame = morphEngineRef.current.getNextFrame();
-
-      // Audio intensity now comes directly from morphState (no duplicate calculation needed)
-      const scaledAudio = currentAudioAnalysis && morphState.audioIntensity > 0 ? {
-        frequency: currentAudioAnalysis.frequency,
-        bassLevel: currentAudioAnalysis.bassLevel * morphState.audioIntensity,
-        amplitude: currentAudioAnalysis.amplitude * morphState.audioIntensity,
-        tempo: currentAudioAnalysis.tempo,
-        trebleLevel: currentAudioAnalysis.trebleLevel * morphState.audioIntensity,
-        mood: currentAudioAnalysis.mood,
-      } : null;
-
-      // Log every 5 seconds (300 frames at 60fps)
-      if (frameCount % 300 === 0) {
-        console.log(`[RenderLoop] Phase: ${morphState.phase}, Progress: ${(morphState.phaseProgress * 100).toFixed(1)}%, MorphProgress: ${(morphState.morphProgress * 100).toFixed(1)}%, AudioIntensity: ${(morphState.audioIntensity * 100).toFixed(0)}%, Foreshadow: ${(morphState.frameForeshadowMix * 100).toFixed(0)}%, Frames: ${morphEngineRef.current.getFrameCount()}`);
+      
+      if (!currentFrame) {
+        // No frames loaded yet, keep looping
+        animationFrameRef.current = requestAnimationFrame(renderLoop);
+        return;
       }
-      frameCount++;
 
-      if (currentFrame) {
-        // During hold: show current frame only
-        // Frame foreshadowing: Use frameForeshadowMix for smooth A→B blending
-        // - Hold phase: Show only current frame (100% opaque)
-        // - Ramp phase: Show only current frame with effects ramping up
-        // - Morph phase (0-20%): Still 100% current frame, effects active
-        // - Morph phase (20-100%): Start blending in next frame using sigmoid
+      // When playing: full morphing with audio effects
+      // When paused: show static frame with gentle Ken Burns effect
+      if (isPlaying) {
+        const morphState = morphEngineRef.current.getMorphState(currentAudioAnalysis || undefined);
+        const nextFrame = morphEngineRef.current.getNextFrame();
+
+        // Audio intensity now comes directly from morphState (no duplicate calculation needed)
+        const scaledAudio = currentAudioAnalysis && morphState.audioIntensity > 0 ? {
+          frequency: currentAudioAnalysis.frequency,
+          bassLevel: currentAudioAnalysis.bassLevel * morphState.audioIntensity,
+          amplitude: currentAudioAnalysis.amplitude * morphState.audioIntensity,
+          tempo: currentAudioAnalysis.tempo,
+          trebleLevel: currentAudioAnalysis.trebleLevel * morphState.audioIntensity,
+          mood: currentAudioAnalysis.mood,
+        } : null;
+
+        // Log every 5 seconds (300 frames at 60fps)
+        if (frameCount % 300 === 0) {
+          console.log(`[RenderLoop] Phase: ${morphState.phase}, Progress: ${(morphState.phaseProgress * 100).toFixed(1)}%, MorphProgress: ${(morphState.morphProgress * 100).toFixed(1)}%, AudioIntensity: ${(morphState.audioIntensity * 100).toFixed(0)}%, Foreshadow: ${(morphState.frameForeshadowMix * 100).toFixed(0)}%, Frames: ${morphEngineRef.current.getFrameCount()}`);
+        }
+        frameCount++;
+
         const currentOpacity = morphState.phase === 'hold' || morphState.phase === 'ramp' 
           ? 1.0 
           : (1.0 - morphState.frameForeshadowMix);
@@ -726,15 +730,25 @@ export default function Display() {
           morphState.audioIntensity,
           morphState.beatBurst
         );
+      } else {
+        // Paused: show static frame with gentle Ken Burns effect (no audio, no morphing)
+        const staticDNA: number[] = currentFrame.dnaVector ? JSON.parse(currentFrame.dnaVector) : Array(50).fill(0.5);
+        rendererRef.current.render(
+          { imageUrl: currentFrame.imageUrl, opacity: 1.0 },
+          null, // No next frame when paused
+          staticDNA as any, // Type cast for DNAVector
+          null, // No audio
+          0.0, // No audio intensity
+          0.0  // No beat burst
+        );
       }
 
       animationFrameRef.current = requestAnimationFrame(renderLoop);
     };
 
-    if (isPlaying) {
-      console.log('[RenderLoop] Starting render loop');
-      animationFrameRef.current = requestAnimationFrame(renderLoop);
-    }
+    // Always start render loop (shows frames even when paused)
+    console.log('[RenderLoop] Starting render loop');
+    animationFrameRef.current = requestAnimationFrame(renderLoop);
 
     return () => {
       if (animationFrameRef.current) {
