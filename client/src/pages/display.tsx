@@ -148,6 +148,40 @@ export default function Display() {
     }
   }, [preferences]);
 
+  // Helper: Validate that image URL from object storage is accessible
+  const validateImageUrl = async (url: string): Promise<boolean> => {
+    try {
+      // Images are served from /public-objects/... (Replit Object Storage)
+      console.log(`[Display] Validating image: ${url}`);
+      
+      // Use Image element for validation (most reliable for images)
+      return new Promise<boolean>((resolve) => {
+        const img = new Image();
+        const timeoutId = setTimeout(() => {
+          console.error(`[Display] Image validation timeout (3s) for ${url}`);
+          resolve(false);
+        }, 3000);
+        
+        img.onload = () => {
+          clearTimeout(timeoutId);
+          console.log(`[Display] ✅ Image validation passed: ${url} (${img.width}x${img.height})`);
+          resolve(true);
+        };
+        
+        img.onerror = (e) => {
+          clearTimeout(timeoutId);
+          console.error(`[Display] Image validation failed for ${url}:`, e);
+          resolve(false);
+        };
+        
+        img.src = url;
+      });
+    } catch (error) {
+      console.error(`[Display] Image validation error:`, error);
+      return false;
+    }
+  };
+
   // Load multiple recent artworks on mount to enable morphing
   useEffect(() => {
     if (recentArtworks && recentArtworks.length > 0 && morphEngineRef.current.getFrameCount() === 0) {
@@ -156,11 +190,18 @@ export default function Display() {
         const framesToLoad = Math.min(3, recentArtworks.length);
         console.log(`[Display] Loading and validating ${framesToLoad} frames from gallery`);
         
+        // RANDOMIZE: Shuffle artworks so we don't always show the same "Hocus Pocus" image first
+        const shuffled = [...recentArtworks].sort(() => Math.random() - 0.5);
+        console.log(`[Display] Randomized ${shuffled.length} artworks for variety`);
+        
+        // Track validated artworks for UI selection
+        const validatedArtworks: typeof recentArtworks = [];
+        
         let framesAdded = 0;
-        for (let i = 0; i < recentArtworks.length && framesAdded < framesToLoad; i++) {
-          const artwork = recentArtworks[i];
+        for (let i = 0; i < shuffled.length && framesAdded < framesToLoad; i++) {
+          const artwork = shuffled[i];
           
-          // CRITICAL: Validate image URL before adding frame
+          // CRITICAL: Validate image URL from object storage before adding frame
           const isValid = await validateImageUrl(artwork.imageUrl);
           if (!isValid) {
             console.error(`[Display] ❌ Artwork ${i} has invalid/broken image URL: ${artwork.imageUrl}`);
@@ -168,6 +209,9 @@ export default function Display() {
           }
           
           console.log(`[Display] ✅ Image validated: ${artwork.imageUrl}`);
+          
+          // Track this artwork as validated
+          validatedArtworks.push(artwork);
           
           let dnaVector = parseDNAFromSession(artwork);
           
@@ -202,7 +246,7 @@ export default function Display() {
           console.log(`[Display] ✅ Loaded frame ${framesAdded}/${framesToLoad}: ${artwork.prompt?.substring(0, 50)}...`);
         }
         
-        if (framesAdded === 0) {
+        if (framesAdded === 0 || validatedArtworks.length === 0) {
           console.error('[Display] ❌ NO VALID FRAMES FOUND! All images failed validation.');
           toast({
             title: "Image Loading Error",
@@ -213,44 +257,50 @@ export default function Display() {
         }
         
         console.log(`[Display] Total valid frames loaded: ${framesAdded}`);
-      
-      // Set UI to display the most recent (first frame)
-      const mostRecent = recentArtworks[0];
-      const audioFeatures = mostRecent.audioFeatures ? JSON.parse(mostRecent.audioFeatures) : null;
-      const musicInfo = mostRecent.musicTrack ? {
-        title: mostRecent.musicTrack,
-        artist: mostRecent.musicArtist || '',
-        album: mostRecent.musicAlbum || undefined,
-        release_date: undefined,
-        label: undefined,
-        timecode: undefined,
-        song_link: undefined
-      } : null;
-      
-      const historyItem = {
-        imageUrl: mostRecent.imageUrl,
-        prompt: mostRecent.prompt,
-        explanation: mostRecent.generationExplanation || '',
-        musicInfo,
-        audioAnalysis: audioFeatures,
-        artworkId: mostRecent.id,
-        isSaved: mostRecent.isSaved || false,
-      };
+        
+        // CRITICAL: Use FIRST VALIDATED artwork for UI (not just first with URL)
+        const firstValidArtwork = validatedArtworks[0];
+        if (!firstValidArtwork) return;
+        
+        const audioFeatures = firstValidArtwork.audioFeatures ? JSON.parse(firstValidArtwork.audioFeatures) : null;
+        const musicInfo = firstValidArtwork.musicTrack ? {
+          title: firstValidArtwork.musicTrack,
+          artist: firstValidArtwork.musicArtist || '',
+          album: firstValidArtwork.musicAlbum || undefined,
+          release_date: undefined,
+          label: undefined,
+          timecode: undefined,
+          song_link: undefined
+        } : null;
+        
+        const historyItem = {
+          imageUrl: firstValidArtwork.imageUrl,
+          prompt: firstValidArtwork.prompt,
+          explanation: firstValidArtwork.generationExplanation || '',
+          musicInfo,
+          audioAnalysis: audioFeatures,
+          artworkId: firstValidArtwork.id,
+          isSaved: firstValidArtwork.isSaved || false,
+        };
 
-      setImageHistory([historyItem]);
-      setHistoryIndex(0);
-      setCurrentPrompt(mostRecent.prompt);
-      setCurrentExplanation(mostRecent.generationExplanation || '');
-      setCurrentMusicInfo(musicInfo);
-      setCurrentAudioAnalysis(audioFeatures);
-      setCurrentArtworkId(mostRecent.id);
-      setCurrentArtworkSaved(mostRecent.isSaved || false);
+        setImageHistory([historyItem]);
+        setHistoryIndex(0);
+        setCurrentPrompt(firstValidArtwork.prompt);
+        setCurrentExplanation(firstValidArtwork.generationExplanation || '');
+        setCurrentMusicInfo(musicInfo);
+        setCurrentAudioAnalysis(audioFeatures);
+        setCurrentArtworkId(firstValidArtwork.id);
+        setCurrentArtworkSaved(firstValidArtwork.isSaved || false);
+        
+        // Start morph engine with loaded frames
+        morphEngineRef.current.start();
+        console.log(`[Display] MorphEngine started with ${morphEngineRef.current.getFrameCount()} frames`);
+      };
       
-      // Start morph engine with loaded frames
-      morphEngineRef.current.start();
-      console.log(`[Display] MorphEngine started with ${morphEngineRef.current.getFrameCount()} frames`);
+      // Execute async loading
+      loadValidatedFrames();
     }
-  }, [recentArtworks]);
+  }, [recentArtworks, toast]);
 
   // Fetch voting history
   const { data: votes } = useQuery<ArtVote[]>({

@@ -249,20 +249,34 @@ export class WebGLMorphRenderer {
 
   private async loadImage(url: string): Promise<HTMLImageElement> {
     if (this.imageCache.has(url)) {
+      console.log(`[WebGLMorphRenderer] Using cached image: ${url.substring(0, 60)}...`);
       return this.imageCache.get(url)!;
     }
 
     return new Promise((resolve, reject) => {
       const img = new Image();
       img.crossOrigin = 'anonymous';
+      
+      // 10-second timeout for image loading
+      const timeout = setTimeout(() => {
+        console.error('[WebGLMorphRenderer] ❌ Image load TIMEOUT (10s):', url);
+        reject(new Error(`Image load timeout: ${url}`));
+      }, 10000);
+      
       img.onload = () => {
+        clearTimeout(timeout);
         this.imageCache.set(url, img);
+        console.log(`[WebGLMorphRenderer] ✅ Image loaded successfully: ${url.substring(0, 60)}... (${img.width}x${img.height})`);
         resolve(img);
       };
+      
       img.onerror = (e) => {
-        console.error('[WebGLMorphRenderer] Failed to load image:', url, e);
+        clearTimeout(timeout);
+        console.error('[WebGLMorphRenderer] ❌ Failed to load image:', url, e);
         reject(e);
       };
+      
+      console.log(`[WebGLMorphRenderer] Starting image load: ${url}`);
       img.src = url;
     });
   }
@@ -305,7 +319,19 @@ export class WebGLMorphRenderer {
   }
 
   private uploadTexture(texture: WebGLTexture, image: HTMLImageElement): void {
-    if (!this.gl) return;
+    if (!this.gl) {
+      console.error('[WebGLMorphRenderer] ❌ Cannot upload texture: WebGL context is null');
+      return;
+    }
+    
+    if (!image.complete || !image.width || !image.height) {
+      console.error('[WebGLMorphRenderer] ❌ Cannot upload texture: Image not loaded', {
+        complete: image.complete,
+        width: image.width,
+        height: image.height
+      });
+      return;
+    }
     
     this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
     this.gl.texImage2D(
@@ -315,6 +341,37 @@ export class WebGLMorphRenderer {
     
     // Generate mipmaps for Laplacian pyramid blending
     this.gl.generateMipmap(this.gl.TEXTURE_2D);
+    
+    console.log(`[WebGLMorphRenderer] ✅ Texture uploaded: ${image.width}x${image.height}`);
+  }
+
+  private createPlaceholderImage(): HTMLImageElement {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1024;
+    canvas.height = 1024;
+    const ctx = canvas.getContext('2d');
+    
+    if (ctx) {
+      // Create gradient background
+      const gradient = ctx.createLinearGradient(0, 0, 1024, 1024);
+      gradient.addColorStop(0, '#9333ea');   // Purple
+      gradient.addColorStop(0.5, '#3b82f6'); // Blue  
+      gradient.addColorStop(1, '#ec4899');   // Pink
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, 1024, 1024);
+      
+      // Add text
+      ctx.fillStyle = 'white';
+      ctx.font = 'bold 48px Inter, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('Image Loading...', 512, 512);
+    }
+    
+    const img = new Image();
+    img.src = canvas.toDataURL();
+    console.log('[WebGLMorphRenderer] Created placeholder image');
+    return img;
   }
 
   async render(
@@ -331,8 +388,28 @@ export class WebGLMorphRenderer {
     }
 
     try {
-      const currentImg = await this.loadImage(currentFrame.imageUrl);
-      const nextImg = nextFrame ? await this.loadImage(nextFrame.imageUrl) : currentImg;
+      let currentImg: HTMLImageElement;
+      let nextImg: HTMLImageElement;
+      
+      // Load current image with fallback
+      try {
+        currentImg = await this.loadImage(currentFrame.imageUrl);
+      } catch (e) {
+        console.error('[WebGLMorphRenderer] ❌ Failed to load current frame, using placeholder:', e);
+        currentImg = this.createPlaceholderImage();
+      }
+      
+      // Load next image with fallback
+      if (nextFrame) {
+        try {
+          nextImg = await this.loadImage(nextFrame.imageUrl);
+        } catch (e) {
+          console.error('[WebGLMorphRenderer] ❌ Failed to load next frame, using placeholder:', e);
+          nextImg = this.createPlaceholderImage();
+        }
+      } else {
+        nextImg = currentImg;
+      }
       
       this.uploadTexture(this.imageTextureA!, currentImg);
       this.uploadTexture(this.imageTextureB!, nextImg);
