@@ -110,13 +110,27 @@ export class Tier1Renderer {
       const trebleReactivity = audioAnalysis ? (audioAnalysis.trebleLevel / 100) : 0;
       const amplitude = audioAnalysis ? (audioAnalysis.amplitude / 100) : 0;
 
-      // Enhanced effects (MORE DRAMATIC for visibility)
-      const scale = 1 + (warpElasticity - 1) * bassReactivity * 0.5 * reactivityGain;
-      const rotation = trebleReactivity * 0.05 * reactivityGain; // More visible rotation
-      const blur = boundaryFuzz * 3 + amplitude * 5 * reactivityGain;
-      const brightness = 1.0 + amplitude * 0.4 * reactivityGain;
-      const contrast = 1.0 + bassReactivity * 0.5 * reactivityGain;
-      const saturation = 1.0 + trebleReactivity * 0.4 * reactivityGain;
+      // Enhanced effects - DRAMATICALLY INCREASED for visibility
+      const scale = 1 + bassReactivity * 0.15 * reactivityGain; // Bass = pulsing scale
+      const rotation = (trebleReactivity - 0.5) * 0.08 * reactivityGain; // Treble = rotation
+      const blur = boundaryFuzz * 2 + amplitude * 8 * reactivityGain; // Amplitude = blur
+      const brightness = 1.0 + amplitude * 0.6 * reactivityGain; // Amplitude = brightness
+      const contrast = 1.0 + bassReactivity * 0.7 * reactivityGain; // Bass = contrast
+      const saturation = 1.0 + trebleReactivity * 0.6 * reactivityGain; // Treble = saturation
+
+      // Debug logging (every 60 frames = ~1 second)
+      if (Math.random() < 0.016) {
+        console.log('[Tier1Renderer] Effects:', {
+          scale: scale.toFixed(3),
+          rotation: rotation.toFixed(3),
+          blur: blur.toFixed(1),
+          brightness: brightness.toFixed(2),
+          contrast: contrast.toFixed(2),
+          saturation: saturation.toFixed(2),
+          dna: { warpElasticity, boundaryFuzz, echoTrail, reactivityGain },
+          audio: { bass: bassReactivity.toFixed(2), treble: trebleReactivity.toFixed(2), amp: amplitude.toFixed(2) }
+        });
+      }
 
       // Calculate aspect-fit dimensions
       const imgAspect = currentImg.width / currentImg.height;
@@ -161,11 +175,17 @@ export class Tier1Renderer {
       
       ctx.restore();
 
-      // Echo trail effect (ghosting/afterimage)
-      if (echoTrail > 1.5 && currentFrame.opacity > 0.5) {
+      // Echo trail effect (ghosting/afterimage) - Made more visible
+      if (echoTrail > 1.0 && amplitude > 0.3) {
         ctx.save();
-        ctx.globalAlpha = Math.min(0.3, (echoTrail - 1.5) * 0.2);
-        ctx.filter = `blur(${echoTrail * 2}px)`;
+        ctx.globalAlpha = Math.min(0.4, echoTrail * 0.15);
+        ctx.filter = `blur(${echoTrail * 3}px)`;
+        
+        // Slightly offset for more visible echo
+        ctx.translate(width / 2, height / 2);
+        ctx.scale(0.98, 0.98);
+        ctx.translate(-width / 2, -height / 2);
+        
         ctx.drawImage(currentImg, drawX, drawY, drawWidth, drawHeight);
         ctx.restore();
       }
