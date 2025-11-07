@@ -143,43 +143,99 @@ export class WebGLMorphRenderer {
   private initializeWebGL(): void {
     if (!this.gl) return;
     
+    // Compile core shaders (required)
     const vertexShader = this.compileShader(vertexShaderSource, this.gl.VERTEX_SHADER);
     const flowFragShader = this.compileShader(flowFieldFragmentShader, this.gl.FRAGMENT_SHADER);
     const feedbackFragShader = this.compileShader(feedbackFragmentShader, this.gl.FRAGMENT_SHADER);
+    
+    // Compile optional effect shaders (trace, bloom, composite)
     const traceFragShader = this.compileShader(traceExtractionFragmentShader, this.gl.FRAGMENT_SHADER);
     const bloomFragShader = this.compileShader(bloomFragmentShader, this.gl.FRAGMENT_SHADER);
     const compositeFragShader = this.compileShader(compositeFragmentShader, this.gl.FRAGMENT_SHADER);
     
-    if (!vertexShader || !flowFragShader || !feedbackFragShader || !traceFragShader || !bloomFragShader || !compositeFragShader) {
-      console.error('[WebGLMorphRenderer] Failed to compile shaders');
+    // CRITICAL: Only fail if CORE shaders fail
+    if (!vertexShader || !flowFragShader || !feedbackFragShader) {
+      console.error('[WebGLMorphRenderer] ❌ Failed to compile CORE shaders');
       return;
     }
     
+    // Create core programs (required)
     this.flowProgram = this.createProgram(vertexShader, flowFragShader);
     this.feedbackProgram = this.createProgram(vertexShader, feedbackFragShader);
-    this.traceProgram = this.createProgram(vertexShader, traceFragShader);
-    this.bloomProgram = this.createProgram(vertexShader, bloomFragShader);
-    this.compositeProgram = this.createProgram(vertexShader, compositeFragShader);
     
-    if (!this.flowProgram || !this.feedbackProgram || !this.traceProgram || !this.bloomProgram || !this.compositeProgram) {
-      console.error('[WebGLMorphRenderer] Failed to create programs');
+    // Create optional effect programs
+    if (traceFragShader) {
+      this.traceProgram = this.createProgram(vertexShader, traceFragShader);
+      if (!this.traceProgram) {
+        console.warn('[WebGLMorphRenderer] ⚠️ Failed to create trace program (optional, disabling trace effects)');
+      }
+    } else {
+      console.warn('[WebGLMorphRenderer] ⚠️ Trace shader compilation failed (optional, disabling trace effects)');
+    }
+    
+    if (bloomFragShader) {
+      this.bloomProgram = this.createProgram(vertexShader, bloomFragShader);
+      if (!this.bloomProgram) {
+        console.warn('[WebGLMorphRenderer] ⚠️ Failed to create bloom program (optional, disabling bloom effects)');
+      }
+    } else {
+      console.warn('[WebGLMorphRenderer] ⚠️ Bloom shader compilation failed (optional, disabling bloom effects)');
+    }
+    
+    if (compositeFragShader) {
+      this.compositeProgram = this.createProgram(vertexShader, compositeFragShader);
+      if (!this.compositeProgram) {
+        console.warn('[WebGLMorphRenderer] ⚠️ Failed to create composite program (optional, disabling chromatic drift)');
+      }
+    } else {
+      console.warn('[WebGLMorphRenderer] ⚠️ Composite shader compilation failed (optional, disabling chromatic drift)');
+    }
+    
+    // CRITICAL: Only fail if CORE programs fail
+    if (!this.flowProgram || !this.feedbackProgram) {
+      console.error('[WebGLMorphRenderer] ❌ Failed to create CORE programs');
       return;
     }
     
     this.setupGeometry();
     this.setupTextures();
-    this.setupTraceTextures();
+    
+    // Setup optional effects (don't fail if they error)
+    try {
+      if (this.traceProgram) {
+        this.setupTraceTextures();
+        this.setupTraceFramebuffer();
+        console.log('[WebGLMorphRenderer] ✅ Trace extraction enabled');
+      }
+    } catch (e) {
+      console.warn('[WebGLMorphRenderer] ⚠️ Trace setup failed (disabling):', e);
+      this.traceProgram = null;
+    }
     
     // Initialize particle system
     if (this.canvas && this.gl) {
-      this.particleSystem = new ParticleSystem(this.canvas, this.gl);
-      console.log('[WebGLMorphRenderer] Particle system initialized');
+      try {
+        this.particleSystem = new ParticleSystem(this.canvas, this.gl);
+        console.log('[WebGLMorphRenderer] ✅ Particle system initialized');
+      } catch (e) {
+        console.warn('[WebGLMorphRenderer] ⚠️ Particle system failed (disabling):', e);
+      }
     }
-    this.setupFramebuffer();
-    this.setupTraceFramebuffer();
-    this.setupBloom();
     
-    console.log('[WebGLMorphRenderer] WebGL initialization complete with trace extraction and bloom');
+    this.setupFramebuffer();
+    
+    // Setup bloom (optional, don't fail if it errors)
+    try {
+      if (this.bloomProgram) {
+        this.setupBloom();
+        console.log('[WebGLMorphRenderer] ✅ Bloom effects enabled');
+      }
+    } catch (e) {
+      console.warn('[WebGLMorphRenderer] ⚠️ Bloom setup failed (disabling):', e);
+      this.bloomProgram = null;
+    }
+    
+    console.log('[WebGLMorphRenderer] ✅ WebGL initialization complete (core + optional effects)');
   }
 
   private setupGeometry(): void {
@@ -785,9 +841,12 @@ export class WebGLMorphRenderer {
       
       // ====== PASS 3.5: CHROMATIC DRIFT POST-PROCESS (NEW) ======
       // Apply chromatic aberration to the final composited framebuffer
-      if (this.compositeProgram && morphState.morphProgress > 0.0) {
+      // Calculate morph progress from frame opacities (0 = hold, 1 = full morph)
+      const chromaticMorphProgress = nextFrame ? 1.0 - currentFrame.opacity : 0.0;
+      
+      if (this.compositeProgram && chromaticMorphProgress > 0.0) {
         // DNA[47]: Chromatic drift intensity (0-3 → 0-1.5px), scaled by morphProgress
-        const chromaticDrift = ((dna[47] ?? 0) / 3) * 1.5 * morphState.morphProgress;
+        const chromaticDrift = ((dna[47] ?? 0) / 3) * 1.5 * chromaticMorphProgress;
         
         if (chromaticDrift > 0.0) {
           // Copy current screen to feedbackTexture for sampling
