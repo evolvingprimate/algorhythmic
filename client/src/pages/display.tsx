@@ -133,9 +133,9 @@ export default function Display() {
     queryKey: [`/api/preferences/${sessionId.current}`],
   });
 
-  // Fetch user's most recent artwork from gallery to use as Frame A
+  // Fetch user's most recent artwork (all artworks, not just saved ones)
   const { data: recentArtworks } = useQuery<any[]>({
-    queryKey: ["/api/gallery"],
+    queryKey: ["/api/recent-artworks"],
     enabled: isAuthenticated,
     refetchOnWindowFocus: false,
     refetchOnMount: true,
@@ -610,7 +610,9 @@ export default function Display() {
         title: data.isSaved ? "Artwork saved!" : "Artwork unsaved",
         description: data.isSaved ? "Added to your gallery" : "Removed from your gallery",
       });
+      // Invalidate both gallery (saved only) and recent artworks (all artworks)
       queryClient.invalidateQueries({ queryKey: ["/api/gallery"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/recent-artworks"] });
     },
     onError: (error: Error) => {
       toast({
