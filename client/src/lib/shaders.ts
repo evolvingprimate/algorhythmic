@@ -201,11 +201,18 @@ void main() {
   // Apply easing to morph progress for smoother transitions
   float easedProgress = easeInOutCubic(u_morphProgress);
   
-  // Enhanced Ken Burns effect: zoom from 1.0x to 1.3x with slight parallax
-  float kenBurnsScale = 1.0 + (easedProgress * 0.3);
+  // BELL-CURVE KEN BURNS: Zoom IN (0-50%), peak at 50%, then OUT (50-100%)
+  // This syncs with the morph blend - closest to screen at 50% A/B mix
+  float bellCurveZoom = abs(easedProgress - 0.5) * 2.0; // 0 at edges, 1.0 at center
+  bellCurveZoom = 1.0 - bellCurveZoom; // Invert: 1.0 at center, 0 at edges
+  bellCurveZoom = easeInOutCubic(bellCurveZoom); // Smooth the curve
+  
+  // Zoom from 1.0x (start/end) to 1.5x (50% peak) - very prominent!
+  float kenBurnsScale = 1.0 + (bellCurveZoom * 0.5);
   vec2 uvCentered = uv - 0.5;
-  // Add subtle parallax translation
-  vec2 parallax = uvCentered * easedProgress * 0.05;
+  
+  // Add subtle parallax translation that also follows bell curve
+  vec2 parallax = uvCentered * bellCurveZoom * 0.08;
   vec2 uvZoomed = uvCentered / kenBurnsScale + 0.5 + parallax;
   
   // Low-frequency organic flow (ferrofluid-like)
