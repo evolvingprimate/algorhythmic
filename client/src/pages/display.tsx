@@ -505,6 +505,9 @@ export default function Display() {
       frameCount++;
 
       if (currentFrame) {
+        // During hold: show current frame only
+        // During morph: gradually transition from current (1→0) to next (0→1)
+        // At morphProgress=1.0: current opacity=0, next opacity=1.0 (pixel-perfect frame B)
         const currentOpacity = morphState.phase === 'hold' ? 1.0 : (1.0 - morphState.phaseProgress);
         const nextOpacity = morphState.phase === 'morph' ? morphState.phaseProgress : 0;
 
@@ -512,7 +515,8 @@ export default function Display() {
           { imageUrl: currentFrame.imageUrl, opacity: currentOpacity },
           nextFrame ? { imageUrl: nextFrame.imageUrl, opacity: nextOpacity } : null,
           morphState.currentDNA,
-          scaledAudio
+          scaledAudio,
+          audioIntensity
         );
       }
 

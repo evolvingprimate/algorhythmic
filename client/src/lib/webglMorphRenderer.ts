@@ -1,6 +1,7 @@
 import { DNAVector } from './dna';
 import type { AudioAnalysis } from '@shared/schema';
 import { vertexShaderSource, flowFieldFragmentShader, feedbackFragmentShader } from './shaders';
+import { ParticleSystem } from './particleSystem';
 
 export interface RendererFrame {
   imageUrl: string;
@@ -31,6 +32,11 @@ export class WebGLMorphRenderer {
   
   // Image cache
   private imageCache: Map<string, HTMLImageElement> = new Map();
+  private imageDataCache: Map<string, ImageData> = new Map();
+  
+  // Particle system
+  private particleSystem: ParticleSystem | null = null;
+  private lastFrameTime: number = Date.now();
   
   // Time tracking
   private startTime: number = Date.now();
@@ -142,6 +148,12 @@ export class WebGLMorphRenderer {
     
     this.setupGeometry();
     this.setupTextures();
+    
+    // Initialize particle system
+    if (this.canvas && this.gl) {
+      this.particleSystem = new ParticleSystem(this.canvas, this.gl);
+      console.log('[WebGLMorphRenderer] Particle system initialized');
+    }
     this.setupFramebuffer();
     
     console.log('[WebGLMorphRenderer] WebGL initialization complete');
@@ -255,6 +267,34 @@ export class WebGLMorphRenderer {
     }
   }
 
+  private getImageData(img: HTMLImageElement, url: string): ImageData | null {
+    // Check cache first
+    if (this.imageDataCache.has(url)) {
+      return this.imageDataCache.get(url)!;
+    }
+
+    // Create and cache new ImageData
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = img.width;
+    tempCanvas.height = img.height;
+    const tempCtx = tempCanvas.getContext('2d');
+    if (!tempCtx) return null;
+
+    tempCtx.drawImage(img, 0, 0);
+    const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+    
+    // Cache it (limit cache size to prevent memory leaks)
+    if (this.imageDataCache.size > 10) {
+      const firstKey = this.imageDataCache.keys().next().value;
+      if (firstKey !== undefined) {
+        this.imageDataCache.delete(firstKey);
+      }
+    }
+    this.imageDataCache.set(url, imageData);
+    
+    return imageData;
+  }
+
   private uploadTexture(texture: WebGLTexture, image: HTMLImageElement): void {
     if (!this.gl) return;
     
@@ -269,7 +309,8 @@ export class WebGLMorphRenderer {
     currentFrame: { imageUrl: string; opacity: number },
     nextFrame: { imageUrl: string; opacity: number } | null,
     dna: DNAVector,
-    audioAnalysis: AudioAnalysis | null
+    audioAnalysis: AudioAnalysis | null,
+    audioIntensity: number = 1.0
   ): Promise<void> {
     if (!this.gl || !this.canvas || !this.flowProgram || !this.feedbackProgram) {
       console.warn('[WebGLMorphRenderer] Renderer not ready');
@@ -286,16 +327,18 @@ export class WebGLMorphRenderer {
       const morphProgress = nextFrame ? nextFrame.opacity : 0.0;
       const time = (Date.now() - this.startTime) / 1000;
       
-      const bassLevel = audioAnalysis ? audioAnalysis.bassLevel / 100 : 0;
-      const trebleLevel = audioAnalysis ? audioAnalysis.trebleLevel / 100 : 0;
-      const amplitude = audioAnalysis ? audioAnalysis.amplitude / 100 : 0;
+      // Scale ALL audio parameters by audioIntensity to prevent hold-phase leakage
+      const bassLevel = (audioAnalysis ? audioAnalysis.bassLevel / 100 : 0) * audioIntensity;
+      const trebleLevel = (audioAnalysis ? audioAnalysis.trebleLevel / 100 : 0) * audioIntensity;
+      const amplitude = (audioAnalysis ? audioAnalysis.amplitude / 100 : 0) * audioIntensity;
       
-      const flowSpeed = (dna[44] ?? 1.5) * 0.3;
+      // Scale all effects by audioIntensity (0 during hold phase, ramping up, then 1.0)
+      const flowSpeed = (dna[44] ?? 1.5) * 0.3 * audioIntensity;
       const flowScale = (dna[45] ?? 2.0) * 2.0;
-      const warpIntensity = (dna[46] ?? 1.0) * 0.02;
-      const colorShiftRate = (dna[47] ?? 1.0) * 0.5;
-      const detailLevel = dna[48] ?? 1.0;
-      const anomalyFactor = dna[49] ?? 0.5;
+      const warpIntensity = (dna[46] ?? 1.0) * 0.02 * audioIntensity;
+      const colorShiftRate = (dna[47] ?? 1.0) * 0.5 * audioIntensity;
+      const detailLevel = (dna[48] ?? 1.0) * audioIntensity;
+      const anomalyFactor = (dna[49] ?? 0.5) * audioIntensity;
       
       this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, this.framebuffer);
       this.gl.useProgram(this.flowProgram);
@@ -348,13 +391,40 @@ export class WebGLMorphRenderer {
       this.gl.uniform1i(this.gl.getUniformLocation(this.feedbackProgram, 'u_feedback'), 1);
       
       this.gl.uniform1f(this.gl.getUniformLocation(this.feedbackProgram, 'u_time'), time);
-      this.gl.uniform1f(this.gl.getUniformLocation(this.feedbackProgram, 'u_feedbackAmount'), amplitude * 0.5);
+      this.gl.uniform1f(this.gl.getUniformLocation(this.feedbackProgram, 'u_feedbackAmount'), amplitude * 0.5 * audioIntensity);
       this.gl.uniform2f(this.gl.getUniformLocation(this.feedbackProgram, 'u_resolution'), this.canvas.width, this.canvas.height);
       
       this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
       
       this.gl.bindTexture(this.gl.TEXTURE_2D, this.feedbackTexture);
       this.gl.copyTexImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, 0, 0, this.canvas.width, this.canvas.height, 0);
+      
+      // Particle system pass (G-Force-like tracing effect)
+      if (this.particleSystem && audioIntensity > 0) {
+        const now = Date.now();
+        const deltaTime = now - this.lastFrameTime;
+        this.lastFrameTime = now;
+
+        // Get cached image data from both frames
+        const currentImageData = this.getImageData(currentImg, currentFrame.imageUrl);
+        const nextImageData = this.getImageData(nextImg, nextFrame ? nextFrame.imageUrl : currentFrame.imageUrl);
+        
+        if (currentImageData && nextImageData) {
+          // Emit particles that trace from foreground to background
+          this.particleSystem.emitParticles(
+            currentImageData,
+            nextImageData,
+            audioIntensity,
+            morphProgress
+          );
+        }
+        
+        // Update particle physics
+        this.particleSystem.update(deltaTime);
+        
+        // Render particles on top
+        this.particleSystem.render();
+      }
       
     } catch (e) {
       console.error('[WebGLMorphRenderer] Render error:', e);
@@ -379,6 +449,13 @@ export class WebGLMorphRenderer {
     }
     
     this.imageCache.clear();
+    this.imageDataCache.clear();
+    
+    if (this.particleSystem) {
+      this.particleSystem.destroy();
+      this.particleSystem = null;
+    }
+    
     this.canvas = null;
     this.gl = null;
     this.container = null;

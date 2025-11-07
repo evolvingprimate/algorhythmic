@@ -168,9 +168,27 @@ vec3 hsl2rgb(vec3 hsl) {
   return rgb + m;
 }
 
+// Easing functions for smoother transitions
+float easeInOutQuad(float t) {
+  return t < 0.5 ? 2.0 * t * t : 1.0 - pow(-2.0 * t + 2.0, 2.0) / 2.0;
+}
+
+float easeInOutCubic(float t) {
+  return t < 0.5 ? 4.0 * t * t * t : 1.0 - pow(-2.0 * t + 2.0, 3.0) / 2.0;
+}
+
 void main() {
   vec2 uv = v_texCoord;
   vec2 pixel = gl_FragCoord.xy / u_resolution;
+  
+  // Apply easing to morph progress for smoother transitions
+  float easedProgress = easeInOutCubic(u_morphProgress);
+  
+  // Ken Burns effect: slow zoom on foreground image
+  // Zoom from 1.0x to 1.15x over the morph cycle
+  float kenBurnsScale = 1.0 + (easedProgress * 0.15);
+  vec2 uvCentered = uv - 0.5; // Center UV coordinates
+  vec2 uvZoomed = uvCentered / kenBurnsScale + 0.5; // Apply zoom
   
   // Create flowing displacement field
   float flowTime = u_time * u_flowSpeed;
@@ -188,8 +206,10 @@ void main() {
   vec2 displacement = vec2(noiseX, noiseY) * u_warpIntensity * (1.0 + bassWarp);
   
   // Sample both images with displacement
-  vec2 uvA = uv + displacement * (1.0 - u_morphProgress);
-  vec2 uvB = uv + displacement * u_morphProgress;
+  // Image A (foreground): Apply Ken Burns zoom effect + displacement
+  // Image B (background): Keep at normal scale, just displacement
+  vec2 uvA = uvZoomed + displacement * (1.0 - easedProgress);
+  vec2 uvB = uv + displacement * easedProgress;
   
   // Add anomaly factor for chaotic regions
   if(u_anomalyFactor > 0.5) {
@@ -212,8 +232,8 @@ void main() {
   hslA.x = fract(hslA.x + hueShift);
   hslB.x = fract(hslB.x + hueShift);
   
-  // Smooth HSL interpolation
-  vec3 hslMorphed = mix(hslA, hslB, smoothstep(0.0, 1.0, u_morphProgress));
+  // Smooth HSL interpolation with eased progress
+  vec3 hslMorphed = mix(hslA, hslB, smoothstep(0.0, 1.0, easedProgress));
   
   // Convert back to RGB
   vec3 finalColor = hsl2rgb(hslMorphed);
@@ -267,5 +287,59 @@ void main() {
   result.rgb += grain;
   
   gl_FragColor = result;
+}
+`;
+
+// Particle system shaders for G-Force-like tracing effects
+export const particleVertexShader = `
+attribute vec2 a_position;
+attribute vec2 a_velocity;
+attribute float a_life;
+attribute vec3 a_color;
+
+uniform float u_time;
+uniform float u_pointSize;
+uniform vec2 u_resolution;
+
+varying float v_life;
+varying vec3 v_color;
+
+void main() {
+  // Particle fades out as life decreases
+  v_life = a_life;
+  v_color = a_color;
+  
+  // Convert particle position to clip space
+  vec2 clipSpace = (a_position / u_resolution) * 2.0 - 1.0;
+  gl_Position = vec4(clipSpace.x, -clipSpace.y, 0.0, 1.0);
+  
+  // Point size based on life (larger when young, smaller when old)
+  gl_PointSize = u_pointSize * mix(0.5, 1.5, a_life);
+}
+`;
+
+export const particleFragmentShader = `
+precision highp float;
+
+varying float v_life;
+varying vec3 v_color;
+
+void main() {
+  // Create circular particle with soft edges
+  vec2 center = gl_PointCoord - 0.5;
+  float dist = length(center);
+  
+  if(dist > 0.5) {
+    discard;
+  }
+  
+  // Soft falloff for glow effect
+  float alpha = (1.0 - smoothstep(0.0, 0.5, dist)) * v_life * 0.8;
+  
+  // Add bright center
+  float glow = exp(-dist * 8.0) * 0.5;
+  vec3 finalColor = v_color * (1.0 + glow);
+  
+  gl_FragColor = vec4(finalColor, alpha);
 }
 `;
