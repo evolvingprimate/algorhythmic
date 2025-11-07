@@ -52,6 +52,7 @@ export interface IStorage {
   createArtSession(session: InsertArtSession): Promise<ArtSession>;
   getSessionHistory(sessionId: string, limit?: number): Promise<ArtSession[]>;
   getUserSavedArt(userId: string, limit?: number): Promise<ArtSession[]>;
+  getUserRecentArt(userId: string, limit?: number): Promise<ArtSession[]>;
   toggleArtSaved(artId: string, userId: string): Promise<ArtSession>;
   deleteArt(artId: string, userId: string): Promise<void>;
   
@@ -179,6 +180,13 @@ export class MemStorage implements IStorage {
   async getUserSavedArt(userId: string, limit: number = 100): Promise<ArtSession[]> {
     return Array.from(this.sessions.values())
       .filter(s => s.userId === userId && s.isSaved)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, limit);
+  }
+
+  async getUserRecentArt(userId: string, limit: number = 20): Promise<ArtSession[]> {
+    return Array.from(this.sessions.values())
+      .filter(s => s.userId === userId)
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .slice(0, limit);
   }
@@ -472,6 +480,15 @@ export class PostgresStorage implements IStorage {
       .select()
       .from(artSessions)
       .where(and(eq(artSessions.userId, userId), eq(artSessions.isSaved, true)))
+      .orderBy(desc(artSessions.createdAt))
+      .limit(limit);
+  }
+
+  async getUserRecentArt(userId: string, limit: number = 20): Promise<ArtSession[]> {
+    return await this.db
+      .select()
+      .from(artSessions)
+      .where(eq(artSessions.userId, userId))
       .orderBy(desc(artSessions.createdAt))
       .limit(limit);
   }
