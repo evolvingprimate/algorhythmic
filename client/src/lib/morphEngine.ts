@@ -37,10 +37,10 @@ export class MorphEngine {
   private readonly BEAT_THRESHOLD = 0.6; // Beat triggers when bass > 0.6
   private readonly BEAT_DELTA_THRESHOLD = 0.1; // AND delta > 0.1
   
-  private readonly HOLD_DURATION = 60000; // 1 minute pure static (60s)
-  private readonly RAMP_DURATION = 30000; // 30 seconds to ramp up effects (30s)
-  private readonly MORPH_DURATION = 210000; // 3.5 minutes morph (210s)
-  private readonly TOTAL_CYCLE = 300000; // 5 minutes total (60+30+210=300s)
+  private readonly HOLD_DURATION = 0; // No hold - start immediately
+  private readonly RAMP_DURATION = 8000; // 8 seconds to ramp up effects
+  private readonly MORPH_DURATION = 292000; // 4:52 minutes morph (292s)
+  private readonly TOTAL_CYCLE = 300000; // 5 minutes total (0+8+292=300s)
 
   constructor() {
     this.phaseStartTime = Date.now();
@@ -178,7 +178,7 @@ export class MorphEngine {
       burnIntensity = 0.0;
       
     } else if (cyclePosition < this.HOLD_DURATION + this.RAMP_DURATION) {
-      // Ramp-up phase: effects activate using bell-curve sigmoid (30s)
+      // Ramp-up phase: effects activate using bell-curve sigmoid
       phase = 'ramp';
       const rampElapsed = cyclePosition - this.HOLD_DURATION;
       const rawRampProgress = rampElapsed / this.RAMP_DURATION;
@@ -190,10 +190,11 @@ export class MorphEngine {
       frameForeshadowMix = 0;
       currentDNA = [...currentFrame.dnaVector];
       
-      // DJ Crossfade: Still pure Frame A during ramp
+      // DJ Crossfade: Pure Frame A during ramp, but start gentle Ken Burns zoom
       opacityA = 1.0;
       opacityB = 0.0;
-      zoomBias = 0.0;
+      // Gentle zoom-in during ramp (0 → 0.3)
+      zoomBias = smootherstep(rawRampProgress) * 0.3;
       parallaxStrength = 0.0;
       burnIntensity = 0.0;
       
@@ -218,10 +219,17 @@ export class MorphEngine {
       opacityA = 1.0 - crossfadeProgress;
       opacityB = crossfadeProgress;
       
-      // Ken Burns zoom: Bell curve that peaks at 50/50 blend
-      // 0 at start (pure A), 1.0 at midpoint (50/50 burn), 0 at end (pure B)
-      const burnPosition = Math.abs(crossfadeProgress - 0.5) * 2.0; // 0 at 50/50, 1 at edges
-      zoomBias = smootherstep(1.0 - burnPosition); // Smooth bell curve, exact 0→1→0
+      // Ken Burns zoom: Continuous from ramp (0.3) → peak (1.0) → end (0)
+      // Asymmetric bell curve that starts at ramp's end value
+      if (crossfadeProgress < 0.5) {
+        // First half: 0.3 → 1.0 (continues from ramp)
+        const firstHalfProgress = crossfadeProgress / 0.5; // 0→1
+        zoomBias = 0.3 + smootherstep(firstHalfProgress) * 0.7;
+      } else {
+        // Second half: 1.0 → 0 (smooth return to zero for Frame B)
+        const secondHalfProgress = (crossfadeProgress - 0.5) / 0.5; // 0→1
+        zoomBias = smootherstep(1.0 - secondHalfProgress);
+      }
       
       // Parallax strength: Increases during blend, peaks at burn
       parallaxStrength = zoomBias;
