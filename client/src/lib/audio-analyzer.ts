@@ -14,6 +14,14 @@ export class AudioAnalyzer {
   private dataArray: Uint8Array | null = null;
   private rafId: number | null = null;
   private onAnalysis: ((analysis: AudioAnalysis) => void) | null = null;
+  
+  // G-Force-style exponential smoothing with attack/decay envelopes
+  private smoothedBass: number = 0;
+  private smoothedMids: number = 0;
+  private smoothedTreble: number = 0;
+  private smoothedAmplitude: number = 0;
+  private readonly ATTACK_ALPHA = 0.3;  // Fast attack (responsive)
+  private readonly DECAY_ALPHA = 0.1;    // Slow decay (smooth)
 
   static async enumerateDevices(): Promise<AudioDevice[]> {
     try {
@@ -73,24 +81,36 @@ export class AudioAnalyzer {
 
       this.analyser.getByteFrequencyData(this.dataArray);
       
-      // Calculate audio characteristics
+      // Calculate raw audio characteristics
       const average = this.dataArray.reduce((a, b) => a + b, 0) / this.dataArray.length;
-      const amplitude = (average / 255) * 100;
+      const rawAmplitude = (average / 255) * 100;
       
       // Bass (low frequencies: 20Hz - 250Hz, roughly first 10% of spectrum)
       const bassRange = this.dataArray.slice(0, Math.floor(this.dataArray.length * 0.1));
-      const bassLevel = (bassRange.reduce((a, b) => a + b, 0) / bassRange.length / 255) * 100;
+      const rawBass = (bassRange.reduce((a, b) => a + b, 0) / bassRange.length / 255) * 100;
       
       // Mids (mid frequencies: 250Hz - 4000Hz, roughly 10% - 50% of spectrum)
       const midsRange = this.dataArray.slice(
         Math.floor(this.dataArray.length * 0.1), 
         Math.floor(this.dataArray.length * 0.5)
       );
-      const midsLevel = (midsRange.reduce((a, b) => a + b, 0) / midsRange.length / 255) * 100;
+      const rawMids = (midsRange.reduce((a, b) => a + b, 0) / midsRange.length / 255) * 100;
       
       // Treble/Highs (high frequencies: 4000Hz+, roughly last 50% of spectrum)
       const trebleRange = this.dataArray.slice(Math.floor(this.dataArray.length * 0.5));
-      const trebleLevel = (trebleRange.reduce((a, b) => a + b, 0) / trebleRange.length / 255) * 100;
+      const rawTreble = (trebleRange.reduce((a, b) => a + b, 0) / trebleRange.length / 255) * 100;
+      
+      // Apply G-Force-style exponential smoothing with attack/decay envelopes
+      // Fast attack when value increases, slow decay when value decreases
+      this.smoothedBass = this.applySmoothing(this.smoothedBass, rawBass);
+      this.smoothedMids = this.applySmoothing(this.smoothedMids, rawMids);
+      this.smoothedTreble = this.applySmoothing(this.smoothedTreble, rawTreble);
+      this.smoothedAmplitude = this.applySmoothing(this.smoothedAmplitude, rawAmplitude);
+      
+      const bassLevel = this.smoothedBass;
+      const midsLevel = this.smoothedMids;
+      const trebleLevel = this.smoothedTreble;
+      const amplitude = this.smoothedAmplitude;
       
       // Estimate tempo from amplitude variations
       const tempo = this.estimateTempo(amplitude);
@@ -119,6 +139,13 @@ export class AudioAnalyzer {
     };
     
     analyze();
+  }
+
+  private applySmoothing(smoothed: number, raw: number): number {
+    // G-Force-style exponential smoothing with attack/decay envelopes
+    // Fast attack when value increases, slow decay when value decreases
+    const alpha = raw > smoothed ? this.ATTACK_ALPHA : this.DECAY_ALPHA;
+    return alpha * raw + (1 - alpha) * smoothed;
   }
 
   private estimateTempo(amplitude: number): number {

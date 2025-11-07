@@ -457,8 +457,6 @@ export default function Display() {
   // Render loop for DNA morphing
   useEffect(() => {
     let frameCount = 0;
-    const HOLD_DURATION = 60000; // 1 minute
-    const RAMP_DURATION = 30000; // 30 seconds
     
     const renderLoop = () => {
       if (!morphEngineRef.current || !rendererRef.current || !isPlaying) {
@@ -470,53 +468,40 @@ export default function Display() {
       const currentFrame = morphEngineRef.current.getCurrentFrame();
       const nextFrame = morphEngineRef.current.getNextFrame();
 
-      // Calculate audio intensity based on cycle position
-      const debugInfo = morphEngineRef.current.getDebugInfo();
-      const elapsed = Date.now() - debugInfo.phaseStartTime;
-      const cyclePosition = elapsed % 300000; // 5-minute cycle
-      
-      let audioIntensity = 0;
-      if (cyclePosition < HOLD_DURATION) {
-        // Hold phase: NO audio effects
-        audioIntensity = 0;
-      } else if (cyclePosition < HOLD_DURATION + RAMP_DURATION) {
-        // Ramp-up phase: gradually increase from 0 to 1
-        const rampElapsed = cyclePosition - HOLD_DURATION;
-        audioIntensity = rampElapsed / RAMP_DURATION;
-      } else {
-        // Full morph phase: full audio reactivity
-        audioIntensity = 1.0;
-      }
-
-      // Scale audio analysis by intensity
-      const scaledAudio = currentAudioAnalysis && audioIntensity > 0 ? {
+      // Audio intensity now comes directly from morphState (no duplicate calculation needed)
+      const scaledAudio = currentAudioAnalysis && morphState.audioIntensity > 0 ? {
         frequency: currentAudioAnalysis.frequency,
-        bassLevel: currentAudioAnalysis.bassLevel * audioIntensity,
-        amplitude: currentAudioAnalysis.amplitude * audioIntensity,
+        bassLevel: currentAudioAnalysis.bassLevel * morphState.audioIntensity,
+        amplitude: currentAudioAnalysis.amplitude * morphState.audioIntensity,
         tempo: currentAudioAnalysis.tempo,
-        trebleLevel: currentAudioAnalysis.trebleLevel * audioIntensity,
+        trebleLevel: currentAudioAnalysis.trebleLevel * morphState.audioIntensity,
         mood: currentAudioAnalysis.mood,
       } : null;
 
       // Log every 5 seconds (300 frames at 60fps)
       if (frameCount % 300 === 0) {
-        console.log(`[RenderLoop] Phase: ${morphState.phase}, Progress: ${(morphState.phaseProgress * 100).toFixed(1)}%, AudioIntensity: ${(audioIntensity * 100).toFixed(0)}%, Frames: ${morphEngineRef.current.getFrameCount()}`);
+        console.log(`[RenderLoop] Phase: ${morphState.phase}, Progress: ${(morphState.phaseProgress * 100).toFixed(1)}%, MorphProgress: ${(morphState.morphProgress * 100).toFixed(1)}%, AudioIntensity: ${(morphState.audioIntensity * 100).toFixed(0)}%, Foreshadow: ${(morphState.frameForeshadowMix * 100).toFixed(0)}%, Frames: ${morphEngineRef.current.getFrameCount()}`);
       }
       frameCount++;
 
       if (currentFrame) {
         // During hold: show current frame only
-        // During morph: gradually transition from current (1→0) to next (0→1)
-        // At morphProgress=1.0: current opacity=0, next opacity=1.0 (pixel-perfect frame B)
-        const currentOpacity = morphState.phase === 'hold' ? 1.0 : (1.0 - morphState.phaseProgress);
-        const nextOpacity = morphState.phase === 'morph' ? morphState.phaseProgress : 0;
+        // Frame foreshadowing: Use frameForeshadowMix for smooth A→B blending
+        // - Hold phase: Show only current frame (100% opaque)
+        // - Ramp phase: Show only current frame with effects ramping up
+        // - Morph phase (0-20%): Still 100% current frame, effects active
+        // - Morph phase (20-100%): Start blending in next frame using sigmoid
+        const currentOpacity = morphState.phase === 'hold' || morphState.phase === 'ramp' 
+          ? 1.0 
+          : (1.0 - morphState.frameForeshadowMix);
+        const nextOpacity = morphState.frameForeshadowMix;
 
         rendererRef.current.render(
           { imageUrl: currentFrame.imageUrl, opacity: currentOpacity },
           nextFrame ? { imageUrl: nextFrame.imageUrl, opacity: nextOpacity } : null,
           morphState.currentDNA,
           scaledAudio,
-          audioIntensity
+          morphState.audioIntensity
         );
       }
 

@@ -24,6 +24,19 @@ export function easeInOutCubic(t: number): number {
     : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
+export function smoothstep(t: number): number {
+  const clamped = Math.max(0, Math.min(1, t));
+  return clamped * clamped * (3 - 2 * clamped);
+}
+
+export function smoothstepBellCurve(t: number): number {
+  return smoothstep(smoothstep(t));
+}
+
+export function sigmoid(t: number, steepness: number = 10): number {
+  return 1 / (1 + Math.exp(-steepness * (t - 0.5)));
+}
+
 export function interpolateDNA(
   dnaA: DNAVector,
   dnaB: DNAVector,

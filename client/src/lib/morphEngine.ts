@@ -1,7 +1,7 @@
-import { DNAVector, DNAFrame, interpolateDNA, applyAudioReactivity } from './dna';
+import { DNAVector, DNAFrame, interpolateDNA, applyAudioReactivity, smoothstepBellCurve, sigmoid } from './dna';
 import type { AudioAnalysis } from '@shared/schema';
 
-export type MorphPhase = 'hold' | 'morph';
+export type MorphPhase = 'hold' | 'ramp' | 'morph';
 
 export interface MorphState {
   phase: MorphPhase;
@@ -10,6 +10,9 @@ export interface MorphState {
   phaseProgress: number;
   totalProgress: number;
   currentDNA: DNAVector;
+  morphProgress: number;
+  audioIntensity: number;
+  frameForeshadowMix: number;
 }
 
 export class MorphEngine {
@@ -19,10 +22,10 @@ export class MorphEngine {
   private isRunning: boolean = false;
   private animationFrameId: number | null = null;
   
-  private readonly HOLD_DURATION = 60000; // 1 minute pure static
-  private readonly RAMP_DURATION = 30000; // 30 seconds to ramp up effects
-  private readonly MORPH_DURATION = 240000; // 4 minutes morph
-  private readonly TOTAL_CYCLE = 300000; // 5 minutes total
+  private readonly HOLD_DURATION = 60000; // 1 minute pure static (60s)
+  private readonly RAMP_DURATION = 30000; // 30 seconds to ramp up effects (30s)
+  private readonly MORPH_DURATION = 210000; // 3.5 minutes morph (210s)
+  private readonly TOTAL_CYCLE = 300000; // 5 minutes total (60+30+210=300s)
 
   constructor() {
     this.phaseStartTime = Date.now();
@@ -81,6 +84,9 @@ export class MorphEngine {
         phaseProgress: 0,
         totalProgress: 0,
         currentDNA: Array(50).fill(0.5),
+        morphProgress: 0,
+        audioIntensity: 0,
+        frameForeshadowMix: 0,
       };
     }
 
@@ -95,74 +101,96 @@ export class MorphEngine {
         phaseProgress: 0,
         totalProgress: 0,
         currentDNA: Array(50).fill(0.5),
+        morphProgress: 0,
+        audioIntensity: 0,
+        frameForeshadowMix: 0,
       };
     }
 
     let elapsed = Date.now() - this.phaseStartTime;
+    const cyclePosition = Math.min(elapsed, this.TOTAL_CYCLE); // Cap at TOTAL_CYCLE for final state
     
-    // CRITICAL FIX: Advance frame BEFORE applying modulo
-    // This ensures phaseProgress reaches 1.0 before cycling back
+    // Advance frame AFTER computing state (allows morphProgress to reach 1.0)
     if (elapsed >= this.TOTAL_CYCLE && this.frames.length > 1) {
-      this.currentIndex = (this.currentIndex + 1) % this.frames.length;
-      this.phaseStartTime = Date.now();
-      elapsed = 0;
-      console.log(`[MorphEngine] Advanced to frame ${this.currentIndex} (cycle complete)`);
+      // Set elapsed to TOTAL_CYCLE for this frame, then advance on next call
+      if (elapsed > this.TOTAL_CYCLE + 100) { // 100ms grace period for final state
+        this.currentIndex = (this.currentIndex + 1) % this.frames.length;
+        this.phaseStartTime = Date.now();
+        console.log(`[MorphEngine] Advanced to frame ${this.currentIndex} (cycle complete)`);
+      }
     }
-    
-    const cyclePosition = elapsed;
 
     let phase: MorphPhase;
     let phaseProgress: number;
+    let audioIntensity: number = 0;
+    let morphProgress: number = 0;
+    let frameForeshadowMix: number = 0;
     let currentDNA: DNAVector;
 
     if (cyclePosition < this.HOLD_DURATION) {
-      // Pure hold phase: completely static, no effects
+      // Pure hold phase: completely static, no effects (60s pristine viewing)
       phase = 'hold';
       phaseProgress = cyclePosition / this.HOLD_DURATION;
+      audioIntensity = 0;
+      morphProgress = 0;
+      frameForeshadowMix = 0;
       currentDNA = [...currentFrame.dnaVector];
+      
+    } else if (cyclePosition < this.HOLD_DURATION + this.RAMP_DURATION) {
+      // Ramp-up phase: effects activate using bell-curve sigmoid (30s)
+      phase = 'ramp';
+      const rampElapsed = cyclePosition - this.HOLD_DURATION;
+      const rawRampProgress = rampElapsed / this.RAMP_DURATION;
+      
+      // Use sigmoid for smooth bell-curve ramp-up
+      phaseProgress = sigmoid(rawRampProgress, 8);
+      audioIntensity = phaseProgress;
+      morphProgress = 0;
+      frameForeshadowMix = 0;
+      currentDNA = [...currentFrame.dnaVector];
+      
     } else {
-      // Morph phase: interpolate between frames
+      // Full morph phase: blend from frame A to frame B (210s)
       phase = 'morph';
-      const morphElapsed = cyclePosition - this.HOLD_DURATION;
-      phaseProgress = Math.min(morphElapsed / this.MORPH_DURATION, 1.0);
+      const morphElapsed = cyclePosition - this.HOLD_DURATION - this.RAMP_DURATION;
+      const rawMorphProgress = Math.min(morphElapsed / this.MORPH_DURATION, 1.0);
+      
+      // Apply double-smoothstep for bell-curve feel
+      morphProgress = smoothstepBellCurve(rawMorphProgress);
+      phaseProgress = rawMorphProgress;
+      audioIntensity = 1.0;
+      
+      // Frame foreshadowing: Start showing next frame at 20% into the blend
+      if (rawMorphProgress >= 0.2) {
+        // Map 20%-100% to 0%-100% foreshadow mix
+        const foreshadowT = (rawMorphProgress - 0.2) / 0.8;
+        // Use smoothstepBellCurve to ensure it reaches exactly 1.0
+        frameForeshadowMix = smoothstepBellCurve(foreshadowT);
+      } else {
+        frameForeshadowMix = 0;
+      }
 
       if (nextFrame && nextFrame.dnaVector) {
         currentDNA = interpolateDNA(
           currentFrame.dnaVector,
           nextFrame.dnaVector,
-          phaseProgress
+          morphProgress
         );
       } else {
         currentDNA = [...currentFrame.dnaVector];
       }
     }
 
-    // Apply audio reactivity with intensity ramp-up
-    if (audioAnalysis) {
-      let audioIntensity = 0;
-      
-      if (cyclePosition < this.HOLD_DURATION) {
-        // Hold phase: no audio effects (completely static)
-        audioIntensity = 0;
-      } else if (cyclePosition < this.HOLD_DURATION + this.RAMP_DURATION) {
-        // Ramp-up phase: gradually increase from 0 to 1 over 30 seconds
-        const rampElapsed = cyclePosition - this.HOLD_DURATION;
-        audioIntensity = rampElapsed / this.RAMP_DURATION;
-      } else {
-        // Full morph phase: full audio reactivity
-        audioIntensity = 1.0;
-      }
-
-      if (audioIntensity > 0) {
-        // Scale the audio analysis by intensity before applying
-        const scaledAnalysis = {
-          bassLevel: audioAnalysis.bassLevel * audioIntensity,
-          amplitude: audioAnalysis.amplitude * audioIntensity,
-          tempo: audioAnalysis.tempo,
-          trebleLevel: audioAnalysis.trebleLevel * audioIntensity,
-        };
-        currentDNA = applyAudioReactivity(currentDNA, scaledAnalysis);
-      }
+    // Apply audio reactivity with smooth intensity scaling
+    if (audioAnalysis && audioIntensity > 0) {
+      // Scale the audio analysis by intensity before applying
+      const scaledAnalysis = {
+        bassLevel: audioAnalysis.bassLevel * audioIntensity,
+        amplitude: audioAnalysis.amplitude * audioIntensity,
+        tempo: audioAnalysis.tempo,
+        trebleLevel: audioAnalysis.trebleLevel * audioIntensity,
+      };
+      currentDNA = applyAudioReactivity(currentDNA, scaledAnalysis);
     }
 
     const totalProgress = cyclePosition / this.TOTAL_CYCLE;
@@ -177,6 +205,9 @@ export class MorphEngine {
       phaseProgress,
       totalProgress,
       currentDNA,
+      morphProgress,
+      audioIntensity,
+      frameForeshadowMix,
     };
   }
 
