@@ -380,8 +380,11 @@ export default function Display() {
         // Start morph engine with loaded frames
         morphEngineRef.current.start();
         console.log(`[Display] MorphEngine started with ${morphEngineRef.current.getFrameCount()} frames`);
+        
+        // CRITICAL: Hide spinner immediately after engine starts (don't wait for validation to finish)
+        setIsValidatingImages(false);
         } finally {
-          // Always hide loading spinner, even if validation throws
+          // Failsafe: Always hide loading spinner, even if validation throws
           setIsValidatingImages(false);
         }
       };
@@ -733,7 +736,16 @@ export default function Display() {
         );
       } else {
         // Paused: show static frame with gentle Ken Burns effect (no audio, no morphing)
-        const staticDNA = currentFrame.dnaVector ? JSON.parse(currentFrame.dnaVector) : Array(50).fill(0.5);
+        let staticDNA: number[];
+        try {
+          staticDNA = currentFrame.dnaVector 
+            ? (typeof currentFrame.dnaVector === 'string' ? JSON.parse(currentFrame.dnaVector) : currentFrame.dnaVector)
+            : Array(50).fill(0.5);
+        } catch (e) {
+          console.error('[Display] DNA parse error:', e, 'Raw value:', currentFrame.dnaVector);
+          staticDNA = Array(50).fill(0.5);
+        }
+        
         rendererRef.current.render(
           { imageUrl: currentFrame.imageUrl, opacity: 1.0 },
           null, // No next frame when paused
