@@ -703,11 +703,19 @@ export default function Display() {
     <div className="h-screen w-screen overflow-hidden bg-background relative">
       {/* Art Canvas */}
       <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-background via-primary/5 to-background">
-        {/* Morphing Canvas Container - always present for renderer initialization */}
+        {/* Fallback: Regular image (visible while morphing debugs) */}
+        {currentImage && (
+          <img 
+            src={currentImage} 
+            alt="Generated artwork"
+            className="w-full h-full object-cover absolute inset-0"
+          />
+        )}
+        {/* Morphing Canvas Container - always present for renderer initialization (hidden for now) */}
         <div 
           id="morphing-canvas-container"
           className="w-full h-full absolute inset-0"
-          style={{ display: currentImage ? 'block' : 'none' }}
+          style={{ display: 'none' }}
         />
         {/* Audio reactive glow effect */}
         {currentImage && (

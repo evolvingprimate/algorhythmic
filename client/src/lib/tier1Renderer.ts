@@ -55,12 +55,15 @@ export class Tier1Renderer {
 
     return new Promise((resolve, reject) => {
       const img = new Image();
-      img.crossOrigin = 'anonymous';
+      // Remove crossOrigin to avoid CORS issues with DALL-E images
       img.onload = () => {
         this.imageCache.set(url, img);
         resolve(img);
       };
-      img.onerror = reject;
+      img.onerror = (e) => {
+        console.error('[Tier1Renderer] Failed to load image:', url, e);
+        reject(e);
+      };
       img.src = url;
     });
   }
