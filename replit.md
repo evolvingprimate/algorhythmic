@@ -50,6 +50,9 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 - **User Gallery Page**: Protected route to display, save, delete, and download user artworks.
 - **Subscription Page**: Stripe payment integration, 7-day free trial, feature comparison across tiers.
 - **Style Selector**: Visual grid of 71 artistic styles across 8 master groups, with dynamic AI mode.
+- **Debug Overlay**: Toggle-able verbose mode (Bug icon button + D key) showing active effects, frame opacities, zoom levels, shader status, and FPS in real-time.
+- **Effects Control Menu**: Sphere icon with color ramp opens slide-out menu with checkboxes and sliders to toggle/adjust Trace, Bloom, Chromatic Drift, Particles, and Ken Burns effects individually.
+- **Effect History Logging**: Per-frame JSON logs capturing zoom, active effects, DNA vectors, audio analysis, and timing data for debugging and analysis. Downloadable via debug menu.
 - **Design System**: Purple primary color, Inter font, Shadcn UI components, subtle animations, mobile-first and TV-optimized responsive design.
 
 ## External Dependencies

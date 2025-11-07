@@ -29,11 +29,15 @@ import {
   Music,
   Brain,
   Clock,
-  Zap
+  Zap,
+  Bug,
+  Palette
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { StyleSelector } from "@/components/style-selector";
 import { AudioSourceSelector } from "@/components/audio-source-selector";
+import { DebugOverlay, type DebugStats } from "@/components/debug-overlay";
+import { EffectsControlMenu, type EffectsConfig } from "@/components/effects-control-menu";
 import { useToast } from "@/hooks/use-toast";
 import { AudioAnalyzer } from "@/lib/audio-analyzer";
 import { WebSocketClient } from "@/lib/websocket-client";
@@ -43,6 +47,7 @@ import { MorphEngine } from "@/lib/morphEngine";
 import { WebGLMorphRenderer } from "@/lib/webglMorphRenderer";
 import { detectDeviceCapabilities } from "@/lib/deviceDetection";
 import { parseDNAFromSession } from "@/lib/dna";
+import { EffectLogger } from "@/lib/effectLogger";
 import type { AudioAnalysis, ArtVote, ArtPreference, MusicIdentification } from "@shared/schema";
 
 export default function Display() {
@@ -70,6 +75,43 @@ export default function Display() {
   const [showCountdown, setShowCountdown] = useState(false); // hide countdown timer (using 5min morph cycle)
   const [isValidatingImages, setIsValidatingImages] = useState(false); // show spinner during validation/auto-generation
   
+  // Debug and Effects Control
+  const [showDebugOverlay, setShowDebugOverlay] = useState(false);
+  const [showEffectsMenu, setShowEffectsMenu] = useState(false);
+  const [debugStats, setDebugStats] = useState<DebugStats>({
+    fps: 0,
+    frameAOpacity: 0,
+    frameBOpacity: 0,
+    morphProgress: 0,
+    zoomLevel: 1.0,
+    activeEffects: {
+      trace: true,
+      bloom: true,
+      chromaticDrift: true,
+      particles: true,
+      kenBurns: true,
+    },
+    shaderStatus: {
+      coreReady: false,
+      traceEnabled: false,
+      bloomEnabled: false,
+      compositeEnabled: false,
+    },
+    audioMetrics: {
+      bassLevel: 0,
+      midsLevel: 0,
+      trebleLevel: 0,
+      beatBurst: 0,
+    },
+  });
+  const [effectsConfig, setEffectsConfig] = useState<EffectsConfig>({
+    trace: { enabled: true, intensity: 0.7 },
+    bloom: { enabled: true, intensity: 0.6 },
+    chromaticDrift: { enabled: true, intensity: 0.5 },
+    particles: { enabled: true, density: 0.7 },
+    kenBurns: { enabled: true, maxZoom: 1.2 },
+  });
+  
   // Image history for back/forward navigation
   const [imageHistory, setImageHistory] = useState<Array<{
     imageUrl: string;
@@ -95,6 +137,9 @@ export default function Display() {
   const historyIndexRef = useRef<number>(-1);
   const isGeneratingRef = useRef<boolean>(false);
   const isFallbackGeneratingRef = useRef<boolean>(false); // Guard to prevent infinite validation loop
+  const effectLoggerRef = useRef<EffectLogger>(new EffectLogger());
+  const showDebugOverlayRef = useRef<boolean>(false);
+  const effectsConfigRef = useRef<EffectsConfig>(effectsConfig);
   
   // Sync refs with state
   useEffect(() => {
@@ -104,6 +149,14 @@ export default function Display() {
   useEffect(() => {
     isGeneratingRef.current = isGenerating;
   }, [isGenerating]);
+  
+  useEffect(() => {
+    showDebugOverlayRef.current = showDebugOverlay;
+  }, [showDebugOverlay]);
+  
+  useEffect(() => {
+    effectsConfigRef.current = effectsConfig;
+  }, [effectsConfig]);
   
   const { toast } = useToast();
   const { user, isAuthenticated } = useAuth();
@@ -149,6 +202,19 @@ export default function Display() {
       setDynamicMode(preferences.dynamicMode);
     }
   }, [preferences]);
+
+  // Keyboard shortcuts for debug overlay
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // 'D' key toggles debug overlay
+      if (e.key === 'd' || e.key === 'D') {
+        setShowDebugOverlay(prev => !prev);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // Helper: Check if image is black/blank by analyzing pixel data
   const isImageBlank = (img: HTMLImageElement): boolean => {
@@ -682,11 +748,23 @@ export default function Display() {
   // Render loop for DNA morphing
   useEffect(() => {
     let frameCount = 0;
+    let lastFpsUpdate = performance.now();
+    let fpsFrameCount = 0;
+    let currentFps = 0;
     
     const renderLoop = () => {
       if (!morphEngineRef.current || !rendererRef.current) {
         animationFrameRef.current = requestAnimationFrame(renderLoop);
         return;
+      }
+
+      // FPS tracking
+      const now = performance.now();
+      fpsFrameCount++;
+      if (now - lastFpsUpdate >= 1000) {
+        currentFps = fpsFrameCount;
+        fpsFrameCount = 0;
+        lastFpsUpdate = now;
       }
 
       // Always get current frame to display, even when paused
@@ -746,6 +824,73 @@ export default function Display() {
           morphState.parallaxStrength,
           morphState.burnIntensity
         );
+
+        // Update debug stats for morphing mode (using ref to avoid render loop restart)
+        if (showDebugOverlayRef.current) {
+          const config = effectsConfigRef.current;
+          setDebugStats({
+            fps: currentFps,
+            frameAOpacity: currentOpacity,
+            frameBOpacity: nextOpacity,
+            morphProgress: morphState.morphProgress,
+            zoomLevel: 1.0 + morphState.zoomBias,
+            activeEffects: {
+              trace: config.trace.enabled,
+              bloom: config.bloom.enabled,
+              chromaticDrift: config.chromaticDrift.enabled,
+              particles: config.particles.enabled,
+              kenBurns: config.kenBurns.enabled,
+            },
+            shaderStatus: {
+              coreReady: true,
+              traceEnabled: config.trace.enabled,
+              bloomEnabled: config.bloom.enabled,
+              compositeEnabled: true,
+            },
+            audioMetrics: scaledAudio ? {
+              bassLevel: scaledAudio.bassLevel / 100,
+              midsLevel: 0,
+              trebleLevel: scaledAudio.trebleLevel / 100,
+              beatBurst: morphState.beatBurst,
+            } : {
+              bassLevel: 0,
+              midsLevel: 0,
+              trebleLevel: 0,
+              beatBurst: 0,
+            },
+          });
+        }
+
+        // Log effect history (every 60 frames = ~1 second)
+        if (frameCount % 60 === 0) {
+          const config = effectsConfigRef.current;
+          effectLoggerRef.current.logFrame({
+            zoomLevel: 1.0 + morphState.zoomBias,
+            parallaxStrength: morphState.parallaxStrength,
+            burnIntensity: morphState.burnIntensity,
+            morphProgress: morphState.morphProgress,
+            frameAOpacity: currentOpacity,
+            frameBOpacity: nextOpacity,
+            activeEffects: {
+              trace: config.trace.enabled,
+              traceIntensity: config.trace.intensity,
+              bloom: config.bloom.enabled,
+              bloomIntensity: config.bloom.intensity,
+              chromaticDrift: config.chromaticDrift.enabled,
+              chromaticDriftIntensity: config.chromaticDrift.intensity,
+              particles: config.particles.enabled,
+              particleDensity: config.particles.density,
+              kenBurns: config.kenBurns.enabled,
+              kenBurnsMaxZoom: config.kenBurns.maxZoom,
+            },
+            audioAnalysis: scaledAudio,
+            dna: morphState.currentDNA,
+            imageUrls: {
+              frameA: currentFrame.imageUrl,
+              frameB: nextFrame?.imageUrl || null,
+            },
+          });
+        }
       } else {
         // STATIC MODE (single frame)
         let staticDNA: number[];
@@ -770,6 +915,37 @@ export default function Display() {
           0.0,  // parallaxStrength
           0.0   // burnIntensity
         );
+
+        // Update debug stats for static mode (using ref to avoid render loop restart)
+        if (showDebugOverlayRef.current) {
+          const config = effectsConfigRef.current;
+          setDebugStats({
+            fps: currentFps,
+            frameAOpacity: 1.0,
+            frameBOpacity: 0,
+            morphProgress: 0,
+            zoomLevel: 1.0,
+            activeEffects: {
+              trace: config.trace.enabled,
+              bloom: config.bloom.enabled,
+              chromaticDrift: config.chromaticDrift.enabled,
+              particles: config.particles.enabled,
+              kenBurns: config.kenBurns.enabled,
+            },
+            shaderStatus: {
+              coreReady: true,
+              traceEnabled: config.trace.enabled,
+              bloomEnabled: config.bloom.enabled,
+              compositeEnabled: true,
+            },
+            audioMetrics: {
+              bassLevel: 0,
+              midsLevel: 0,
+              trebleLevel: 0,
+              beatBurst: 0,
+            },
+          });
+        }
       }
 
       animationFrameRef.current = requestAnimationFrame(renderLoop);
@@ -1185,6 +1361,29 @@ export default function Display() {
                 </Button>
               </>
             )}
+            
+            {/* Debug Overlay Toggle */}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setShowDebugOverlay(!showDebugOverlay)}
+              data-testid="button-toggle-debug"
+              className="h-8 w-8"
+            >
+              <Bug className={`h-4 w-4 ${showDebugOverlay ? 'text-green-400' : 'text-muted-foreground'}`} />
+            </Button>
+            
+            {/* Effects Control Menu Toggle */}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setShowEffectsMenu(!showEffectsMenu)}
+              data-testid="button-toggle-effects"
+              className="h-8 w-8"
+            >
+              <Palette className={`h-4 w-4 ${showEffectsMenu ? 'text-purple-400' : 'text-muted-foreground'}`} />
+            </Button>
+            
             <ThemeToggle />
             <Button 
               variant="outline" 
@@ -1450,6 +1649,24 @@ export default function Display() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Debug Overlay */}
+      {showDebugOverlay && (
+        <DebugOverlay
+          stats={debugStats}
+          onClose={() => setShowDebugOverlay(false)}
+          onDownloadLogs={() => effectLoggerRef.current.downloadLogs()}
+        />
+      )}
+
+      {/* Effects Control Menu */}
+      {showEffectsMenu && (
+        <EffectsControlMenu
+          config={effectsConfig}
+          onChange={setEffectsConfig}
+          onClose={() => setShowEffectsMenu(false)}
+        />
+      )}
     </div>
   );
 }

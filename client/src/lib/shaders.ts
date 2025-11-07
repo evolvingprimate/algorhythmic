@@ -550,14 +550,14 @@ void main() {
   vec2 traceUV = uv + vec2(u_traceParallaxOffset) / u_resolution;
   float traceMask = texture2D(u_traceTexture, traceUV).r;
   
-  // Create multiply blend: darken where trace is present
-  // This makes Frame B appear to "emerge" from behind Frame A
-  // Mix between original color (1.0) and darkened version based on trace strength
-  vec3 darkenedColor = finalColor * (1.0 - traceMask);
-  finalColor = mix(finalColor, darkenedColor, u_traceMultiplyStrength);
+  // FIXED: Use additive trace blending instead of destructive multiplication
+  // Apply trace as a subtle darkening modifier that preserves luminance floor
+  // traceMask ranges 0-1, we scale it to preserve base brightness
+  float traceDarken = traceMask * u_traceMultiplyStrength * 0.3; // Max 30% darkening
+  finalColor *= mix(1.0, 0.7, traceDarken); // Never darker than 70% of original
   
-  // Add subtle glow from trace for ethereal effect
-  vec3 traceGlow = vec3(traceMask) * u_traceMultiplyStrength * 0.1;
+  // Add subtle glow from trace for ethereal birthing effect
+  vec3 traceGlow = vec3(traceMask) * u_traceMultiplyStrength * 0.15;
   finalColor += traceGlow * u_burnIntensity; // Glow peaks during burn
   
   // Subtle vignette for depth
