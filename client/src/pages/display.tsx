@@ -690,7 +690,8 @@ export default function Display() {
       const currentFrame = morphEngineRef.current.getCurrentFrame();
       
       if (!currentFrame) {
-        // No frames loaded yet, keep looping
+        // No frames loaded yet - UI shows "Ready to Create" message
+        // (background gradient is visible, never black)
         animationFrameRef.current = requestAnimationFrame(renderLoop);
         return;
       }
@@ -732,11 +733,11 @@ export default function Display() {
         );
       } else {
         // Paused: show static frame with gentle Ken Burns effect (no audio, no morphing)
-        const staticDNA: number[] = currentFrame.dnaVector ? JSON.parse(currentFrame.dnaVector) : Array(50).fill(0.5);
+        const staticDNA = currentFrame.dnaVector ? JSON.parse(currentFrame.dnaVector) : Array(50).fill(0.5);
         rendererRef.current.render(
           { imageUrl: currentFrame.imageUrl, opacity: 1.0 },
           null, // No next frame when paused
-          staticDNA as any, // Type cast for DNAVector
+          staticDNA, // DNAVector is number[]
           null, // No audio
           0.0, // No audio intensity
           0.0  // No beat burst
