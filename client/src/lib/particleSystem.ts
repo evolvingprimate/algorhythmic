@@ -16,7 +16,13 @@ export class ParticleSystem {
   private program: WebGLProgram | null = null;
   private particles: Particle[] = [];
   private maxParticles: number = 500;
-  private emissionRate: number = 5; // particles per frame
+  private emissionRate: number = 20; // particles per burst (increased for impact)
+  
+  // Beat detection for burst emission
+  private lastBassLevel: number = 0;
+  private cooldownTimer: number = 0;
+  private cooldownDuration: number = 0; // Random cooldown between bursts
+  private bassThreshold: number = 0.6; // Threshold for beat detection
   
   private positionBuffer: WebGLBuffer | null = null;
   private velocityBuffer: WebGLBuffer | null = null;
@@ -91,16 +97,74 @@ export class ParticleSystem {
     ];
   }
 
+  // Calculate luminance gradient (edge detection)
+  private calculateGradient(imageData: ImageData, x: number, y: number): number {
+    const ix = Math.floor(x);
+    const iy = Math.floor(y);
+    
+    // Sobel operator for edge detection
+    const getLum = (dx: number, dy: number): number => {
+      const px = Math.max(0, Math.min(imageData.width - 1, ix + dx));
+      const py = Math.max(0, Math.min(imageData.height - 1, iy + dy));
+      const idx = (py * imageData.width + px) * 4;
+      return (imageData.data[idx] * 0.299 + imageData.data[idx + 1] * 0.587 + imageData.data[idx + 2] * 0.114) / 255;
+    };
+    
+    const gx = -getLum(-1, -1) + getLum(1, -1) - 2 * getLum(-1, 0) + 2 * getLum(1, 0) - getLum(-1, 1) + getLum(1, 1);
+    const gy = -getLum(-1, -1) - 2 * getLum(0, -1) - getLum(1, -1) + getLum(-1, 1) + 2 * getLum(0, 1) + getLum(1, 1);
+    
+    return Math.sqrt(gx * gx + gy * gy);
+  }
+
+  // Find edge positions for emission (rejection sampling)
+  private findEdgePosition(imageData: ImageData): { x: number; y: number } {
+    // Try rejection sampling up to 10 times to find edge
+    for (let attempts = 0; attempts < 10; attempts++) {
+      const x = Math.random() * imageData.width;
+      const y = Math.random() * imageData.height;
+      const gradient = this.calculateGradient(imageData, x, y);
+      
+      // Accept positions with gradient > threshold (edges)
+      if (gradient > 0.3) {
+        // Scale to canvas coordinates
+        return {
+          x: (x / imageData.width) * this.canvas.width,
+          y: (y / imageData.height) * this.canvas.height
+        };
+      }
+    }
+    
+    // Fallback to random if no edge found
+    return {
+      x: Math.random() * this.canvas.width,
+      y: Math.random() * this.canvas.height
+    };
+  }
+
   // Emit new particles that trace from foreground to background image
   emitParticles(
     foregroundData: ImageData,
     backgroundData: ImageData,
     audioIntensity: number,
-    morphProgress: number
+    morphProgress: number,
+    bassLevel: number = 0
   ): void {
     if (audioIntensity === 0) return; // No emission during hold phase
 
-    const emissionCount = Math.floor(this.emissionRate * audioIntensity);
+    // Detect bass peak (beat) for burst emission
+    const bassPeak = bassLevel > this.bassThreshold && bassLevel > this.lastBassLevel + 0.1;
+    this.lastBassLevel = bassLevel;
+    
+    // Only emit on bass peaks when not in cooldown
+    if (!bassPeak || this.cooldownTimer > 0) {
+      return; // No constant emission - only bursts!
+    }
+    
+    // Start cooldown with random duration (1-3 seconds)
+    this.cooldownDuration = 60 + Math.random() * 120; // 60-180 frames @ 60fps
+    this.cooldownTimer = this.cooldownDuration;
+    
+    const emissionCount = Math.floor(this.emissionRate);
     
     for (let i = 0; i < emissionCount; i++) {
       if (this.particles.length >= this.maxParticles) {
@@ -108,9 +172,10 @@ export class ParticleSystem {
         this.particles.shift();
       }
 
-      // Sample from corresponding pixels in both images
-      const x = Math.random() * this.canvas.width;
-      const y = Math.random() * this.canvas.height;
+      // Find edge position from foreground image for shape tracing
+      const edgePos = this.findEdgePosition(foregroundData);
+      const x = edgePos.x;
+      const y = edgePos.y;
 
       // Scale to image dimensions
       const imgX = (x / this.canvas.width) * foregroundData.width;
@@ -133,13 +198,16 @@ export class ParticleSystem {
       const angle = Math.atan2(y - centerY, x - centerX) + (Math.random() - 0.5) * 0.5;
       const speed = 0.5 + Math.random() * 1.5;
 
+      // Shorter, randomized lifetimes (0.5-1.0 seconds)
+      const maxLife = 0.5 + Math.random() * 0.5;
+      
       this.particles.push({
         x,
         y,
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
-        life: 1.0,
-        maxLife: 1.0,
+        life: maxLife, // Start at maxLife, not 1.0!
+        maxLife: maxLife,
         color
       });
     }
@@ -147,6 +215,11 @@ export class ParticleSystem {
 
   update(deltaTime: number): void {
     const dt = deltaTime / 16.67; // Normalize to 60fps
+    
+    // Decrement cooldown timer based on actual elapsed time (not frames)
+    if (this.cooldownTimer > 0) {
+      this.cooldownTimer -= dt; // Use normalized delta time, not frame count
+    }
 
     for (let i = this.particles.length - 1; i >= 0; i--) {
       const p = this.particles[i];
@@ -160,8 +233,9 @@ export class ParticleSystem {
       p.vx *= 0.99;
       p.vy *= 0.99;
       
-      // Decrease life
-      p.life -= 0.01 * dt;
+      // Decrease life proportional to elapsed time
+      // dt is normalized to 60fps, so 1 second = 60 normalized units
+      p.life -= dt / 60.0; // Particle dies after maxLife seconds
       
       // Remove dead particles
       if (p.life <= 0) {

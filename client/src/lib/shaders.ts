@@ -177,6 +177,23 @@ float easeInOutCubic(float t) {
   return t < 0.5 ? 4.0 * t * t * t : 1.0 - pow(-2.0 * t + 2.0, 3.0) / 2.0;
 }
 
+// Curl noise for organic, fluid-like flow (like ferrofluid)
+vec2 curlNoise(vec3 p) {
+  float eps = 0.01;
+  float n1 = snoise(p + vec3(eps, 0.0, 0.0));
+  float n2 = snoise(p - vec3(eps, 0.0, 0.0));
+  float n3 = snoise(p + vec3(0.0, eps, 0.0));
+  float n4 = snoise(p - vec3(0.0, eps, 0.0));
+  
+  // Compute curl (divergence-free flow)
+  return vec2(n3 - n4, n2 - n1) / (2.0 * eps);
+}
+
+// Luminance calculation
+float luminance(vec3 color) {
+  return dot(color, vec3(0.299, 0.587, 0.114));
+}
+
 void main() {
   vec2 uv = v_texCoord;
   vec2 pixel = gl_FragCoord.xy / u_resolution;
@@ -184,51 +201,71 @@ void main() {
   // Apply easing to morph progress for smoother transitions
   float easedProgress = easeInOutCubic(u_morphProgress);
   
-  // Ken Burns effect: slow zoom on foreground image
-  // Zoom from 1.0x to 1.15x over the morph cycle
-  float kenBurnsScale = 1.0 + (easedProgress * 0.15);
-  vec2 uvCentered = uv - 0.5; // Center UV coordinates
-  vec2 uvZoomed = uvCentered / kenBurnsScale + 0.5; // Apply zoom
+  // Enhanced Ken Burns effect: zoom from 1.0x to 1.3x with slight parallax
+  float kenBurnsScale = 1.0 + (easedProgress * 0.3);
+  vec2 uvCentered = uv - 0.5;
+  // Add subtle parallax translation
+  vec2 parallax = uvCentered * easedProgress * 0.05;
+  vec2 uvZoomed = uvCentered / kenBurnsScale + 0.5 + parallax;
   
-  // Create flowing displacement field
-  float flowTime = u_time * u_flowSpeed;
-  vec3 flowPos = vec3(uv * u_flowScale, flowTime * 0.1);
+  // Low-frequency organic flow (ferrofluid-like)
+  float flowTime = u_time * u_flowSpeed * 0.5; // Slower for softer movement
+  vec3 flowPos = vec3(uv * u_flowScale * 0.3, flowTime * 0.08); // Lower frequency
   
-  // Multi-octave noise for organic movement
-  float noiseX = fbm(flowPos + vec3(100.0, 0.0, 0.0), 4);
-  float noiseY = fbm(flowPos + vec3(0.0, 100.0, 0.0), 4);
+  // Use curl noise for divergence-free, organic flow
+  vec2 curl = curlNoise(flowPos);
   
-  // Audio-reactive warp modulation
-  float bassWarp = u_bassLevel * 0.05;
-  float trebleDetail = u_trebleLevel * 0.5 + 0.5;
+  // Soften displacement with smoothstep falloff based on distance from center
+  float distFromCenter = length(pixel - 0.5) * 2.0;
+  float edgeSoftness = smoothstep(1.0, 0.3, distFromCenter);
   
-  // Curl noise for fluid-like displacement
-  vec2 displacement = vec2(noiseX, noiseY) * u_warpIntensity * (1.0 + bassWarp);
+  // Audio-reactive warp with subtle modulation
+  float bassWarp = u_bassLevel * 0.03; // Reduced for softer effect
   
-  // Sample both images with displacement
-  // Image A (foreground): Apply Ken Burns zoom effect + displacement
-  // Image B (background): Keep at normal scale, just displacement
-  vec2 uvA = uvZoomed + displacement * (1.0 - easedProgress);
-  vec2 uvB = uv + displacement * easedProgress;
+  // Combine curl with low-frequency noise for water-like fluidity
+  float lowFreqNoise = snoise(vec3(uv * 2.0, flowTime * 0.1));
+  vec2 fluidFlow = curl + vec2(lowFreqNoise * 0.3);
   
-  // Add anomaly factor for chaotic regions
-  if(u_anomalyFactor > 0.5) {
-    float anomaly = fbm(vec3(uv * 8.0, flowTime * 0.3), 3);
-    if(anomaly > 0.3) {
-      uvA += vec2(anomaly * 0.02);
-      uvB -= vec2(anomaly * 0.02);
-    }
+  // Apply smooth, luminance-weighted displacement
+  vec2 displacement = fluidFlow * u_warpIntensity * (1.0 + bassWarp) * edgeSoftness * 0.02;
+  
+  // Sample both images with gentle displacement
+  vec2 uvA = uvZoomed + displacement * (1.0 - easedProgress) * 0.5;
+  vec2 uvB = uv + displacement * easedProgress * 0.5;
+  
+  // Gentle anomaly effect (optional chaotic regions)
+  if(u_anomalyFactor > 0.7) {
+    float anomaly = snoise(vec3(uv * 4.0, flowTime * 0.2)); // Lower frequency
+    float anomalyWeight = smoothstep(0.5, 0.7, anomaly); // Soft threshold
+    uvA += vec2(anomaly * 0.01 * anomalyWeight);
+    uvB -= vec2(anomaly * 0.01 * anomalyWeight);
   }
   
   vec4 colorA = texture2D(u_imageA, uvA);
   vec4 colorB = texture2D(u_imageB, uvB);
   
+  // Calculate luminance for both images to weight displacement
+  float lumA = luminance(colorA.rgb);
+  float lumB = luminance(colorB.rgb);
+  float avgLum = mix(lumA, lumB, easedProgress);
+  
+  // Apply additional luminance-weighted displacement for watercolor effect
+  // Darker areas get more displacement (like pigment pooling)
+  float lumWeight = smoothstep(0.3, 0.7, 1.0 - avgLum);
+  vec2 extraDisp = fluidFlow * lumWeight * 0.01;
+  uvA += extraDisp;
+  uvB += extraDisp;
+  
+  // Re-sample with luminance-weighted displacement
+  colorA = texture2D(u_imageA, uvA);
+  colorB = texture2D(u_imageB, uvB);
+  
   // Intelligent color morphing in HSL space
   vec3 hslA = rgb2hsl(colorA.rgb);
   vec3 hslB = rgb2hsl(colorB.rgb);
   
-  // Hue rotation with color shift rate
-  float hueShift = u_colorShiftRate * sin(flowTime * 0.5) * 0.1;
+  // Subtle hue rotation with color shift rate
+  float hueShift = u_colorShiftRate * sin(flowTime * 0.5) * 0.05; // Reduced for subtlety
   hslA.x = fract(hslA.x + hueShift);
   hslB.x = fract(hslB.x + hueShift);
   
@@ -238,9 +275,10 @@ void main() {
   // Convert back to RGB
   vec3 finalColor = hsl2rgb(hslMorphed);
   
-  // Add detail layer based on high-frequency noise
-  float detail = fbm(vec3(uv * 20.0 * trebleDetail, flowTime * 0.2), int(u_detailLevel * 4.0 + 2.0));
-  finalColor += detail * 0.05 * u_amplitude;
+  // Softer detail layer using low-frequency noise (not harsh fbm)
+  float trebleDetail = u_trebleLevel * 0.3 + 0.3; // Reduced range
+  float detail = snoise(vec3(uv * 8.0 * trebleDetail, flowTime * 0.15)) * 0.5 + 0.5;
+  finalColor += (detail - 0.5) * 0.02 * u_amplitude; // Subtle detail layer
   
   // Subtle vignette for depth
   float vignette = smoothstep(0.8, 0.2, length(pixel - 0.5));

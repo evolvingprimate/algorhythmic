@@ -411,11 +411,13 @@ export class WebGLMorphRenderer {
         
         if (currentImageData && nextImageData) {
           // Emit particles that trace from foreground to background
+          // Pass bassLevel for beat-triggered burst emission
           this.particleSystem.emitParticles(
             currentImageData,
             nextImageData,
             audioIntensity,
-            morphProgress
+            morphProgress,
+            bassLevel
           );
         }
         

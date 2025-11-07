@@ -98,8 +98,18 @@ export class MorphEngine {
       };
     }
 
-    const elapsed = Date.now() - this.phaseStartTime;
-    const cyclePosition = elapsed % this.TOTAL_CYCLE;
+    let elapsed = Date.now() - this.phaseStartTime;
+    
+    // CRITICAL FIX: Advance frame BEFORE applying modulo
+    // This ensures phaseProgress reaches 1.0 before cycling back
+    if (elapsed >= this.TOTAL_CYCLE && this.frames.length > 1) {
+      this.currentIndex = (this.currentIndex + 1) % this.frames.length;
+      this.phaseStartTime = Date.now();
+      elapsed = 0;
+      console.log(`[MorphEngine] Advanced to frame ${this.currentIndex} (cycle complete)`);
+    }
+    
+    const cyclePosition = elapsed;
 
     let phase: MorphPhase;
     let phaseProgress: number;
@@ -124,12 +134,6 @@ export class MorphEngine {
         );
       } else {
         currentDNA = [...currentFrame.dnaVector];
-      }
-
-      if (phaseProgress >= 1.0 && this.frames.length > 1) {
-        this.currentIndex = (this.currentIndex + 1) % this.frames.length;
-        this.phaseStartTime = Date.now();
-        console.log(`[MorphEngine] Advanced to frame ${this.currentIndex}`);
       }
     }
 
