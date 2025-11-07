@@ -874,14 +874,9 @@ export default function Display() {
   };
 
   const handleStartListening = () => {
-    // In dynamic mode, no style selection needed. Otherwise, require style selection.
-    if (!dynamicMode && selectedStyles.length === 0) {
-      setShowStyleSelector(true);
-      return;
-    }
-
-    // Show audio source selector modal
-    setShowAudioSourceSelector(true);
+    // ALWAYS show style selector first, even if user has saved preferences
+    // This lets them review/change their choices before starting
+    setShowStyleSelector(true);
   };
 
   const handleAudioSourceConfirm = async (deviceId: string | undefined) => {
@@ -1374,7 +1369,11 @@ export default function Display() {
           selectedStyles={selectedStyles}
           dynamicMode={dynamicMode}
           onStylesChange={handleStylesChange}
-          onClose={() => setShowStyleSelector(false)}
+          onClose={() => {
+            setShowStyleSelector(false);
+            // After style selection, show audio source selector
+            setShowAudioSourceSelector(true);
+          }}
         />
       )}
 
