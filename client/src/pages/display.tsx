@@ -94,6 +94,7 @@ export default function Display() {
   const lastGenerationTime = useRef<number>(0);
   const historyIndexRef = useRef<number>(-1);
   const isGeneratingRef = useRef<boolean>(false);
+  const isFallbackGeneratingRef = useRef<boolean>(false); // Guard to prevent infinite validation loop
   
   // Sync refs with state
   useEffect(() => {
@@ -242,11 +243,18 @@ export default function Display() {
 
   // Load multiple recent artworks on mount to enable morphing
   useEffect(() => {
+    // CRITICAL GUARD: Prevent infinite loop during fallback generation
+    if (isFallbackGeneratingRef.current) {
+      console.log(`[Display] ⏸️ Skipping validation - fallback generation in progress`);
+      return;
+    }
+    
     if (recentArtworks && recentArtworks.length > 0 && morphEngineRef.current.getFrameCount() === 0) {
       // Load and VALIDATE frames asynchronously
       const loadValidatedFrames = async () => {
-        setIsValidatingImages(true); // Show loading spinner
-        console.log(`[Display] 🔍 Starting smart validation (max 3 attempts)...`);
+        try {
+          setIsValidatingImages(true); // Show loading spinner
+          console.log(`[Display] 🔍 Starting smart validation (max 3 attempts)...`);
         
         // RANDOMIZE: Shuffle artworks for variety
         const shuffled = [...recentArtworks].sort(() => Math.random() - 0.5);
@@ -319,15 +327,20 @@ export default function Display() {
             description: "Preparing fresh artwork for you...",
           });
           
-          // Generate 2 fresh artworks automatically
-          await generateFallbackArtwork();
+          // Set guard to prevent re-entry during fallback generation
+          isFallbackGeneratingRef.current = true;
+          
+          try {
+            // Generate 2 fresh artworks automatically
+            await generateFallbackArtwork();
+          } finally {
+            // Always clear guard and spinner, even if generation fails
+            isFallbackGeneratingRef.current = false;
+          }
           return;
         }
         
         console.log(`[Display] ✅ Total valid frames loaded: ${validatedArtworks.length}`);
-        
-        // Hide loading spinner - validation successful!
-        setIsValidatingImages(false);
         
         // CRITICAL: Use FIRST VALIDATED artwork for UI (not just first with URL)
         const firstValidArtwork = validatedArtworks[0];
@@ -366,6 +379,10 @@ export default function Display() {
         // Start morph engine with loaded frames
         morphEngineRef.current.start();
         console.log(`[Display] MorphEngine started with ${morphEngineRef.current.getFrameCount()} frames`);
+        } finally {
+          // Always hide loading spinner, even if validation throws
+          setIsValidatingImages(false);
+        }
       };
       
       // Execute async loading
