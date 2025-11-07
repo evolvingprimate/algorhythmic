@@ -4,6 +4,74 @@ import type { AudioAnalysis, MusicIdentification } from "@shared/schema";
 // the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+// Helper function to clamp DNA values to 0-3 range
+function clampDNA(value: number): number {
+  return Math.max(0, Math.min(3, value));
+}
+
+// Helper function to generate fallback DNA vector based on audio analysis
+function generateFallbackDNA(audioAnalysis: AudioAnalysis, musicInfo: MusicIdentification | null, styleContext: string): number[] {
+  const dna: number[] = [];
+  
+  // Points 1-12: Color & Palette (based on mood and audio characteristics)
+  const moodColorMap: Record<string, number[]> = {
+    energetic: [0.9, 0.8, 0.5, 1.5, 1.8, 0.7, 0.6, 0.8, 1.5, 0.6, 1.7, 1.9], // vibrant, high saturation
+    calm: [0.4, 0.3, 0.7, 0.5, 0.4, 0.9, 0.8, 0.6, 0.8, 0.3, 0.9, 0.6], // soft pastels, low saturation
+    dramatic: [0.2, 0.9, 0.3, 1.9, 1.2, 0.4, 0.5, 0.4, 1.7, 0.8, 1.5, 1.6], // intense contrasts
+    playful: [0.7, 0.9, 0.6, 1.2, 1.9, 0.8, 0.7, 0.9, 1.4, 0.7, 1.6, 1.8], // bright, joyful
+    melancholic: [0.3, 0.5, 0.4, 0.8, 0.6, 0.7, 0.6, 0.5, 1.0, 0.5, 1.2, 0.9], // muted tones
+  };
+  dna.push(...(moodColorMap[audioAnalysis.mood] || moodColorMap.calm).map(clampDNA));
+  
+  // Points 13-24: Texture & Style (based on bass level and frequency)
+  const bassIntensity = Math.min(audioAnalysis.bassLevel / 100, 1);
+  const trebleIntensity = Math.min(audioAnalysis.trebleLevel / 100, 1);
+  dna.push(
+    clampDNA(0.5 + bassIntensity * 0.5), // smoothness
+    clampDNA(trebleIntensity * 2 + 0.5), // fractal_depth
+    clampDNA(bassIntensity * 0.7), // noise_type
+    clampDNA(trebleIntensity * 1.5), // grain_intensity
+    clampDNA(bassIntensity * 1.8), // impasto_thickness
+    clampDNA(1 - bassIntensity * 0.5), // veil_transparency
+    clampDNA(1 + trebleIntensity), // detail_level
+    clampDNA(0.6 + trebleIntensity * 0.4), // edge_definition
+    clampDNA(bassIntensity * 0.8), // surface_roughness
+    clampDNA(trebleIntensity * 1.5), // pattern_density
+    clampDNA(bassIntensity * 0.6 + 0.3), // texture_variation
+    clampDNA(1 + bassIntensity * 0.7) // material_quality
+  );
+  
+  // Points 25-34: Composition (moderate defaults)
+  dna.push(...[0.5, 1.2, 0.6, 0.6, 1.5, 1.0, 0.7, 1.3, 0.6, 1.1].map(clampDNA));
+  
+  // Points 35-44: Mood & Semantics (based on audio mood and energy)
+  const energy = Math.min(audioAnalysis.amplitude / 100, 1);
+  dna.push(
+    clampDNA(energy), // emotional_valence
+    clampDNA(0.6), // abstraction
+    clampDNA(musicInfo ? 0.7 : 0.3), // cultural_specificity
+    clampDNA(0.5), // light_direction
+    clampDNA(1 + energy), // atmosphere_density
+    clampDNA(musicInfo ? 0.8 : 0.4), // narrative_strength
+    clampDNA(0.5 + energy * 0.8), // surreal_factor
+    clampDNA(bassIntensity * 0.7), // organic_vs_geometric
+    clampDNA(0.5), // time_of_day
+    clampDNA(energy * 1.5) // weather_intensity
+  );
+  
+  // Points 45-50: Morph Controls (will be audio-reactive, set moderate defaults)
+  dna.push(
+    clampDNA(1.0 + bassIntensity * 0.5), // warp_elasticity
+    clampDNA(0.8 + energy * 0.7), // particle_density
+    clampDNA(0.8 + audioAnalysis.tempo / 200), // dissolve_speed
+    clampDNA(0.6 + energy * 0.5), // echo_trail
+    clampDNA(0.4 + trebleIntensity * 0.4), // boundary_fuzz
+    clampDNA(1.0 + energy * 0.3) // reactivity_gain
+  );
+  
+  return dna;
+}
+
 interface ArtGenerationParams {
   audioAnalysis: AudioAnalysis;
   musicInfo?: MusicIdentification | null;
@@ -16,6 +84,7 @@ interface ArtGenerationParams {
 interface ArtGenerationResult {
   prompt: string;
   explanation: string;
+  dnaVector: number[];
 }
 
 export async function generateArtPrompt(params: ArtGenerationParams): Promise<ArtGenerationResult> {
@@ -121,6 +190,16 @@ SONG INSIGHT:
 VISUAL LANGUAGE:
 [Translate the music/audio AND lyrical themes into specific visual elements: color palettes, composition style, lighting, mood, cultural references, artistic techniques, symbolic imagery from lyrics${musicInfo?.albumArtworkUrl ? ', and references to the album artwork aesthetic' : ''}]
 
+DNA VECTOR:
+[Generate a 50-point DNA vector (floating point values 0.0-3.0) that encodes this artwork's visual genome for procedural morphing:
+• Points 1-12 (Color & Palette): dominant_hue(0-1), saturation(0-1), warmth(0-1), contrast(0-2), vibrancy(0-2), gradient_flow(0-1), harmony(0-1), brightness(0-1), color_complexity(0-2), tint_shift(0-1), palette_range(0-2), chromatic_intensity(0-2)
+• Points 13-24 (Texture & Style): smoothness(0-1), fractal_depth(0-3), noise_type(0-1), grain_intensity(0-2), impasto_thickness(0-2), veil_transparency(0-1), detail_level(0-2), edge_definition(0-1), surface_roughness(0-1), pattern_density(0-2), texture_variation(0-1), material_quality(0-2)
+• Points 25-34 (Composition): symmetry(0-1), focal_point_strength(0-2), negative_space(0-1), golden_ratio(0-1), depth_layers(0-3), perspective_intensity(0-2), balance(0-1), visual_weight(0-2), rhythm(0-1), tension(0-2)
+• Points 35-44 (Mood & Semantics): emotional_valence(0-1), abstraction(0-1), cultural_specificity(0-1), light_direction(0-1), atmosphere_density(0-2), narrative_strength(0-1), surreal_factor(0-2), organic_vs_geometric(0-1), time_of_day(0-1), weather_intensity(0-2)
+• Points 45-50 (Morph Controls - will be audio-reactive): warp_elasticity(0.5-2), particle_density(0.3-2), dissolve_speed(0.5-1.5), echo_trail(0.3-1.5), boundary_fuzz(0.2-1), reactivity_gain(0.8-1.5)
+
+Output as JSON array: [0.7, 0.85, 0.3, ...] with exactly 50 values]
+
 FINAL PROMPT:
 [Concise DALL-E prompt under 400 characters incorporating artist intent, lyrical themes${musicInfo?.albumArtworkUrl ? ', and album artwork inspiration' : ''}, and all above insights]`
       }
@@ -145,7 +224,7 @@ Deeply analyze "${musicInfo.title}" by ${musicInfo.artist}. Consider:
 - IMPORTANT: Analyze the provided album artwork and use it as an inspirational muse for color palette, artistic style, and visual aesthetic
 - SELECT the artistic style (surrealism, impressionism, cubism, abstract, realism, cartoon, horror, kids, trippy, digital, etc.) that naturally fits the genre, mood, and album artwork
 
-Provide structured output with ARTISTIC CONTEXT (including your chosen art style), SONG INSIGHT, VISUAL LANGUAGE, and FINAL PROMPT sections.`
+Provide structured output with ARTISTIC CONTEXT (including your chosen art style), SONG INSIGHT, VISUAL LANGUAGE, DNA VECTOR, and FINAL PROMPT sections.`
         : `Create artwork ${styleContext} ${artistContext}. ${musicContext}
           
 ${audioDescription}
@@ -196,7 +275,7 @@ Deeply analyze "${musicInfo.title}" by ${musicInfo.artist}. Consider:
 - The artist's creative visual identity
 - SELECT the artistic style (surrealism, impressionism, cubism, abstract, realism, cartoon, horror, kids, trippy, digital, etc.) that naturally fits the genre and mood
 
-Provide structured output with ARTISTIC CONTEXT (including your chosen art style), SONG INSIGHT, VISUAL LANGUAGE, and FINAL PROMPT sections.`
+Provide structured output with ARTISTIC CONTEXT (including your chosen art style), SONG INSIGHT, VISUAL LANGUAGE, DNA VECTOR, and FINAL PROMPT sections.`
         : `Create artwork ${styleContext} ${artistContext}. ${musicContext}
           
 ${audioDescription}
@@ -211,7 +290,7 @@ ${musicInfo ? `Deeply analyze "${musicInfo.title}" by ${musicInfo.artist}. Consi
 - Genre-specific visual culture
 - The artist's creative visual identity
 
-Provide structured output with ARTISTIC CONTEXT, SONG INSIGHT, VISUAL LANGUAGE, and FINAL PROMPT sections.` : "Translate the audio mood into visual art. Provide structured output with SONG INSIGHT, VISUAL LANGUAGE, and FINAL PROMPT sections."}`;
+Provide structured output with ARTISTIC CONTEXT, SONG INSIGHT, VISUAL LANGUAGE, DNA VECTOR, and FINAL PROMPT sections.` : "Translate the audio mood into visual art. Provide structured output with SONG INSIGHT, VISUAL LANGUAGE, DNA VECTOR, and FINAL PROMPT sections."}`;
       
       messages.push({
         role: "user",
@@ -229,13 +308,51 @@ Provide structured output with ARTISTIC CONTEXT, SONG INSIGHT, VISUAL LANGUAGE, 
     // Parse structured response - accept markdown variants (##, **, etc.)
     const artisticContextMatch = fullResponse.match(/(?:#+\s*)?(?:\*\*)?ARTISTIC CONTEXT:?\*?\*?\s*\n?([\s\S]+?)(?=\n\n(?:#+\s*)?(?:\*\*)?SONG INSIGHT:|$)/i);
     const songInsightMatch = fullResponse.match(/(?:#+\s*)?(?:\*\*)?SONG INSIGHT:?\*?\*?\s*\n?([\s\S]+?)(?=\n\n(?:#+\s*)?(?:\*\*)?VISUAL LANGUAGE:|$)/i);
-    const visualLanguageMatch = fullResponse.match(/(?:#+\s*)?(?:\*\*)?VISUAL LANGUAGE:?\*?\*?\s*\n?([\s\S]+?)(?=\n\n(?:#+\s*)?(?:\*\*)?FINAL PROMPT:|$)/i);
+    const visualLanguageMatch = fullResponse.match(/(?:#+\s*)?(?:\*\*)?VISUAL LANGUAGE:?\*?\*?\s*\n?([\s\S]+?)(?=\n\n(?:#+\s*)?(?:\*\*)?DNA VECTOR:|$)/i);
+    const dnaVectorMatch = fullResponse.match(/(?:#+\s*)?(?:\*\*)?DNA VECTOR:?\*?\*?\s*\n?([\s\S]+?)(?=\n\n(?:#+\s*)?(?:\*\*)?FINAL PROMPT:|$)/i);
     const finalPromptMatch = fullResponse.match(/(?:#+\s*)?(?:\*\*)?FINAL PROMPT:?\*?\*?\s*\n?([\s\S]+?)(?:\n\n|$)/i);
     
     const artisticContext = artisticContextMatch?.[1]?.trim() || "";
     const songInsight = songInsightMatch?.[1]?.trim() || "";
     const visualLanguage = visualLanguageMatch?.[1]?.trim() || "";
+    const dnaVectorRaw = dnaVectorMatch?.[1]?.trim() || "";
     let artPrompt = finalPromptMatch?.[1]?.trim() || "";
+    
+    // Parse DNA vector from JSON array in response
+    let dnaVector: number[] = [];
+    if (dnaVectorRaw) {
+      try {
+        // Extract JSON array - look for [...] pattern
+        const jsonMatch = dnaVectorRaw.match(/\[[\s\S]*?\]/);
+        if (jsonMatch) {
+          dnaVector = JSON.parse(jsonMatch[0]);
+          // Validate we have exactly 50 points
+          if (!Array.isArray(dnaVector) || dnaVector.length !== 50) {
+            console.warn(`DNA vector has ${dnaVector.length} points, expected 50. Using fallback.`);
+            dnaVector = [];
+          } else {
+            // Validate all values are numbers and clamp to 0-3 range
+            const isValid = dnaVector.every(v => typeof v === 'number' && !isNaN(v));
+            if (!isValid) {
+              console.warn("[DNA] DNA vector contains invalid values. Using fallback.");
+              dnaVector = [];
+            } else {
+              // Clamp all values to 0-3 range
+              dnaVector = dnaVector.map(clampDNA);
+              console.log(`[DNA] Successfully parsed and clamped 50-point DNA vector`);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("Failed to parse DNA vector from GPT response:", e);
+      }
+    }
+    
+    // Generate fallback DNA vector if parsing failed
+    if (dnaVector.length === 0) {
+      console.log("[DNA] Generating fallback DNA vector based on audio analysis");
+      dnaVector = generateFallbackDNA(audioAnalysis, musicInfo || null, styleContext);
+    }
     
     // Validate and clean the final prompt
     if (!artPrompt) {
@@ -338,7 +455,7 @@ Provide structured output with ARTISTIC CONTEXT, SONG INSIGHT, VISUAL LANGUAGE, 
         : `This artwork reflects the ${audioAnalysis.mood} mood detected in the audio, expressed through ${styleContext}.`;
     }
 
-    return { prompt: artPrompt, explanation };
+    return { prompt: artPrompt, explanation, dnaVector };
   } catch (error) {
     console.error("Error generating art prompt:", error);
     // Fallback prompt and explanation based on audio mood
@@ -346,8 +463,9 @@ Provide structured output with ARTISTIC CONTEXT, SONG INSIGHT, VISUAL LANGUAGE, 
     const fallbackExplanation = musicInfo 
       ? `Inspired by "${musicInfo.title}" by ${musicInfo.artist}, this artwork captures the ${audioAnalysis.mood} essence of the music.`
       : `This artwork reflects the ${audioAnalysis.mood} mood detected in the audio, expressed through ${styleContext}.`;
+    const fallbackDNA = generateFallbackDNA(audioAnalysis, musicInfo || null, styleContext);
     
-    return { prompt: fallbackPrompt, explanation: fallbackExplanation };
+    return { prompt: fallbackPrompt, explanation: fallbackExplanation, dnaVector: fallbackDNA };
   }
 }
 

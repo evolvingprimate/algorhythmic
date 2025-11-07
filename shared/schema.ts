@@ -34,6 +34,7 @@ export const artSessions = pgTable("art_sessions", {
   userId: varchar("user_id"),
   imageUrl: text("image_url").notNull(),
   prompt: text("prompt").notNull(),
+  dnaVector: text("dna_vector"), // JSON string of 50-point DNA vector for morphing
   audioFeatures: text("audio_features"), // JSON string
   musicTrack: text("music_track"), // Identified song title
   musicArtist: text("music_artist"), // Identified artist

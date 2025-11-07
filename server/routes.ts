@@ -153,12 +153,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Generate image using DALL-E
       const imageUrl = await generateArtImage(result.prompt);
 
-      // Save session with music info and explanation
+      // Save session with music info, explanation, and DNA vector
       const session = await storage.createArtSession({
         sessionId,
         userId,
         imageUrl,
         prompt: result.prompt,
+        dnaVector: JSON.stringify(result.dnaVector),
         audioFeatures: JSON.stringify(audio),
         musicTrack: music?.title || null,
         musicArtist: music?.artist || null,
