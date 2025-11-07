@@ -1,0 +1,222 @@
+## **Algorhythmic: Complete System Flow with DNA-Driven Procedural Morphing**
+
+---
+
+### **1. Audio Capture & Real-Time Analysis**  
+**Input**: Device microphone or line-in (44.1 kHz PCM)  
+**Engine**: Web Audio API (`getUserMedia` → `AudioContext`)  
+
+| **Feature** | **Method** | **Update Rate** | **Output** |
+|-----------|----------|------------------|----------|
+| Frequency Spectrum | 4096-point FFT | 100 ms | 128 bins (bass: 0–100 Hz, mid: 100–2kHz, treble: >5kHz) |
+| Amplitude | RMS | 100 ms | 0.0 – 1.0 |
+| Tempo | Onset detection + autocorrelation | 500 ms | BPM |
+| Mood | Spectral centroid + energy | 500 ms | calm, energetic, dramatic, melancholic |
+
+> **AudioAnalysis object** updated continuously
+
+---
+
+### **2. Song Identification (Every 5 Seconds)**  
+**Buffer**: Last 4 seconds of audio  
+**API**: ACRCloud fingerprinting  
+
+```json
+{
+  "title": "Bad Moon Rising",
+  "artist": "Creedence Clearwater Revival",
+  "spotify_album_id": "1ntrsv..."
+}
+```
+
+> Triggers **Context Retrieval**
+
+---
+
+### **3. Album Artwork Retrieval**  
+**API**: Spotify Web API (`GET /albums/{id}`)  
+**Output**: 640×640+ album cover URL
+
+---
+
+### **4. Unified AI Prompt + DNA Generation (Single Call)**  
+**Model**: GPT-4o Vision  
+**Input**:  
+- `AudioAnalysis` (mood, BPM, energy)  
+- Song metadata (title, artist)  
+- Album artwork (image)  
+- User preferences (from localStorage votes)  
+
+**Output (Structured JSON)**:  
+```json
+{
+  "final_prompt": "Dark moon rising over misty swamp, ominous shadows...",
+  "dna_vector": [0.2, 0.8, 0.4, 1.1, 2.3, ...],
+  "dna_categories": {
+    "color_palette": [0.2, 0.8, 0.4, ...],
+    "texture_style": [1.1, 0.3, ...],
+    "composition": [0.5, 0.8, ...],
+    "mood_semantics": [0.9, 0.2, ...],
+    "morph_controls": [1.2, 0.8, ...]
+  }
+}
+```
+
+> **DNA is predictive, prompt-derived, and universal**
+
+---
+
+### **5. Image Generation**  
+**API**: DALL·E 3  
+**Input**: `final_prompt`  
+**Output**: 1024×1024 image URL  
+
+**Frame Asset**:  
+```json
+{
+  "image_url": "...",
+  "dna_vector": [...],
+  "dna_categories": { ... },
+  "generated_at": "2025-11-06T16:42:00Z"
+}
+```
+
+> Cached in **IndexedDB** with 3-frame lookahead
+
+---
+
+### **6. Frame Scheduling (5-Minute Hero Cycle)**  
+
+| **Time** | **Action** |
+|---------|-----------|
+| t = 0s  | Display **Frame A** (hero, 100% opacity) |
+| t = 60s | Begin morph A → B (240s duration) |
+| t = 240s| Generate **Frame D** (background) |
+| t = 300s| **Frame B** becomes hero |
+| t = 360s| Morph B → C |
+
+---
+
+### **7. Device Capability Detection**  
+**At launch**:  
+```js
+navigator.deviceMemory
+navigator.hardwareConcurrency
+WebGL UNMASKED_RENDERER
+WebGL2 support
+navigator.getBattery()
+```
+
+**Tier Assignment**:  
+- **Tier 1**: <4GB RAM, no WebGL2 → Fire TV, low-end  
+- **Tier 2**: 4–8GB, WebGL1 → Apple TV, mid-range  
+- **Tier 3**: 8GB+, WebGL2 → iPhone, flagship Android  
+- **Tier 4**: 16GB+, WebGPU → Desktop RTX 5090  
+
+---
+
+### **8. DNA Vector: 50-Dimensional Visual Genome**
+
+| **Category** | **Indices** | **Key Parameters** |
+|--------------|-------------|---------------------|
+| **Color & Palette** | 1–12 | Dominant hue, saturation, warmth, gradient flow, harmony |
+| **Texture & Style** | 13–24 | Smoothness, fractal depth, noise type, impasto, veil |
+| **Composition** | 25–34 | Symmetry, focal point, negative space, golden ratio |
+| **Mood & Semantics** | 35–44 | Emotional valence, abstraction, cultural style, light direction |
+| **Morph Controls** | 45–50 | Warp elasticity, particle density, dissolve speed, echo trail, boundary fuzz, reactivity gain |
+
+---
+
+### **9. Morph Interpolation (240s)**  
+```text
+t = (elapsed - 60) / 240000  // 0.0 → 1.0
+currentDNA[i] = lerp(DNA_A[i], DNA_B[i], easeInOutSine(t))  // i = 1–44
+```
+
+- **Morph Controls (45–50)**: **Live audio-driven**, not interpolated
+
+---
+
+### **10. Real-Time Audio Reactivity (Morph Controls)**  
+
+| **DNA #** | **Parameter** | **Audio Source** | **Effect** |
+|---------|---------------|------------------|----------|
+| 45 | Warp Elasticity | Bass (0–100 Hz) | Stretch/squash via displacement field |
+| 46 | Particle Density | RMS amplitude | Spawn rate (50 → 100k+ particles) |
+| 47 | Dissolve Speed | BPM | Pixel evaporation rate |
+| 48 | Echo Trail | Mid-frequency decay | Frame buffer persistence |
+| 49 | Boundary Fuzz | Treble (>5kHz) | Edge blur radius |
+| 50 | Reactivity Gain | Global scalar | Amplifies all reactivity |
+
+---
+
+### **11. Procedural Effects Pipeline (DNA → Visuals)**  
+
+| **Effect** | **DNA Driver(s)** | **Audio Modulation** | **Tier Availability** |
+|----------|-------------------|-----------------------|-------------------------|
+| **Flow Field** | DNA[20], DNA[16] | Bass → turbulence | Tier 2+ |
+| **Particle System** | DNA[46] | Volume → emission | Tier 1+ |
+| **Displacement Warp** | DNA[45] | Bass → amplitude | Tier 1+ |
+| **Fractal Noise** | DNA[18], DNA[16] | Treble → octaves | Tier 3+ |
+| **Kaleidoscope** | DNA[25] | Mid → rotation | Tier 3+ |
+| **Bloom** | DNA[3] | Volume → radius | Tier 2+ |
+| **Chromatic Aberration** | DNA[49] | Treble → offset | Tier 2+ |
+
+---
+
+### **12. Tiered Rendering Implementation**
+
+| **Tier** | **Devices** | **FPS** | **Active Effects** | **Primary Tech** |
+|--------|------------|--------|---------------------|------------------|
+| 1 | Fire TV | 30 | 45,47,49,50 | CSS + Canvas |
+| 2 | Apple TV | 45 | 45–59 | WebGL1 |
+| 3 | iPhone | 60 | 45–65 | WebGL2 |
+| 4 | PC 5090 | 120+ | 45–70+ | WebGPU |
+
+---
+
+### **13. Rendering Loop (60 FPS Target)**  
+```js
+requestAnimationFrame(render);
+function render() {
+  const audio = AudioAnalyzer.latest();
+  const progress = getMorphProgress(); // 0.0 → 1.0
+  const dna = DNA.lerp(frameA.dna, frameB.dna, progress);
+  DNA.applyAudioReactivity(dna, audio);
+  Renderer[deviceTier].draw(dna, audio);
+  requestAnimationFrame(render);
+}
+```
+
+---
+
+### **14. User Feedback Loop**  
+- **Upvote/Downvote** → Update `user_prefs` in localStorage  
+- Future GPT prompts bias toward liked DNA traits (e.g., high DNA[35] valence)
+
+---
+
+**End-to-End Flow Summary**:  
+```
+Mic → Web Audio → FFT/BPM/Mood  
+     ↓ (every 5s)  
+ACRCloud → Song + Spotify ID  
+     ↓  
+Spotify → Album Art  
+     ↓  
+GPT-4o Vision → Prompt + 50-Point DNA  
+     ↓  
+DALL·E 3 → Image  
+     ↓  
+{image_url, dna} → IndexedDB  
+     ↓  
+Device Tier → Renderer  
+     ↓  
+DNA Interpolation + Audio Reactivity  
+     ↓  
+Procedural Morphing (GAN-like, infinite variation)
+```
+
+--- 
+
+**Algorhythmic delivers living, breathing, cross-device art — where every beat shapes the dream.**
