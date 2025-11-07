@@ -65,9 +65,9 @@ export default function Display() {
   const [currentExplanation, setCurrentExplanation] = useState<string>("");
   const [showExplanation, setShowExplanation] = useState(false);
   const [isIdentifyingMusic, setIsIdentifyingMusic] = useState(false);
-  const [generationInterval, setGenerationInterval] = useState(1); // minutes
+  const [generationInterval, setGenerationInterval] = useState(5); // minutes (Frame A to Frame B duration)
   const [timeUntilNext, setTimeUntilNext] = useState<number>(0); // seconds
-  const [showCountdown, setShowCountdown] = useState(true); // show countdown timer
+  const [showCountdown, setShowCountdown] = useState(false); // hide countdown timer (using 5min morph cycle)
   
   // Image history for back/forward navigation
   const [imageHistory, setImageHistory] = useState<Array<{
@@ -152,6 +152,17 @@ export default function Display() {
   useEffect(() => {
     if (recentArtworks && recentArtworks.length > 0 && !currentImage) {
       const mostRecent = recentArtworks[0];
+      
+      // Check if image is recent (DALL-E URLs expire after 2 hours)
+      // Only show if generated within last hour to be safe
+      const generatedDate = new Date(mostRecent.createdAt || 0);
+      const hoursSinceGeneration = (Date.now() - generatedDate.getTime()) / (1000 * 60 * 60);
+      
+      if (hoursSinceGeneration > 1) {
+        console.log('[Display] Skipping expired Frame A (generated', hoursSinceGeneration.toFixed(1), 'hours ago). Generate new artwork to begin.');
+        return;
+      }
+      
       const audioFeatures = mostRecent.audioFeatures ? JSON.parse(mostRecent.audioFeatures) : null;
       const musicInfo = mostRecent.musicTrack ? {
         title: mostRecent.musicTrack,
@@ -184,7 +195,7 @@ export default function Display() {
       setCurrentArtworkId(mostRecent.id);
       setCurrentArtworkSaved(mostRecent.isSaved || false);
       
-      console.log('[Display] Loaded most recent artwork as Frame A:', mostRecent.imageUrl);
+      console.log('[Display] Loaded recent artwork as Frame A (generated', hoursSinceGeneration.toFixed(1), 'hours ago)');
     }
   }, [recentArtworks, currentImage]);
 
