@@ -466,30 +466,41 @@ uniform vec2 u_resolution;
 
 varying vec2 v_texCoord;
 
-// Simple hash for pseudo-random
-float hash(vec2 p) {
-  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+// Luminance for edge detection
+float luminance(vec3 color) {
+  return dot(color, vec3(0.299, 0.587, 0.114));
+}
+
+// Simple edge detection to reduce feedback near edges (prevent ghosting)
+float detectEdge(sampler2D tex, vec2 uv, float texelSize) {
+  float center = luminance(texture2D(tex, uv).rgb);
+  float left = luminance(texture2D(tex, uv + vec2(-texelSize, 0.0)).rgb);
+  float right = luminance(texture2D(tex, uv + vec2(texelSize, 0.0)).rgb);
+  float up = luminance(texture2D(tex, uv + vec2(0.0, -texelSize)).rgb);
+  float down = luminance(texture2D(tex, uv + vec2(0.0, texelSize)).rgb);
+  
+  float edgeStrength = abs(center - left) + abs(center - right) + 
+                       abs(center - up) + abs(center - down);
+  return smoothstep(0.0, 0.2, edgeStrength);
 }
 
 void main() {
   vec2 uv = v_texCoord;
+  float texelSize = 1.0 / 1024.0;
   
   // Current frame
   vec4 current = texture2D(u_texture, uv);
   
-  // Feedback with slight offset for trailing effect
-  vec2 offset = vec2(
-    sin(u_time * 0.5) * 0.001,
-    cos(u_time * 0.3) * 0.001
-  );
-  vec4 feedback = texture2D(u_feedback, uv + offset);
+  // Previous frame (no offset for temporal coherence, not trails)
+  vec4 previous = texture2D(u_feedback, uv);
   
-  // Blend with decay
-  vec4 result = mix(current, feedback, u_feedbackAmount * 0.3);
+  // Detect edges in current frame to reduce feedback near them
+  float edgeMask = detectEdge(u_texture, uv, texelSize);
   
-  // Add subtle grain for organic feel
-  float grain = (hash(uv + u_time) - 0.5) * 0.02;
-  result.rgb += grain;
+  // Temporal coherence: light frame-to-frame blending (6-8%)
+  // Reduced near edges to prevent ghosting
+  float feedbackWeight = 0.07 * (1.0 - edgeMask * 0.5);
+  vec4 result = mix(current, previous, feedbackWeight);
   
   gl_FragColor = result;
 }
