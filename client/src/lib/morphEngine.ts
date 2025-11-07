@@ -19,9 +19,10 @@ export class MorphEngine {
   private isRunning: boolean = false;
   private animationFrameId: number | null = null;
   
-  private readonly HOLD_DURATION = 60000;
-  private readonly MORPH_DURATION = 240000;
-  private readonly TOTAL_CYCLE = 300000;
+  private readonly HOLD_DURATION = 60000; // 1 minute pure static
+  private readonly RAMP_DURATION = 30000; // 30 seconds to ramp up effects
+  private readonly MORPH_DURATION = 240000; // 4 minutes morph
+  private readonly TOTAL_CYCLE = 300000; // 5 minutes total
 
   constructor() {
     this.phaseStartTime = Date.now();
@@ -105,10 +106,12 @@ export class MorphEngine {
     let currentDNA: DNAVector;
 
     if (cyclePosition < this.HOLD_DURATION) {
+      // Pure hold phase: completely static, no effects
       phase = 'hold';
       phaseProgress = cyclePosition / this.HOLD_DURATION;
       currentDNA = [...currentFrame.dnaVector];
     } else {
+      // Morph phase: interpolate between frames
       phase = 'morph';
       const morphElapsed = cyclePosition - this.HOLD_DURATION;
       phaseProgress = Math.min(morphElapsed / this.MORPH_DURATION, 1.0);
@@ -130,8 +133,32 @@ export class MorphEngine {
       }
     }
 
+    // Apply audio reactivity with intensity ramp-up
     if (audioAnalysis) {
-      currentDNA = applyAudioReactivity(currentDNA, audioAnalysis);
+      let audioIntensity = 0;
+      
+      if (cyclePosition < this.HOLD_DURATION) {
+        // Hold phase: no audio effects (completely static)
+        audioIntensity = 0;
+      } else if (cyclePosition < this.HOLD_DURATION + this.RAMP_DURATION) {
+        // Ramp-up phase: gradually increase from 0 to 1 over 30 seconds
+        const rampElapsed = cyclePosition - this.HOLD_DURATION;
+        audioIntensity = rampElapsed / this.RAMP_DURATION;
+      } else {
+        // Full morph phase: full audio reactivity
+        audioIntensity = 1.0;
+      }
+
+      if (audioIntensity > 0) {
+        // Scale the audio analysis by intensity before applying
+        const scaledAnalysis = {
+          bassLevel: audioAnalysis.bassLevel * audioIntensity,
+          amplitude: audioAnalysis.amplitude * audioIntensity,
+          tempo: audioAnalysis.tempo,
+          trebleLevel: audioAnalysis.trebleLevel * audioIntensity,
+        };
+        currentDNA = applyAudioReactivity(currentDNA, scaledAnalysis);
+      }
     }
 
     const totalProgress = cyclePosition / this.TOTAL_CYCLE;
