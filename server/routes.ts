@@ -8,6 +8,7 @@ import { generateArtPrompt, generateArtImage } from "./openai-service";
 import { identifyMusic } from "./music-service";
 import { insertArtVoteSchema, insertArtPreferenceSchema, type AudioAnalysis, type MusicIdentification } from "@shared/schema";
 import { setupAuth, isAuthenticated } from "./replitAuth";
+import { ObjectStorageService } from "./objectStorage";
 
 // Initialize Stripe only if keys are available (optional for MVP)
 let stripe: Stripe | null = null;
@@ -22,6 +23,22 @@ if (process.env.STRIPE_SECRET_KEY) {
 export async function registerRoutes(app: Express): Promise<Server> {
   // Setup Replit Auth
   await setupAuth(app);
+
+  // Public object storage serving endpoint
+  app.get("/public-objects/:filePath(*)", async (req, res) => {
+    const filePath = req.params.filePath;
+    const objectStorageService = new ObjectStorageService();
+    try {
+      const file = await objectStorageService.searchPublicObject(filePath);
+      if (!file) {
+        return res.status(404).json({ error: "File not found" });
+      }
+      objectStorageService.downloadObject(file, res);
+    } catch (error) {
+      console.error("Error searching for public object:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
 
   // Auth endpoints
   app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
@@ -151,7 +168,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       // Generate image using DALL-E
-      const imageUrl = await generateArtImage(result.prompt);
+      const dalleUrl = await generateArtImage(result.prompt);
+      
+      // Store image permanently in object storage
+      const objectStorageService = new ObjectStorageService();
+      let imageUrl = dalleUrl;
+      
+      try {
+        console.log('[ArtGeneration] Storing image in object storage...');
+        imageUrl = await objectStorageService.storeImageFromUrl(dalleUrl);
+        console.log('[ArtGeneration] Image stored permanently:', imageUrl);
+      } catch (storageError) {
+        console.error('[ArtGeneration] Failed to store in object storage, using DALL-E URL:', storageError);
+        // Fall back to DALL-E URL if storage fails
+      }
 
       // Save session with music info, explanation, and DNA vector
       const session = await storage.createArtSession({
