@@ -45,8 +45,27 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 3.  **Album Artwork Fetch**: Spotify API retrieves album cover.
 4.  **Prompt Generation**: GPT-4o Vision (with album art) or GPT-5 (text-only) creates DALL-E prompt considering user preferences, audio mood, identified music (artist intent, lyrical themes, visual metaphors), and voting history. Genre-specific visual culture is applied. **Generates 50-point DNA vector alongside prompt.**
 5.  **Image Generation**: DALL-E 3 creates 1024x1024 artwork.
-6.  **Display**: Image shown with DNA-driven morphing (see DNA Morphing System below).
-7.  **Feedback**: User votes to train preferences.
+6.  **Permanent Storage**: Image downloaded from DALL-E temporary URL and stored permanently in Replit Object Storage (DALL-E URLs expire after 2 hours).
+7.  **Display**: Image shown with DNA-driven morphing (see DNA Morphing System below).
+8.  **Feedback**: User votes to train preferences.
+
+### Image Storage System
+**Problem**: DALL-E image URLs expire after 2 hours, causing blank screens for historical artworks.
+
+**Solution**: Replit Object Storage integration for permanent image hosting.
+
+**Implementation:**
+- `server/objectStorage.ts`: Service for downloading DALL-E images and uploading to Replit Object Storage
+- Images stored in public directory: `/public-objects/artwork-{uuid}.png`
+- Serving route: `GET /public-objects/:filePath` streams images with 1-hour cache
+- Database stores permanent URLs instead of temporary DALL-E URLs
+- Environment variables: `PUBLIC_OBJECT_SEARCH_PATHS`, `PRIVATE_OBJECT_DIR`, `DEFAULT_OBJECT_STORAGE_BUCKET_ID`
+
+**Benefits:**
+- Images never expire
+- Faster load times (served from Replit's CDN)
+- Support for gallery, sharing, and historical viewing
+- 1-year browser cache for optimal performance
 
 ### DNA Morphing System
 **GAN-Like Interpolation**: Each artwork has a 50-point "DNA vector" (0-3 range) enabling smooth, procedural morphing between frames over 5-minute cycles.
