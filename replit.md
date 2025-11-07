@@ -78,9 +78,34 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 - **Points 45-50**: Morph Controls (audio-reactive: warp elasticity, particle density, dissolve speed, echo trail, boundary fuzz, reactivity gain)
 
 **Morphing Timeline (5-Minute Hero Cycle):**
-1. **0:00-1:00 (Hold Phase)**: Display current artwork ("Hero 1") with audio-reactive modulation on DNA points 45-50
-2. **1:00-5:00 (Morph Phase)**: Linearly interpolate DNA points 1-44 from Hero 1 → Hero 2 using easeInOutSine, while points 45-50 continue reacting to live audio
-3. **5:00**: Advance to next hero, restart cycle
+1. **0:00-1:00 (Hold Phase)**: Display current artwork ("Hero 1") completely static - no effects, pristine AI render with Ken Burns zoom only
+2. **1:00-1:30 (Ramp Phase)**: Gradually activate audio-reactive effects from 0 to 100% intensity
+3. **1:30-5:00 (Full Morph Phase)**: DNA interpolation from Hero 1 → Hero 2 with full audio reactivity, particle bursts, displacement effects
+4. **5:00**: Advance to next hero, restart cycle
+
+**Critical Timing Fix (Nov 2025)**: Frame advancement now occurs when elapsed >= TOTAL_CYCLE BEFORE modulo operation, preventing premature A→B revert bug.
+
+**Visual Effects System (Nov 2025 Enhancements):**
+
+**Displacement & Flow:**
+- **Curl Noise**: Divergence-free organic flow for ferrofluid-like, water-surface aesthetics
+- **Low-Frequency Movement**: Reduced frequency (0.3x scale, 0.5x speed) for gentle, soft displacement
+- **Smoothstep Falloff**: Edge softness based on distance from center, eliminating harsh boundaries
+- **Luminance Weighting**: Darker areas receive more displacement (watercolor pigment pooling effect)
+- **Soft Anomaly Modulation**: Optional chaotic regions with smoothstep thresholds (not step-like)
+
+**Ken Burns Effect:**
+- **Enhanced Zoom**: 1.0x → 1.3x scale over morph phase (2x more visible than original 1.15x)
+- **Parallax Translation**: Subtle depth illusion via coordinated movement
+- **Eased Transitions**: easeInOutCubic for smooth, non-linear zoom progression
+
+**Particle System (Beat-Triggered Bursts):**
+- **Bass Peak Detection**: Emits only when bassLevel > 0.6 AND delta > 0.1 (no constant trickle)
+- **Randomized Cooldown**: 1-3 second gaps between bursts (60-180 normalized frames)
+- **Edge-Weighted Emission**: Sobel gradient detection (threshold 0.3) for shape tracing, not uniform spray
+- **Short Lifetimes**: 0.5-1.0 second randomized decay (proper dt/60 timing)
+- **Burst Impact**: 20 particles per bass pop for visible effect
+- **Foreground→Background Tracing**: Particles sample both images at same UV, interpolate colors by morphProgress
 
 **Tiered Rendering (Device-Adaptive):**
 - **Tier 1** (≤4GB RAM, no WebGL2): CSS transforms + Canvas2D for basic warp/blur/dissolve
