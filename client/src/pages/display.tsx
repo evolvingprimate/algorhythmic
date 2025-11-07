@@ -749,7 +749,7 @@ export default function Display() {
           />
         )}
         {(!morphEngineRef.current || morphEngineRef.current.getFrameCount() === 0) && (
-          <div className="flex flex-col items-center justify-center gap-6 max-w-lg px-4 text-center">
+          <div className="flex flex-col items-center justify-center gap-6 max-w-lg px-4 text-center z-20 relative">
             <Sparkles className="h-20 w-20 text-primary" />
             <h1 className="text-4xl md:text-5xl font-bold">Ready to Create</h1>
             <p className="text-xl text-muted-foreground">
