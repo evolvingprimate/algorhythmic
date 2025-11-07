@@ -168,6 +168,77 @@ vec3 hsl2rgb(vec3 hsl) {
   return rgb + m;
 }
 
+// ====== OKLAB COLOR SPACE ======
+// Perceptually uniform color space for smooth blending without muddy grays
+
+// sRGB to Linear RGB
+vec3 srgbToLinear(vec3 srgb) {
+  return mix(
+    srgb / 12.92,
+    pow((srgb + 0.055) / 1.055, vec3(2.4)),
+    step(0.04045, srgb)
+  );
+}
+
+// Linear RGB to sRGB
+vec3 linearToSrgb(vec3 linear) {
+  return mix(
+    linear * 12.92,
+    pow(linear, vec3(1.0/2.4)) * 1.055 - 0.055,
+    step(0.0031308, linear)
+  );
+}
+
+// Linear RGB to OKLab
+vec3 rgbToOklab(vec3 rgb) {
+  // Convert sRGB to linear
+  vec3 linear = srgbToLinear(rgb);
+  
+  // Linear RGB to LMS cone response
+  mat3 rgb2lms = mat3(
+    0.4122214708, 0.5363325363, 0.0514459929,
+    0.2119034982, 0.6806995451, 0.1073969566,
+    0.0883024619, 0.2817188376, 0.6299787005
+  );
+  vec3 lms = rgb2lms * linear;
+  
+  // Apply cube root (perceptual compression)
+  lms = sign(lms) * pow(abs(lms), vec3(1.0/3.0));
+  
+  // LMS to OKLab
+  mat3 lms2lab = mat3(
+    0.2104542553, 0.7936177850, -0.0040720468,
+    1.9779984951, -2.4285922050, 0.4505937099,
+    0.0259040371, 0.7827717662, -0.8086757660
+  );
+  return lms2lab * lms;
+}
+
+// OKLab to Linear RGB
+vec3 oklabToRgb(vec3 lab) {
+  // OKLab to LMS
+  mat3 lab2lms = mat3(
+    1.0, 0.3963377774, 0.2158037573,
+    1.0, -0.1055613458, -0.0638541728,
+    1.0, -0.0894841775, -1.2914855480
+  );
+  vec3 lms = lab2lms * lab;
+  
+  // Cube (undo perceptual compression)
+  lms = lms * lms * lms;
+  
+  // LMS to Linear RGB
+  mat3 lms2rgb = mat3(
+    4.0767416621, -3.3077115913, 0.2309699292,
+    -1.2684380046, 2.6097574011, -0.3413193965,
+    -0.0041960863, -0.7034186147, 1.7076147010
+  );
+  vec3 linear = lms2rgb * lms;
+  
+  // Linear to sRGB
+  return linearToSrgb(linear);
+}
+
 // Easing functions for smoother transitions
 float easeInOutQuad(float t) {
   return t < 0.5 ? 2.0 * t * t : 1.0 - pow(-2.0 * t + 2.0, 2.0) / 2.0;
@@ -349,15 +420,27 @@ void main() {
   // because they're residuals that sum to the original image
   vec3 multiband = blendedCoarse + blendedMid + blendedFine;
   
-  // Intelligent color morphing in HSL space on the multiband result
-  vec3 hslMultiband = rgb2hsl(multiband);
+  // ====== OKLAB COLOR BLENDING ======
+  // Perceptually uniform color space prevents muddy grays during transitions
+  // For subtle color enhancement, blend multiband with itself in OKLab
+  vec3 oklabMultiband = rgbToOklab(clamp(multiband, 0.0, 1.0));
   
-  // Subtle hue rotation with color shift rate
-  float hueShift = u_colorShiftRate * sin(flowTime * 0.5) * 0.05;
-  hslMultiband.x = fract(hslMultiband.x + hueShift);
+  // Subtle chroma boost and hue rotation in perceptual space
+  float chromaBoost = 1.0 + u_colorShiftRate * 0.1;
+  oklabMultiband.yz *= chromaBoost; // Boost a/b channels (chroma)
+  
+  // Subtle hue rotation (rotate in a/b plane)
+  float hueShift = u_colorShiftRate * sin(flowTime * 0.5) * 0.1;
+  float cosH = cos(hueShift);
+  float sinH = sin(hueShift);
+  vec2 rotatedChroma = vec2(
+    oklabMultiband.y * cosH - oklabMultiband.z * sinH,
+    oklabMultiband.y * sinH + oklabMultiband.z * cosH
+  );
+  oklabMultiband.yz = rotatedChroma;
   
   // Convert back to RGB
-  vec3 finalColor = hsl2rgb(hslMultiband);
+  vec3 finalColor = clamp(oklabToRgb(oklabMultiband), 0.0, 1.0);
   
   // Softer detail layer using low-frequency noise (not harsh fbm)
   float trebleDetail = u_trebleLevel * 0.3 + 0.3; // Reduced range
