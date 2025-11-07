@@ -13,6 +13,9 @@ export class WebGLMorphRenderer {
   private gl: WebGLRenderingContext | null = null;
   private container: HTMLElement | null = null;
   
+  // Core readiness flag - CRITICAL for preventing render() on uninitialized state
+  private coreReady: boolean = false;
+  
   // Programs
   private flowProgram: WebGLProgram | null = null;
   private feedbackProgram: WebGLProgram | null = null;
@@ -194,6 +197,15 @@ export class WebGLMorphRenderer {
     // CRITICAL: Only fail if CORE programs fail
     if (!this.flowProgram || !this.feedbackProgram) {
       console.error('[WebGLMorphRenderer] ❌ Failed to create CORE programs');
+      this.coreReady = false;
+      return;
+    }
+    
+    // Validate programs before marking ready
+    if (!this.gl.getProgramParameter(this.flowProgram, this.gl.LINK_STATUS) ||
+        !this.gl.getProgramParameter(this.feedbackProgram, this.gl.LINK_STATUS)) {
+      console.error('[WebGLMorphRenderer] ❌ Core programs failed validation');
+      this.coreReady = false;
       return;
     }
     
@@ -235,6 +247,8 @@ export class WebGLMorphRenderer {
       this.bloomProgram = null;
     }
     
+    // Mark core as ready ONLY after all critical setup succeeds
+    this.coreReady = true;
     console.log('[WebGLMorphRenderer] ✅ WebGL initialization complete (core + optional effects)');
   }
 
@@ -597,23 +611,15 @@ export class WebGLMorphRenderer {
     parallaxStrength: number = 0.0,
     burnIntensity: number = 0.0
   ): Promise<void> {
-    if (!this.gl || !this.canvas || !this.flowProgram || !this.feedbackProgram) {
-      console.warn('[WebGLMorphRenderer] Renderer not ready:', {
-        hasGL: !!this.gl,
-        hasCanvas: !!this.canvas,
-        hasFlowProgram: !!this.flowProgram,
-        hasFeedbackProgram: !!this.feedbackProgram
-      });
+    // CRITICAL: Check coreReady flag first to prevent GL_INVALID_OPERATION
+    if (!this.coreReady) {
+      console.warn('[WebGLMorphRenderer] Core not ready - skipping render');
       return;
     }
     
-    // Validate programs are linked successfully
-    if (!this.gl.getProgramParameter(this.flowProgram, this.gl.LINK_STATUS)) {
-      console.error('[WebGLMorphRenderer] ❌ Flow program not linked:', this.gl.getProgramInfoLog(this.flowProgram));
-      return;
-    }
-    if (!this.gl.getProgramParameter(this.feedbackProgram, this.gl.LINK_STATUS)) {
-      console.error('[WebGLMorphRenderer] ❌ Feedback program not linked:', this.gl.getProgramInfoLog(this.feedbackProgram));
+    if (!this.gl || !this.canvas || !this.flowProgram || !this.feedbackProgram) {
+      console.error('[WebGLMorphRenderer] ❌ Core components missing after ready flag set!');
+      this.coreReady = false;
       return;
     }
     
