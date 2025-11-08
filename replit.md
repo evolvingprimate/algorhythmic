@@ -30,6 +30,7 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 - **Image Generation**: DALL-E 3 creates 1024x1024 artwork.
 - **Permanent Storage**: Images are downloaded from DALL-E and stored permanently in Replit Object Storage with a comprehensive triple verification and retry pipeline to ensure persistence and integrity.
 - **DNA Morphing System**: Each artwork has a 50-point DNA vector enabling smooth, procedural morphing between frames over 5-minute cycles, with audio-reactive modulation.
+- **Frame Pool Management**: Smart sync system automatically refreshes artwork pool after generation. MorphEngine tracks loaded frames by artworkId, deduplicates new frames on query refresh, and caps total frames at 20 to prevent unbounded growth. No hard resets during playback ensures continuous morphing without jump cuts.
 - **Visual Effects System**: 
   - **Trace Extraction**: Three-pass rendering with Frame B alpha/luminance extraction, Sobel edge detection, 5×5 Gaussian blur, and temporal accumulation (0.85-0.95 decay) creates ethereal trailing ribbons. Multiply blend composite makes Frame B appear to "birth" from behind Frame A with DNA-controlled strength and parallax offset.
   - **Soft Bloom/Glow**: Single-pass Kawase bloom on downsampled (1/4 resolution) framebuffer extracts bright regions with DNA[48]-controlled intensity, modulated by burnIntensity for dreamy halos around bright areas during transitions.

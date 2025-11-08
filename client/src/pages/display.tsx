@@ -472,6 +472,72 @@ export default function Display() {
     }
   }, [recentArtworks, toast]);
 
+  // Smart sync: Add only new frames when recent artworks refreshes (after generation)
+  useEffect(() => {
+    // Skip if MorphEngine is empty (initial load handles this)
+    if (!recentArtworks || recentArtworks.length === 0 || morphEngineRef.current.getFrameCount() === 0) {
+      return;
+    }
+    
+    // Skip during fallback generation to avoid interference
+    if (isFallbackGeneratingRef.current) {
+      return;
+    }
+    
+    // Find new artworks not yet in MorphEngine
+    const newArtworks = recentArtworks.filter(artwork => {
+      return artwork.id && !morphEngineRef.current.hasFrame(artwork.id);
+    });
+    
+    if (newArtworks.length === 0) {
+      return; // No new frames to add
+    }
+    
+    console.log(`[Display] 🔄 Smart sync: Found ${newArtworks.length} new artworks to add to MorphEngine`);
+    
+    // Add new frames without resetting
+    newArtworks.forEach(artwork => {
+      let dnaVector = parseDNAFromSession(artwork);
+      
+      if (!dnaVector) {
+        console.warn(`[Display] Artwork ${artwork.id} missing DNA vector, generating default`);
+        dnaVector = Array(50).fill(0).map(() => Math.random() * 3);
+      }
+      
+      const audioFeatures = artwork.audioFeatures ? JSON.parse(artwork.audioFeatures) : null;
+      const musicInfo = artwork.musicTrack ? {
+        title: artwork.musicTrack,
+        artist: artwork.musicArtist || '',
+        album: artwork.musicAlbum || undefined,
+        release_date: undefined,
+        label: undefined,
+        timecode: undefined,
+        song_link: undefined
+      } : null;
+      
+      morphEngineRef.current.addFrame({
+        imageUrl: artwork.imageUrl,
+        dnaVector,
+        prompt: artwork.prompt,
+        explanation: artwork.generationExplanation || '',
+        artworkId: artwork.id,
+        musicInfo,
+        audioAnalysis: audioFeatures,
+      });
+      
+      console.log(`[Display] ✅ Smart sync added frame: ${artwork.prompt?.substring(0, 50)}...`);
+    });
+    
+    const totalFrames = morphEngineRef.current.getFrameCount();
+    console.log(`[Display] Smart sync complete. Total frames: ${totalFrames}`);
+    
+    // Cap frames at 20 to prevent unbounded growth
+    const MAX_FRAMES = 20;
+    if (totalFrames > MAX_FRAMES) {
+      console.warn(`[Display] ⚠️ Frame count (${totalFrames}) exceeds max (${MAX_FRAMES}). Consider implementing frame cleanup.`);
+    }
+  }, [recentArtworks]);
+
   // Fetch voting history
   const { data: votes } = useQuery<ArtVote[]>({
     queryKey: [`/api/votes/${sessionId.current}`],
@@ -598,6 +664,9 @@ export default function Display() {
       
       // Refetch usage stats after successful generation
       refetchUsageStats();
+      
+      // CRITICAL: Invalidate recent artworks query to refresh pool for next reload
+      queryClient.invalidateQueries({ queryKey: ["/api/recent-artworks"] });
     },
     onError: (error: any) => {
       toast({

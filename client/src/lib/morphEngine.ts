@@ -63,6 +63,10 @@ export class MorphEngine {
     return this.frames.length;
   }
 
+  hasFrame(artworkId: string): boolean {
+    return this.frames.some(frame => frame.artworkId === artworkId);
+  }
+
   getCurrentFrame(): DNAFrame | null {
     if (this.frames.length === 0) return null;
     return this.frames[this.currentIndex] || null;
