@@ -34,6 +34,24 @@ export interface MorphState {
   burnIntensity: number; // 0-1: Peak "burn" effect intensity
 }
 
+// Audio-Reactive Controls (Morpheus 0.4)
+export interface MorphControls {
+  t: number;
+  tRateBase: number;
+  tRate: number;
+  tBeatNudge: number;
+  dispAmp: number;
+  seamFeather: number;
+  tpsLambda: number;
+  meshSharpen: number;
+  bgDispAmp: number;
+  caps: {
+    maxDispAmp: number;
+    maxTRate: number;
+    maxSharpen: number;
+  };
+}
+
 export class MorphEngine {
   private frames: DNAFrame[] = [];
   private currentIndex: number = 0;
@@ -57,6 +75,24 @@ export class MorphEngine {
   private readonly MORPH_DURATION = 292000; // 4:52 minutes morph (292s)
   private readonly TOTAL_CYCLE = 300000; // 5 minutes total (0+8+292=300s)
   private readonly KEN_BURNS_CYCLE = 300000; // Ken Burns cycle matches morph cycle
+
+  // Audio-reactive controls (Morpheus 0.4)
+  public controls: MorphControls = {
+    t: 0,
+    tRateBase: 0,
+    tRate: 0,
+    tBeatNudge: 0.03,
+    dispAmp: 0.006,
+    seamFeather: 1.0,
+    tpsLambda: 0.02,
+    meshSharpen: 0,
+    bgDispAmp: 0.003,
+    caps: {
+      maxDispAmp: 0.015,
+      maxTRate: 0.15,
+      maxSharpen: 0.15
+    }
+  };
 
   constructor() {
     // Don't initialize phaseStartTime until frames are added

@@ -77,6 +77,28 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
     - **Design Goal**: Eliminate bidirectional complexity and mirrored progress calculations to prevent jumpiness
     - **Linear Progression**: Single progress value (0-1) drives scale, opacity, and pan - no role swapping mid-cycle
   
+  - **Morpheus 0.4 - Feature-Based Intelligent Morphing**: Advanced multi-stage morphing using computer vision (OpenCV.js)
+    - **Phase 1 - Image Analysis**: ORB feature detection, RANSAC homography, similarity metrics
+      - Extracts 500 ORB features per frame, matches with BFMatcher (Hamming distance)
+      - RANSAC homography with 5px threshold, counts inliers, measures reprojection error
+      - Computes coverage heatmap (8×8 grid), edge overlap (Sobel), RGB histogram distance (3×16 bins)
+    - **Phase 2 - Intelligent Planning**: Heuristic decision tree chooses 1-3 morphing stages
+      - **High alignment** (inlier ratio >0.6): mesh warping → TPS → crossfade
+      - **Moderate alignment** (ratio 0.3-0.6): optical flow → crossfade
+      - **Weak alignment** (<0.3): simple crossfade
+      - Each stage assigned parameters: triCount, lambda, flowWeight, dispAmp, seamFeather
+    - **Phase 3 - Data Baking**: Pre-compute transformations for GPU rendering
+      - **Mesh Baker**: Delaunator Delaunay triangulation, per-triangle affine transforms → RGBA32F textures
+      - **TPS Baker**: Solve thin-plate spline system (r² log(r) kernel), generate RG32F displacement map
+      - **Flow Baker**: Farneback optical flow (pyrScale=0.5, 3 levels, 15 winsize), Laplacian smoothing, confidence weighting
+    - **Phase 4 - WebGL2 Rendering**: Multi-program shader system
+      - Mesh shader: per-triangle vertex transformation with affine matrices
+      - TPS shader: displacement map sampling with UV warping
+      - Flow shader: dense flow field with confidence-weighted blending
+      - Crossfade shader: fallback linear interpolation
+    - **STATUS**: Core architecture complete, MISSING implementation: control point extraction, GL buffer creation, texture upload
+      - Current state: Falls back to crossfade (all analysis/planning/baking runs but data not fed to GPU)
+  
 - **Visual Effects System**: 
   - **Trace Extraction**: Three-pass rendering with Frame B alpha/luminance extraction, Sobel edge detection, 5×5 Gaussian blur, and temporal accumulation (0.85-0.95 decay) creates ethereal trailing ribbons. Multiply blend composite makes Frame B appear to "birth" from behind Frame A with DNA-controlled strength and parallax offset.
   - **Soft Bloom/Glow**: Single-pass Kawase bloom on downsampled (1/4 resolution) framebuffer extracts bright regions with DNA[48]-controlled intensity, modulated by burnIntensity for dreamy halos around bright areas during transitions.
@@ -84,6 +106,31 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
   - **Displacement & Flow**: Curl noise flow fields with luminance weighting
   - **Ken Burns Effect**: Enhanced zoom and parallax translation
   - **Particle System**: Beat-triggered particles with bass peak detection and edge-weighted emission
+
+- **Audio-Reactive Control System**: Real-time audio analysis with tasteful parameter mapping and beat quantization
+  - **AudioAnalyzer**: Web Audio API feature extraction
+    - FFT analysis (2048 samples) → frequency bins and spectral features
+    - RMS energy calculation for overall loudness
+    - Spectral centroid for brightness/tonal quality
+    - Bass/treble isolation via frequency band summing
+    - Beat detection using energy flux with adaptive threshold
+    - BPM estimation via autocorrelation with tempo confidence
+  - **AudioReactiveMapper**: Intelligent parameter mapping with hard safety caps
+    - **Displacement Amplitude**: RMS → 0.003-0.012 range (tasteful, never overwhelming)
+    - **TPS Lambda Sharpening**: Spectral centroid → 0.1-0.8 (brighter = sharper warping)
+    - **Mesh Detail**: Centroid → triangle count boost (brighter = more triangles)
+    - **Flow Weight**: RMS-modulated optical flow strength
+    - **Stage Timing**: Bar-boundary gating for multi-stage transitions (respects musical structure)
+    - All parameters clamped to prevent visual chaos
+  - **AudioReactiveController**: Public API for morphEngine integration
+    - Single `update(deltaTime)` call per frame
+    - Exposes controls: displacement, tpsLambda, meshTriCount, flowWeight, stageGate
+    - Musical clock tracking: beat phase (0-1), bar phase (0-1), BPM
+  - **AudioDebugOverlay**: React UI component for real-time audio debugging
+    - Displays RMS, centroid, bass, treble, BPM, beat/bar phases
+    - Shows mapped control values and safety clamping status
+    - Toggled via debug menu for development visibility
+
 - **Tiered Rendering**: Adaptive rendering based on device capabilities (RAM, GPU, WebGL/WebGPU support) for optimal performance across various devices.
 
 ### Data Models
