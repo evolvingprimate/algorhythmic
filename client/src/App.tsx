@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/components/theme-provider";
 import Landing from "@/pages/landing";
 import Display from "@/pages/display";
+import Maestro from "@/pages/maestro";
 import Gallery from "@/pages/gallery";
 import Subscribe from "@/pages/subscribe";
 import WebGLTest from "@/pages/webgl-test";
@@ -16,6 +17,7 @@ function Router() {
     <Switch>
       <Route path="/" component={Landing} />
       <Route path="/display" component={Display} />
+      <Route path="/maestro" component={Maestro} />
       <Route path="/gallery" component={Gallery} />
       <Route path="/subscribe" component={Subscribe} />
       <Route path="/webgl-test" component={WebGLTest} />
