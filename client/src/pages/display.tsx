@@ -51,7 +51,7 @@ import { WebSocketClient } from "@/lib/websocket-client";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
 import { MorphEngine } from "@/lib/morphEngine";
-import { WebGLMorphRenderer } from "@/lib/webglMorphRenderer";
+import { RendererManager } from "@/lib/RendererManager";
 import { detectDeviceCapabilities } from "@/lib/deviceDetection";
 import { parseDNAFromSession } from "@/lib/dna";
 import { EffectLogger } from "@/lib/effectLogger";
@@ -139,7 +139,7 @@ export default function Display() {
   const audioAnalyzerRef = useRef<AudioAnalyzer | null>(null);
   const wsClientRef = useRef<WebSocketClient | null>(null);
   const morphEngineRef = useRef<MorphEngine>(new MorphEngine()); // Initialize immediately
-  const rendererRef = useRef<WebGLMorphRenderer | null>(null);
+  const rendererRef = useRef<RendererManager | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const hideControlsTimeoutRef = useRef<number>();
   const generationTimeoutRef = useRef<number>();
@@ -746,7 +746,7 @@ export default function Display() {
     const device = detectDeviceCapabilities();
     console.log(`[Display] Device tier ${device.tier} detected, max FPS: ${device.maxFPS}`);
     
-    rendererRef.current = new WebGLMorphRenderer('morphing-canvas-container');
+    rendererRef.current = new RendererManager('morphing-canvas-container', selectedEngine);
     
     return () => {
       if (animationFrameRef.current) {
@@ -756,6 +756,14 @@ export default function Display() {
       rendererRef.current?.destroy();
     };
   }, []);
+  
+  // Handle engine selection changes
+  useEffect(() => {
+    if (rendererRef.current) {
+      rendererRef.current.requestEngineSwitch(selectedEngine);
+      console.log(`[Display] Engine switch requested: ${selectedEngine}`);
+    }
+  }, [selectedEngine]);
 
   // Render loop for DNA morphing
   useEffect(() => {
@@ -800,8 +808,16 @@ export default function Display() {
       
       if (hasMultipleFrames) {
         // MORPHING MODE (both playing and paused)
+        const prevFrameIndex = morphEngineRef.current.getCurrentFrame();
         const morphState = morphEngineRef.current.getMorphState(isPlaying ? (currentAudioAnalysis || undefined) : undefined);
         const nextFrame = morphEngineRef.current.getNextFrame();
+        
+        // Check if we've advanced to a new cycle (frame index wrapped around)
+        const currentFrameIndex = morphEngineRef.current.getCurrentFrame();
+        if (prevFrameIndex && currentFrameIndex && prevFrameIndex !== currentFrameIndex) {
+          // Cycle boundary - apply pending engine switch
+          rendererRef.current.applyPendingEngineSwitch();
+        }
 
         // Audio reactivity only when playing
         const scaledAudio = isPlaying && currentAudioAnalysis && morphState.audioIntensity > 0 ? {
@@ -825,16 +841,10 @@ export default function Display() {
         const nextOpacity = morphState.frameForeshadowMix;
 
         rendererRef.current.render(
-          { imageUrl: currentFrame.imageUrl, opacity: currentOpacity },
-          nextFrame ? { imageUrl: nextFrame.imageUrl, opacity: nextOpacity } : null,
-          morphState.currentDNA,
-          scaledAudio,
-          isPlaying ? morphState.audioIntensity : 0.0, // No audio effects when paused
-          isPlaying ? morphState.beatBurst : 0.0,      // No beat bursts when paused
-          // DJ Crossfade & Ken Burns parameters
-          morphState.zoomBias,
-          morphState.parallaxStrength,
-          morphState.burnIntensity
+          currentFrame.imageUrl,
+          nextFrame ? nextFrame.imageUrl : currentFrame.imageUrl,
+          morphState,
+          scaledAudio || undefined
         );
 
         // Update debug stats for morphing mode (using ref to avoid render loop restart)
@@ -915,17 +925,13 @@ export default function Display() {
           staticDNA = Array(50).fill(0.5);
         }
         
+        const staticMorphState = morphEngineRef.current.getMorphState();
+        
         rendererRef.current.render(
-          { imageUrl: currentFrame.imageUrl, opacity: 1.0 },
-          null, // No next frame with single frame
-          staticDNA,
-          null, // No audio
-          0.0,  // No audio intensity
-          0.0,  // No beat burst
-          // DJ Crossfade & Ken Burns parameters (all 0 for static mode)
-          0.0,  // zoomBias
-          0.0,  // parallaxStrength
-          0.0   // burnIntensity
+          currentFrame.imageUrl,
+          currentFrame.imageUrl,
+          staticMorphState,
+          undefined
         );
 
         // Update debug stats for static mode (using ref to avoid render loop restart)
