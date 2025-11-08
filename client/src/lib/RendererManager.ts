@@ -18,6 +18,7 @@ export class RendererManager {
   
   private imageCache: Map<string, HTMLImageElement> = new Map();
   private startTime: number = Date.now();
+  private resizeHandler: (() => void) | null = null;
   
   constructor(containerId: string, initialEngine: string) {
     this.container = document.getElementById(containerId);
@@ -52,7 +53,8 @@ export class RendererManager {
     }
     
     this.resize();
-    window.addEventListener('resize', () => this.resize());
+    this.resizeHandler = () => this.resize();
+    window.addEventListener('resize', this.resizeHandler);
     
     this.createTextures();
     
@@ -216,26 +218,45 @@ export class RendererManager {
   }
   
   destroy(): void {
+    // Remove resize listener
+    if (this.resizeHandler) {
+      window.removeEventListener('resize', this.resizeHandler);
+      this.resizeHandler = null;
+    }
+    
+    // Destroy current engine
     if (this.currentEngine) {
       this.currentEngine.destroy();
       this.currentEngine = null;
     }
     
+    // Delete textures
     if (this.gl) {
-      if (this.imageTextureA) this.gl.deleteTexture(this.imageTextureA);
-      if (this.imageTextureB) this.gl.deleteTexture(this.imageTextureB);
+      if (this.imageTextureA) {
+        this.gl.deleteTexture(this.imageTextureA);
+        this.imageTextureA = null;
+      }
+      if (this.imageTextureB) {
+        this.gl.deleteTexture(this.imageTextureB);
+        this.imageTextureB = null;
+      }
     }
     
+    // Remove canvas from DOM
     if (this.canvas && this.container) {
       this.container.removeChild(this.canvas);
     }
     
+    // Clear caches
     this.imageCache.clear();
     
+    // Null out references
     this.canvas = null;
     this.gl = null;
     this.container = null;
+    this.imageDataA = null;
+    this.imageDataB = null;
     
-    console.log('[RendererManager] Destroyed');
+    console.log('[RendererManager] Destroyed (all resources cleaned up)');
   }
 }

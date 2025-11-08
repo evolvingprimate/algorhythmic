@@ -30,7 +30,7 @@ export class EngineRegistry {
   listEngines(): RendererMetadata[] {
     const metadata: RendererMetadata[] = [];
     
-    for (const [key, EngineClass] of this.engines.entries()) {
+    for (const [key, EngineClass] of Array.from(this.engines.entries())) {
       const instance = new EngineClass();
       metadata.push({
         name: key,

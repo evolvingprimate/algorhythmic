@@ -31,11 +31,13 @@ export class Morpheus01Renderer implements IMorphRenderer {
   readonly version = '0.1.0';
   readonly description = 'Simple cross-fade between frames';
   
+  private gl: WebGL2RenderingContext | null = null;
   private program: WebGLProgram | null = null;
   private positionBuffer: WebGLBuffer | null = null;
   private texCoordBuffer: WebGLBuffer | null = null;
   
   initialize(gl: WebGL2RenderingContext): void {
+    this.gl = gl;
     this.program = this.createProgram(gl, vertexShader, fragmentShader);
     if (!this.program) {
       console.error('[Morpheus01] Failed to create shader program');
@@ -106,7 +108,22 @@ export class Morpheus01Renderer implements IMorphRenderer {
   }
   
   destroy(): void {
-    console.log('[Morpheus01] Destroyed');
+    if (this.gl) {
+      if (this.program) {
+        this.gl.deleteProgram(this.program);
+        this.program = null;
+      }
+      if (this.positionBuffer) {
+        this.gl.deleteBuffer(this.positionBuffer);
+        this.positionBuffer = null;
+      }
+      if (this.texCoordBuffer) {
+        this.gl.deleteBuffer(this.texCoordBuffer);
+        this.texCoordBuffer = null;
+      }
+    }
+    this.gl = null;
+    console.log('[Morpheus01] Destroyed (WebGL resources cleaned up)');
   }
   
   private createProgram(gl: WebGL2RenderingContext, vSource: string, fSource: string): WebGLProgram | null {

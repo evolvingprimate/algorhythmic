@@ -1,5 +1,5 @@
 import type { MorphState } from '../morphEngine';
-import type { AudioAnalysis } from '../audioAnalyzer';
+import type { AudioAnalysis } from '@shared/schema';
 
 export interface RenderContext {
   gl: WebGL2RenderingContext;
