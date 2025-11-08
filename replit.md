@@ -21,6 +21,7 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 - **Database**: PostgreSQL with Drizzle ORM
 - **Authentication**: Replit Auth with OpenID Connect (Passport.js)
 - **Real-time**: WebSocket Server (ws package)
+- **Artwork Discovery**: Global artwork pool shared across all users, enabling instant display and organic discovery
 
 ### AI Art Generation & Morphing
 - **Audio Capture & Analysis**: Extracts frequency, amplitude, tempo, mood.
@@ -41,12 +42,14 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 ### Data Models
 - **ArtPreferences**: User-selected styles and artists.
 - **ArtVotes**: Upvote/downvote history.
-- **ArtSessions**: Generated artwork history.
+- **ArtSessions**: Generated artwork history (globally shared across all users).
+- **ArtFavorites**: User favorites for weighted rotation (future feature).
 - **Users**: Auth profile data, subscription tier.
 - **DailyUsage**: Tracks daily generation count for users.
 
 ### Key Features
 - **Art Display**: Real-time audio-reactive visualizations, style/artist selection, voting system, WebSocket for multi-device sync, timed generation.
+- **Global Artwork Pool**: All generated artworks are shared across users for discovery. New users instantly see community art (no black screen). Future: weighted rotation based on user favorites.
 - **User Gallery Page**: Protected route to display, save, delete, and download user artworks.
 - **Subscription Page**: Stripe payment integration, 7-day free trial, feature comparison across tiers.
 - **Style Selector**: Visual grid of 71 artistic styles across 8 master groups, with dynamic AI mode.

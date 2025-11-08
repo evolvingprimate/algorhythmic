@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, timestamp, boolean, index } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, timestamp, boolean, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -46,6 +46,18 @@ export const artSessions = pgTable("art_sessions", {
 }, (table) => ({
   sessionIdIdx: index("art_sessions_session_id_idx").on(table.sessionId),
   userIdIdx: index("art_sessions_user_id_idx").on(table.userId),
+}));
+
+// User favorites for weighted rotation (future feature)
+export const artFavorites = pgTable("art_favorites", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  artworkId: varchar("artwork_id").notNull().references(() => artSessions.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => ({
+  userIdIdx: index("art_favorites_user_id_idx").on(table.userId),
+  artworkIdIdx: index("art_favorites_artwork_id_idx").on(table.artworkId),
+  uniqueUserArtwork: uniqueIndex("art_favorites_unique_user_artwork").on(table.userId, table.artworkId),
 }));
 
 // Session storage table (required for Replit Auth)
@@ -139,6 +151,11 @@ export const insertStorageMetricSchema = createInsertSchema(storageMetrics).omit
   createdAt: true,
 });
 
+export const insertArtFavoriteSchema = createInsertSchema(artFavorites).omit({
+  id: true,
+  createdAt: true,
+});
+
 // Types
 export type ArtPreference = typeof artPreferences.$inferSelect;
 export type InsertArtPreference = z.infer<typeof insertArtPreferenceSchema>;
@@ -157,6 +174,9 @@ export type InsertDailyUsage = z.infer<typeof insertDailyUsageSchema>;
 
 export type StorageMetric = typeof storageMetrics.$inferSelect;
 export type InsertStorageMetric = z.infer<typeof insertStorageMetricSchema>;
+
+export type ArtFavorite = typeof artFavorites.$inferSelect;
+export type InsertArtFavorite = z.infer<typeof insertArtFavoriteSchema>;
 
 // Replit Auth specific type
 export type UpsertUser = typeof users.$inferInsert;
