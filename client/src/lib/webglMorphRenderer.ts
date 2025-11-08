@@ -628,7 +628,7 @@ export class WebGLMorphRenderer {
       return;
     }
     
-    if (!this.gl || !this.canvas || !this.flowProgram || !this.feedbackProgram) {
+    if (!this.gl || !this.canvas) {
       console.error('[WebGLMorphRenderer] ❌ Core components missing after ready flag set!');
       this.coreReady = false;
       return;
@@ -665,78 +665,23 @@ export class WebGLMorphRenderer {
       this.uploadTexture(this.imageTextureB!, nextImg);
       
       const morphProgress = nextFrame ? nextFrame.opacity : 0.0;
-      const time = (Date.now() - this.startTime) / 1000;
       
-      // Scale ALL audio parameters by audioIntensity to prevent hold-phase leakage
-      const bassLevel = (audioAnalysis ? audioAnalysis.bassLevel / 100 : 0) * audioIntensity;
-      const trebleLevel = (audioAnalysis ? audioAnalysis.trebleLevel / 100 : 0) * audioIntensity;
-      const amplitude = (audioAnalysis ? audioAnalysis.amplitude / 100 : 0) * audioIntensity;
+      // ===== SIMPLE CROSS-FADE MODE (ALL EFFECTS DISABLED) =====
+      // Render directly to canvas with simple opacity blending
+      this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
+      this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+      this.gl.clearColor(0, 0, 0, 1);
+      this.gl.clear(this.gl.COLOR_BUFFER_BIT);
       
-      // Scale all effects by audioIntensity (0 during hold phase, ramping up, then 1.0)
-      const flowSpeed = (dna[44] ?? 1.5) * 0.3 * audioIntensity;
-      const flowScale = (dna[45] ?? 2.0) * 2.0;
-      const warpIntensity = (dna[46] ?? 1.0) * 0.02 * audioIntensity;
-      const colorShiftRate = 0.0; // Disabled - user feedback: color shift too fast
-      const detailLevel = (dna[48] ?? 1.0) * audioIntensity;
-      const anomalyFactor = (dna[49] ?? 0.5) * audioIntensity;
+      // Enable blending for opacity
+      this.gl.enable(this.gl.BLEND);
+      this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA);
       
-      // ====== PASS 1: Trace Extraction (NEW) ======
-      // Extract luminance/edge trace from Frame B for dreamy birthing effect
-      if (this.traceProgram && this.traceFramebuffer && this.traceTextureCurrent && this.traceTexturePrevious) {
-        this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, this.traceFramebuffer);
-        this.gl.useProgram(this.traceProgram);
-        
-        // Set vertex attributes for trace program
-        const tracePosLoc = this.gl.getAttribLocation(this.traceProgram, 'a_position');
-        const traceTexLoc = this.gl.getAttribLocation(this.traceProgram, 'a_texCoord');
-        
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.positionBuffer);
-        this.gl.enableVertexAttribArray(tracePosLoc);
-        this.gl.vertexAttribPointer(tracePosLoc, 2, this.gl.FLOAT, false, 0, 0);
-        
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.texCoordBuffer);
-        this.gl.enableVertexAttribArray(traceTexLoc);
-        this.gl.vertexAttribPointer(traceTexLoc, 2, this.gl.FLOAT, false, 0, 0);
-        
-        // Bind Frame B texture (unit 0)
-        this.gl.activeTexture(this.gl.TEXTURE0);
-        this.gl.bindTexture(this.gl.TEXTURE_2D, this.imageTextureB);
-        this.gl.uniform1i(this.gl.getUniformLocation(this.traceProgram, 'u_imageB'), 0);
-        
-        // Bind previous trace texture (unit 1) for temporal accumulation
-        this.gl.activeTexture(this.gl.TEXTURE1);
-        this.gl.bindTexture(this.gl.TEXTURE_2D, this.traceTexturePrevious);
-        this.gl.uniform1i(this.gl.getUniformLocation(this.traceProgram, 'u_previousTrace'), 1);
-        
-        // Set resolution uniform
-        this.gl.uniform2f(this.gl.getUniformLocation(this.traceProgram, 'u_resolution'), this.canvas.width, this.canvas.height);
-        
-        // DNA[49]: Trace decay (0-3 → 0.85-0.95 range)
-        const traceDecay = 0.85 + ((dna[49] ?? 0) / 10) * 0.1;
-        this.gl.uniform1f(this.gl.getUniformLocation(this.traceProgram, 'u_traceDecay'), traceDecay);
-        
-        // DNA[47]: Trace intensity (0-3 → 0-1 range)
-        const traceIntensity = (dna[47] ?? 0) / 3;
-        this.gl.uniform1f(this.gl.getUniformLocation(this.traceProgram, 'u_traceIntensity'), traceIntensity);
-        
-        // Attach traceTextureCurrent to framebuffer
-        this.gl.framebufferTexture2D(
-          this.gl.FRAMEBUFFER,
-          this.gl.COLOR_ATTACHMENT0,
-          this.gl.TEXTURE_2D,
-          this.traceTextureCurrent,
-          0
-        );
-        
-        // Draw quad to extract trace
-        this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
-        
-        // Ping-pong swap: traceTextureCurrent ↔ traceTexturePrevious
-        [this.traceTextureCurrent, this.traceTexturePrevious] = [this.traceTexturePrevious, this.traceTextureCurrent];
+      if (!this.flowProgram) {
+        console.error('[WebGLMorphRenderer] ❌ Flow program missing!');
+        return;
       }
       
-      // ====== PASS 2: Flow Field (MODIFIED - Added trace texture uniforms) ======
-      this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, this.framebuffer);
       this.gl.useProgram(this.flowProgram);
       
       const posLoc = this.gl.getAttribLocation(this.flowProgram, 'a_position');
@@ -758,227 +703,40 @@ export class WebGLMorphRenderer {
       this.gl.bindTexture(this.gl.TEXTURE_2D, this.imageTextureB);
       this.gl.uniform1i(this.gl.getUniformLocation(this.flowProgram, 'u_imageB'), 1);
       
-      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_time'), time);
+      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_time'), 0);
       this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_morphProgress'), morphProgress);
       this.gl.uniform2f(this.gl.getUniformLocation(this.flowProgram, 'u_resolution'), this.canvas.width, this.canvas.height);
       
-      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_flowSpeed'), flowSpeed);
-      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_flowScale'), flowScale);
-      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_warpIntensity'), warpIntensity);
-      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_colorShiftRate'), colorShiftRate);
-      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_detailLevel'), detailLevel);
-      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_anomalyFactor'), anomalyFactor);
+      // Disable ALL effects by setting parameters to zero
+      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_flowSpeed'), 0);
+      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_flowScale'), 0);
+      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_warpIntensity'), 0);
+      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_colorShiftRate'), 0);
+      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_detailLevel'), 0);
+      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_anomalyFactor'), 0);
+      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_bassLevel'), 0);
+      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_trebleLevel'), 0);
+      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_amplitude'), 0);
+      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_beatBurst'), 0);
+      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_zoomBias'), 0);
+      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_parallaxStrength'), 0);
+      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_burnIntensity'), 0);
+      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_chromaticDrift'), 0);
       
-      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_bassLevel'), bassLevel);
-      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_trebleLevel'), trebleLevel);
-      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_amplitude'), amplitude);
-      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_beatBurst'), beatBurst);
-      
-      // DJ Crossfade & Ken Burns uniforms
-      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_zoomBias'), zoomBias);
-      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_parallaxStrength'), parallaxStrength);
-      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_burnIntensity'), burnIntensity);
-      
-      // Trace texture uniforms (dreamy birthing effect)
+      // Set trace parameters to zero if present
       if (this.traceTextureCurrent) {
-        // Bind trace texture to unit 2
         this.gl.activeTexture(this.gl.TEXTURE2);
         this.gl.bindTexture(this.gl.TEXTURE_2D, this.traceTextureCurrent);
         this.gl.uniform1i(this.gl.getUniformLocation(this.flowProgram, 'u_traceTexture'), 2);
-        
-        // DNA[47]: Trace multiply strength (0-3 → 0-0.5 range, clamped for safety)
-        const traceMultiplyStrength = Math.min(Math.max(((dna[47] ?? 0) / 3) * 0.5, 0), 1);
-        this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_traceMultiplyStrength'), traceMultiplyStrength);
-        
-        // Trace parallax offset in pixels (uses parallaxStrength)
-        const traceParallaxOffset = parallaxStrength * 10.0;
-        this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_traceParallaxOffset'), traceParallaxOffset);
+        this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_traceMultiplyStrength'), 0);
+        this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_traceParallaxOffset'), 0);
       }
       
-      // DNA[47]: Chromatic drift intensity (0-3 → 0-1.5 pixels)
-      // Scale by morphProgress for easing effect
-      const chromaticDrift = ((dna[47] ?? 0) / 3) * 1.5 * morphProgress;
-      this.gl.uniform1f(this.gl.getUniformLocation(this.flowProgram, 'u_chromaticDrift'), chromaticDrift);
+      console.log(`[WebGLMorphRenderer] 🎨 Simple cross-fade: morphProgress=${morphProgress.toFixed(2)}`);
       
       this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
       
-      // ====== PASS 2.5: BLOOM EXTRACTION (NEW) ======
-      if (this.bloomProgram && this.bloomFramebuffer && this.bloomTexture) {
-        // Render downsampled bloom to bloomTexture
-        this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, this.bloomFramebuffer);
-        const bloomWidth = Math.floor(this.canvas.width / 4);
-        const bloomHeight = Math.floor(this.canvas.height / 4);
-        this.gl.viewport(0, 0, bloomWidth, bloomHeight);
-        
-        this.gl.useProgram(this.bloomProgram);
-        
-        // Set vertex attributes for bloom program
-        const bloomPosLoc = this.gl.getAttribLocation(this.bloomProgram, 'a_position');
-        const bloomTexLoc = this.gl.getAttribLocation(this.bloomProgram, 'a_texCoord');
-        
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.positionBuffer);
-        this.gl.enableVertexAttribArray(bloomPosLoc);
-        this.gl.vertexAttribPointer(bloomPosLoc, 2, this.gl.FLOAT, false, 0, 0);
-        
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.texCoordBuffer);
-        this.gl.enableVertexAttribArray(bloomTexLoc);
-        this.gl.vertexAttribPointer(bloomTexLoc, 2, this.gl.FLOAT, false, 0, 0);
-        
-        // Bind flow field output as input
-        this.gl.activeTexture(this.gl.TEXTURE0);
-        this.gl.bindTexture(this.gl.TEXTURE_2D, this.renderTexture);
-        
-        // Set uniforms
-        this.gl.uniform1i(this.gl.getUniformLocation(this.bloomProgram, 'u_image'), 0);
-        this.gl.uniform2f(this.gl.getUniformLocation(this.bloomProgram, 'u_resolution'), bloomWidth, bloomHeight);
-        
-        // DNA[48] controls bloom intensity (0-3 → 0-0.8)
-        const bloomIntensity = ((dna[48] ?? 1.0) / 3) * 0.8 * burnIntensity;
-        this.gl.uniform1f(this.gl.getUniformLocation(this.bloomProgram, 'u_bloomIntensity'), bloomIntensity);
-        this.gl.uniform1f(this.gl.getUniformLocation(this.bloomProgram, 'u_bloomThreshold'), 0.6);
-        
-        // Attach bloom texture to framebuffer
-        this.gl.framebufferTexture2D(
-          this.gl.FRAMEBUFFER,
-          this.gl.COLOR_ATTACHMENT0,
-          this.gl.TEXTURE_2D,
-          this.bloomTexture,
-          0
-        );
-        
-        // Draw bloom
-        this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
-        
-        // Restore viewport for main render
-        this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-      }
-      
-      // ====== PASS 3: Feedback (UNCHANGED) ======
-      this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
-      this.gl.useProgram(this.feedbackProgram);
-      
-      this.gl.activeTexture(this.gl.TEXTURE0);
-      this.gl.bindTexture(this.gl.TEXTURE_2D, this.renderTexture);
-      this.gl.uniform1i(this.gl.getUniformLocation(this.feedbackProgram, 'u_texture'), 0);
-      
-      this.gl.activeTexture(this.gl.TEXTURE1);
-      this.gl.bindTexture(this.gl.TEXTURE_2D, this.feedbackTexture);
-      this.gl.uniform1i(this.gl.getUniformLocation(this.feedbackProgram, 'u_feedback'), 1);
-      
-      this.gl.uniform1f(this.gl.getUniformLocation(this.feedbackProgram, 'u_time'), time);
-      this.gl.uniform1f(this.gl.getUniformLocation(this.feedbackProgram, 'u_feedbackAmount'), amplitude * 0.5 * audioIntensity);
-      this.gl.uniform2f(this.gl.getUniformLocation(this.feedbackProgram, 'u_resolution'), this.canvas.width, this.canvas.height);
-      
-      this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
-      
-      this.gl.bindTexture(this.gl.TEXTURE_2D, this.feedbackTexture);
-      this.gl.copyTexImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, 0, 0, this.canvas.width, this.canvas.height, 0);
-      
-      // ====== PASS 3.5: COMPOSITE SAFETY PASS (ALWAYS RUNS) ======
-      // CRITICAL: This pass MUST run every frame to apply the composite shader's safety floor
-      // It also applies chromatic drift when appropriate
-      if (this.compositeProgram) {
-        // Calculate morph progress from frame opacities (0 = hold, 1 = full morph)
-        const chromaticMorphProgress = nextFrame ? 1.0 - currentFrame.opacity : 0.0;
-        
-        // DNA[47]: Chromatic drift intensity (0-3 → 0-1.5px), scaled by morphProgress
-        // Will be 0 when not morphing or DNA[47] is 0, but we still run the pass for safety floor
-        const chromaticDrift = ((dna[47] ?? 0) / 3) * 1.5 * chromaticMorphProgress;
-        
-        // Copy current screen to feedbackTexture for sampling
-        this.gl.bindTexture(this.gl.TEXTURE_2D, this.feedbackTexture);
-        this.gl.copyTexImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, 0, 0, this.canvas.width, this.canvas.height, 0);
-        
-        // Apply composite shader (chromatic drift + safety floor)
-        this.gl.useProgram(this.compositeProgram);
-        
-        // Set vertex attributes
-        const compositePosLoc = this.gl.getAttribLocation(this.compositeProgram, 'a_position');
-        const compositeTexLoc = this.gl.getAttribLocation(this.compositeProgram, 'a_texCoord');
-        
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.positionBuffer);
-        this.gl.enableVertexAttribArray(compositePosLoc);
-        this.gl.vertexAttribPointer(compositePosLoc, 2, this.gl.FLOAT, false, 0, 0);
-        
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.texCoordBuffer);
-        this.gl.enableVertexAttribArray(compositeTexLoc);
-        this.gl.vertexAttribPointer(compositeTexLoc, 2, this.gl.FLOAT, false, 0, 0);
-        
-        // Bind feedback texture (current screen content)
-        this.gl.activeTexture(this.gl.TEXTURE0);
-        this.gl.bindTexture(this.gl.TEXTURE_2D, this.feedbackTexture);
-        
-        // Set uniforms for chromatic drift (0.0 when not needed, still applies safety floor)
-        this.gl.uniform1i(this.gl.getUniformLocation(this.compositeProgram, 'u_texture'), 0);
-        this.gl.uniform1f(this.gl.getUniformLocation(this.compositeProgram, 'u_chromaticDrift'), chromaticDrift);
-        this.gl.uniform2f(this.gl.getUniformLocation(this.compositeProgram, 'u_resolution'), this.canvas.width, this.canvas.height);
-        
-        // Draw (ALWAYS - applies safety floor even when chromatic drift is 0)
-        this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
-      }
-      
-      // ====== PASS 3.6: BLOOM COMPOSITE (NEW) ======
-      // Composite bloom additively on top of the final image
-      // CRITICAL: Use bloomPassthroughProgram (NO safety floor) to avoid adding constant offset
-      if (this.bloomTexture && this.bloomPassthroughProgram) {
-        this.gl.enable(this.gl.BLEND);
-        this.gl.blendFunc(this.gl.ONE, this.gl.ONE); // Additive blend
-        
-        this.gl.useProgram(this.bloomPassthroughProgram);
-        
-        // Set vertex attributes for bloom passthrough program
-        const bloomPosLoc = this.gl.getAttribLocation(this.bloomPassthroughProgram, 'a_position');
-        const bloomTexLoc = this.gl.getAttribLocation(this.bloomPassthroughProgram, 'a_texCoord');
-        
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.positionBuffer);
-        this.gl.enableVertexAttribArray(bloomPosLoc);
-        this.gl.vertexAttribPointer(bloomPosLoc, 2, this.gl.FLOAT, false, 0, 0);
-        
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.texCoordBuffer);
-        this.gl.enableVertexAttribArray(bloomTexLoc);
-        this.gl.vertexAttribPointer(bloomTexLoc, 2, this.gl.FLOAT, false, 0, 0);
-        
-        // Bind bloom texture
-        this.gl.activeTexture(this.gl.TEXTURE0);
-        this.gl.bindTexture(this.gl.TEXTURE_2D, this.bloomTexture);
-        
-        // Set uniforms (simple passthrough, no safety floor)
-        this.gl.uniform1i(this.gl.getUniformLocation(this.bloomPassthroughProgram, 'u_texture'), 0);
-        
-        // Draw bloom additive (pure bloom, no constant offset)
-        this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
-        
-        this.gl.disable(this.gl.BLEND);
-      }
-      
-      // Particle system pass (G-Force-like tracing effect)
-      if (this.particleSystem && audioIntensity > 0) {
-        const now = Date.now();
-        const deltaTime = now - this.lastFrameTime;
-        this.lastFrameTime = now;
-
-        // Get cached image data from both frames
-        const currentImageData = this.getImageData(currentImg, currentFrame.imageUrl);
-        const nextImageData = this.getImageData(nextImg, nextFrame ? nextFrame.imageUrl : currentFrame.imageUrl);
-        
-        if (currentImageData && nextImageData) {
-          // Emit particles that trace from foreground to background
-          // Pass bassLevel for beat-triggered burst emission
-          this.particleSystem.emitParticles(
-            currentImageData,
-            nextImageData,
-            audioIntensity,
-            morphProgress,
-            bassLevel
-          );
-        }
-        
-        // Update particle physics
-        this.particleSystem.update(deltaTime);
-        
-        // Render particles on top
-        this.particleSystem.render();
-      }
+      this.gl.disable(this.gl.BLEND);
       
     } catch (e) {
       console.error('[WebGLMorphRenderer] Render error:', e);
