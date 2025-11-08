@@ -1,0 +1,256 @@
+Got it. Here’s a paste-ready prompt that tells Agent 3 (with Claude as Architect) to **ship production-ready code now**, not just a plan—every artifact must be a brick in the house you’ll launch on Replit. It includes directory layout, coding standards, env/config, MVP scope, and live, runnable modules (TypeScript + WebGL2) with feature flags and tests.
+
+---
+
+## 🚀 Prompt for Replit Agent 3 — **Maestro + MorphEngine: Production-Oriented Build (Claude as Architect)**
+
+You are **Replit Agent 3** collaborating with **Claude the Architect**.
+Unlike a planning-only engagement, this project must deliver **production-quality code immediately**, in incremental, shippable slices. Output must be a runnable Replit project with clear milestones that I can publish in months for paid subscribers.
+
+### 🎯 Purpose (Product Vision)
+
+**Maestro** is the watcher–orchestrator of *Algorhythmic*: it perceives the on-screen image, reads the image’s **DNA map** and **artist statement** provided by the image generator (DALL·E / Flux / SDXL / whatever we use), listens to live audio (FFT/RMS/BPM/beat phase), and **conducts** the **MorphEngine** (WebGL2/WebGPU shaders, particle systems, morphs).
+Metaphor: **Maestro = ECU**, **MorphEngine = Engine**, **Image Generator = Musician + “performance” (image + DNA + statement)**. Maestro “listens” to the generator’s performance and directs MorphEngine so the whole visual orchestra stays in musical, emotional, and aesthetic harmony.
+
+---
+
+## ✅ Non-Negotiable Requirements
+
+1. **Code now, ship now**: Produce production-grade code (TypeScript, WebGL2 first). No “plan only.” Every deliverable must be runnable in Replit today.
+2. **Incremental bricks**: Organize work as a sequence of small, deployable milestones with a functional demo at the end of each milestone.
+3. **Claude = Architect**: Use Claude’s deep reasoning to choose dataflows, module boundaries, and algorithms. You (Agent 3) implement them.
+4. **Performance**: 60 FPS on Tier 3 (modern laptop) with graceful degradation; FPS floors & feature flags for lower tiers.
+5. **Cost control**: Generators are expensive. Include caching, cadence guards, novelty gating, and offline/demo modes.
+6. **DNA + Artist Statement**: The generator must return a **50-D DNA vector** and a short **artistStatement** that Maestro interprets.
+7. **Security/Config**: All keys via `.env`, no secrets committed. Provide reasonable mocks if keys absent.
+
+---
+
+## 🧱 Deliverables (this turn)
+
+Produce a **ready-to-run Replit project** with:
+
+### A) Project Scaffolding (create files with content)
+
+* `package.json` (scripts for dev/build/test/preview)
+* `tsconfig.json`, `vite.config.ts` (or next best)
+* `.env.example` (ACRCloud, generator, toggles)
+* `src/` tree (see below)
+* `public/index.html` with canvas, minimal UI
+* `README.md` with run/keys/tier notes and MVP instructions
+* `LICENSE` (MIT by default)
+
+### B) Source Layout (TypeScript, WebGL2 first)
+
+```
+src/
+  main.ts
+  app/Bootstrap.ts
+  config/flags.ts               // feature flags & tier caps
+  core/Clock.ts                 // bar/beat alignment
+  audio/AudioProbe.ts           // FFT/RMS/BPM/phase (Web Audio)
+  vision/FrameGrabber.ts        // readback to offscreen buffer
+  vision/VisionPipeline.ts      // Canny/DoG keypoints, saliency (GL or CPU)
+  genome/ImagePerformer.ts      // adapter for generator outputs
+  genome/DNA.ts                 // types, quantization, helpers
+  maestro/
+    FeatureBus.ts
+    StateStore.ts
+    Evaluator.ts                // opportunity scores
+    Policy.ts                   // rules → intents
+    Planner.ts                  // intents → directives (bar-aligned)
+    Conductor.ts                // directives → engine calls
+    Maestro.ts                  // orchestrates the loop
+  engine/
+    MorphEngine.ts              // effect graph + routing
+    effects/
+      particles/
+        ParticleSystem.ts
+        shaders/particles.vert.glsl
+        shaders/particles.frag.glsl
+        shaders/particles.update.glsl
+      outlines/
+        OutlineTracer.ts
+        shaders/outline.vert.glsl
+        shaders/outline.frag.glsl
+      post/
+        Bloom.ts
+        shaders/bloom.frag.glsl
+  ui/Controls.tsx (optional)    // toggles, stats
+  types/contracts.ts            // TS types below (verbatim)
+  test/
+    smoke.test.ts               // vitest: starts engine headless & checks FPS
+```
+
+### C) Canonical Data Contracts (use verbatim)
+
+```ts
+export type VisionFeatures = {
+  ts: number;
+  color: { palette: number[]; luminanceMean: number; contrast: number };
+  edges: { density: number; mapTex: WebGLTexture; polylines: Float32Array[] };
+  keypoints: { points: Float32Array; count: number }; // [x,y,score]*
+  saliency: { heatTex: WebGLTexture; centers: Float32Array }; // [x,y,score]*
+  segments?: { masks: WebGLTexture[]; classes?: string[] };
+  clip?: { embedding: Float32Array; tags: string[] };
+};
+
+export type AudioFeatures = {
+  ts: number;
+  bpm: number; beatPhase: number; rms: number;
+  bands128: Float32Array; centroid: number; energy: number;
+};
+
+export type FrameContext = {
+  dna: Uint8Array; // length 50, schema v1 (0..255)
+  model: string; seed: number; ageSec: number; isHero: boolean;
+};
+
+export type Intent =
+  | { kind: "trace-outline"; target: "dominant-silhouette" | "all-edges"; style: "neon" | "ink" | "glow"; strength: number }
+  | { kind: "pixie-dust"; source: "dot-keypoints" | "bright-pixels"; decayBeats: number; density: number; inheritColor: boolean }
+  | { kind: "kaleido"; symmetry: number; rotationBeats: number }
+  | { kind: "warp-bass"; elasticity: number; radius: number };
+
+export type Directive = {
+  id: string; ts: number;
+  startAtBar: number; durationBars: number;
+  params: Record<string, number | boolean | string>;
+  intent: Intent;
+  safety: { fpsMin: number; coolDownBars: number };
+};
+
+export type ImagePerformance = {
+  generator: "DALL-E" | "Flux" | "SDXL" | string;
+  dna: Uint8Array;            // 50-D visual genome
+  artistStatement: string;    // brief textual intent
+  timestamp: number;
+  imageUrl?: string;          // optional if remote
+};
+```
+
+### D) MVP Features (must run now)
+
+1. **AudioProbe**
+
+   * Web Audio API, 4096 FFT → 128 bins; RMS; BPM + beatPhase (autocorrelation + simple comb).
+   * Expose fast (≈120ms EMA) and slow (≈2–3s EMA) signals.
+
+2. **VisionPipeline (Tiered)**
+
+   * Downsample current canvas → Canny edges, DoG keypoints, saliency heatmap.
+   * Build `VisionFeatures` at 10–15 Hz.
+
+3. **ImagePerformer (Generator Adapter)**
+
+   * Interface to accept **ImagePerformance** (image + dna + artistStatement).
+   * **If no API keys**: provide a mock generator that returns a placeholder image + randomized but plausible DNA + short statement.
+
+4. **Maestro Loop**
+
+   * Evaluator: compute `manyDots`, `strongSilhouette`, `edgeParty`, `dramaBeat`, `novelty`.
+   * Policy: map to `pixie-dust`, `trace-outline`, `warp-bass` with bar-aligned scheduling, FPS floors, cool-downs.
+   * Planner: build `Directive` with deterministic seeds `(barIndex,intentId)`.
+
+5. **MorphEngine**
+
+   * **Particles (pixie-dust)**: SSBO/texture ping-pong; spawn from DoG keypoints; color sampling from the current frame; audio-modulated spawn and kick impulse.
+   * **Outline Trace**: edge map → marching squares to polylines; neon/ink/glow stroke shader; width & dash driven by beat energy.
+   * **Bloom post** (simple thresholded blur).
+
+6. **Tiering & Flags**
+
+   * `TIER` detection (deviceMemory, WebGL2), caps for particle count, toggles for heavy features.
+   * FPS watchdog: drop density, disable bloom, or skip outlines if below floor.
+
+7. **Cost Controls (stubs ready)**
+
+   * Prompt/gen caching keys; novelty gating; cadence guard.
+   * These must be implemented as switchable policies even if using the mock generator today.
+
+8. **UI**
+
+   * Minimal on-screen controls: start/stop audio, show FPS, tier, toggles for effects, button to inject a new **ImagePerformance**.
+
+9. **Testing**
+
+   * `vitest` smoke test to boot engine headless, simulate audio ramps, and assert frame loop runs and directives fire on bar boundaries.
+
+---
+
+## 🧭 Build Milestones (each ends with a working demo)
+
+1. **Milestone 1 — Core Scaffolding & Audio Probe**
+
+   * Render loop + AudioProbe + stats overlay; 60 FPS baseline.
+
+2. **Milestone 2 — Vision Basics**
+
+   * FrameGrabber + VisionPipeline (edges, DoG, saliency) + FeatureBus debug view.
+
+3. **Milestone 3 — Maestro (Evaluator/Policy/Planner/Conductor)**
+
+   * Bar-aligned decisions; mock intents firing; FPS/cool-downs working.
+
+4. **Milestone 4 — Pixie-Dust Effect (Production)**
+
+   * GPU particle system with emitter from keypoints; audio-reactive parameters; color sampling.
+
+5. **Milestone 5 — Outline Trace (Production)**
+
+   * Marching squares → VBO; glow/dash shader; beat-modulated width.
+
+6. **Milestone 6 — ImagePerformer & DNA/Statement Interpretation**
+
+   * Accept real or mock **ImagePerformance**; map DNA + statement to effect biases and palette/LUT.
+
+7. **Milestone 7 — Tiering, Flags, Cost Controls, Polish**
+
+   * FPS floors, degradation paths; caching stubs; README for deploy.
+
+---
+
+## 🧪 Quality Bars
+
+* **Perf**: Tier 3 ≥ 60 FPS with 50–100k particles; Tier 2 ≥ 45 FPS with 20–30k; Tier 1 ≥ 30 FPS minimal.
+* **Stability**: No uncaught promise rejections; no WebGL context loss in standard usage.
+* **Determinism**: Random seeded by `(barIndex,intentId)`; repeatable micro-events.
+* **Security**: `.env` for keys; input validation for all API responses.
+
+---
+
+## 🧠 Claude’s Responsibilities (Architect)
+
+* Choose perception algorithms and dataflows for low latency and tastefulness.
+* Define how **DNA + artistStatement** bias Maestro’s policy (e.g., “melancholy → dim bloom & longer trails”).
+* Finalize rule thresholds, EMA constants, bar alignment strategy, and fallback behaviors.
+
+---
+
+## 🛠 Agent 3’s Responsibilities (Engineer)
+
+* Implement the full scaffold and MVP code **now**.
+* Provide real, compilable TypeScript and GLSL files.
+* Include mocks when APIs are absent.
+* Keep the code clean, commented, and modular.
+
+---
+
+## 📝 Output Format (this turn)
+
+* A single message containing:
+
+  1. The directory tree
+  2. The **actual file contents** for all new files (concise but complete; no placeholders like “// TODO implement”)
+  3. Instructions for running in Replit
+  4. Notes on enabling the mock generator vs. real API
+
+**Do not** output “planning only.” Deliver **runnable code** and a clear path to publish.
+
+---
+
+**End of Prompt.**
+
+---
+
+If you want, I can also generate a minimal **starter commit** of these files right here (with mock generator + working pixie-dust + outline trace) so you can paste them into Replit and hit Run.

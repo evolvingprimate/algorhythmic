@@ -1,0 +1,323 @@
+Awesome—here’s a single, paste-ready prompt that **combines** the best of both versions, **authorizes breaking changes**, and explicitly empowers Agent 3 to **delegate in parallel** (to Claude the Architect and any task-specific sub-agents). It drives toward **runnable, production-oriented code** with MorphEngine v2’s **Control Plane ↔ Render Plane** redesign and the **DNA + artist statement** feed from the image generator.
+
+---
+
+## 🚀 Prompt for Replit Agent 3
+
+### **Algorhythmic — Maestro + MorphEngine v2 (Ship Code, Break Things, Delegate in Parallel)**
+
+You are **Replit Agent 3**, empowered to **delegate in parallel** to specialized agents.
+
+* **Claude (Architect)** owns high-level systems reasoning, module boundaries, dataflows, timing, and policy thresholds.
+* You coordinate and **ship production-quality code now**, in small, deployable bricks.
+* You may spin up sub-agents (Shader Engineer, Vision Specialist, Audio DSP, Infra/Tooling) to work concurrently.
+
+**Goal:** Deliver a runnable **/maestro** route that integrates **Maestro (watcher–orchestrator)** with a **redesigned MorphEngine v2** that exposes clear “knobs” Maestro can turn. Treat every artifact as a brick we will launch publicly in months.
+
+---
+
+### 🎯 Product Vision & Purpose
+
+**Maestro** is the **conductor/ECU**: it “listens” to the music (FFT/RMS/BPM/beat phase), “sees” the current frame (edges, dots, saliency), and **interprets the image generator’s performance**—a generated image plus a **50-D DNA map** and **artistStatement**—to **direct** the **MorphEngine** (the orchestra/engine) through typed commands and bar-aligned ramps.
+
+**Image generator (DALL·E/Flux/SDXL/etc.)** must return:
+
+* `dna: Uint8Array(50)` (schema v1, 0–255)
+* `artistStatement: string` (short description of intent)
+
+Maestro interprets both and conducts MorphEngine accordingly.
+
+---
+
+## ✅ Non-Negotiables
+
+1. **Ship code now**: TypeScript + WebGL2 first; runnable in Replit today.
+2. **Break things**: Redesign **MorphEngine v2** for a strong control API; legacy can be gated.
+3. **Delegation**: Use Claude for architecture; parallelize shader work, vision, audio, infra.
+4. **Performance**: Tier 3 (desktop WebGL2) ≥ 60 FPS, graceful degradation below floors.
+5. **Cost control**: Caching, cadence guards, novelty gating, mock generator if no keys.
+6. **DNA + artistStatement** required in generator v2 response (with legacy fallback).
+7. **Security**: Keys in `.env`; provide mocks when absent.
+
+---
+
+## 🧱 Deliverables (This Turn)
+
+Produce a **runnable Replit project** with code + docs:
+
+### A) Project Scaffolding
+
+* `package.json` (scripts: dev/build/test/preview)
+* `tsconfig.json`, `vite.config.ts`
+* `.env.example` (ACRCloud / generator / flags)
+* `public/index.html` (canvas + minimal UI)
+* `README.md` (run, flags, tiers); `LICENSE` (MIT)
+
+### B) Source Layout
+
+```
+src/
+  main.ts
+  app/Bootstrap.ts
+  config/flags.ts
+  core/Clock.ts                     // bar/beat alignment
+  audio/AudioProbe.ts               // FFT/RMS/BPM/phase w/ fast+slow EMA
+  vision/FrameGrabber.ts
+  vision/VisionPipeline.ts          // Canny/DoG/saliency (tiered)
+  genome/DNA.ts                     // types, quantize helpers
+  genome/ImagePerformer.ts          // adapter for generator outputs
+  maestro/
+    FeatureBus.ts
+    StateStore.ts
+    Evaluator.ts
+    Policy.ts
+    Planner.ts
+    Conductor.ts                    // talks to MorphEngine v2 Control Plane
+    Maestro.ts
+  engine/legacy/...                 // existing code, gated
+  engine/v2/
+    ControlPlane.ts                 // CommandBus + Registry + Scheduler + Events
+    Parameters.ts                   // schema for knobs, ranges, tags
+    Commands.ts                     // SET/RAMP/PULSE/... types + validators
+    Scheduler.ts                    // bar-aligned execution
+    Events.ts
+    RenderPlane.ts                  // node graph + uniforms/SSBO bridges
+    nodes/
+      ParticlesNode.ts
+      OutlinesNode.ts
+      WarpNode.ts
+      KaleidoNode.ts
+      MixerNode.ts
+      shaders/
+        particles.vert.glsl
+        particles.frag.glsl
+        particles.update.glsl
+        outline.vert.glsl
+        outline.frag.glsl
+        bloom.frag.glsl
+  ui/Controls.tsx (optional toggles + stats)
+  types/contracts.ts                // canonical types (below verbatim)
+  test/smoke.test.ts
+```
+
+### C) Canonical Data Contracts (verbatim)
+
+```ts
+export type VisionFeatures = {
+  ts: number;
+  color: { palette: number[]; luminanceMean: number; contrast: number };
+  edges: { density: number; mapTex: WebGLTexture; polylines: Float32Array[] };
+  keypoints: { points: Float32Array; count: number }; // [x,y,score]*
+  saliency: { heatTex: WebGLTexture; centers: Float32Array }; // [x,y,score]*
+  segments?: { masks: WebGLTexture[]; classes?: string[] };
+  clip?: { embedding: Float32Array; tags: string[] };
+};
+
+export type AudioFeatures = {
+  ts: number;
+  bpm: number; beatPhase: number; rms: number;
+  bands128: Float32Array; centroid: number; energy: number;
+};
+
+export type FrameContext = {
+  dna: Uint8Array; // len 50, schema v1 (0..255)
+  model: string; seed: number; ageSec: number; isHero: boolean;
+};
+
+export type Intent =
+  | { kind: "trace-outline"; target: "dominant-silhouette" | "all-edges"; style: "neon" | "ink" | "glow"; strength: number }
+  | { kind: "pixie-dust"; source: "dot-keypoints" | "bright-pixels"; decayBeats: number; density: number; inheritColor: boolean }
+  | { kind: "kaleido"; symmetry: number; rotationBeats: number }
+  | { kind: "warp-bass"; elasticity: number; radius: number };
+
+export type Directive = {
+  id: string; ts: number;
+  startAtBar: number; durationBars: number;
+  params: Record<string, number | boolean | string>;
+  intent: Intent;
+  safety: { fpsMin: number; coolDownBars: number };
+};
+
+export type ImagePerformance = {
+  generator: "DALL-E" | "Flux" | "SDXL" | string;
+  dna: Uint8Array;            // 50-D visual genome
+  artistStatement: string;    // brief textual intent
+  timestamp: number;
+  imageUrl?: string;
+};
+```
+
+---
+
+## 🔧 MorphEngine v2: Control-First Redesign (Implement Now)
+
+### Control Plane (public API Maestro calls)
+
+* **Command Bus**, **Parameter Registry**, **Scheduler** (bar-aligned), **Safety Guards**, **Events** (`applied|rejected|clamped|finished`).
+
+### Render Plane (node graph)
+
+* Nodes: **Particles**, **Outlines**, **Warp**, **Kaleido**, **Mixer/PostFX**.
+* Uniform/SSBO bridges pull values from Registry each frame.
+
+### Addressing & Knobs
+
+* **Path** style: `particles.main.spawnRate`, `outlines.edge.strokeWidth`
+* **Tags**: `tag:particles`, `tag:postfx`
+* **Types**: `float|vec2|vec3|color|bool|enum|curve`
+
+### Command Types (implement)
+
+```ts
+type EnginePath = string; type Bars = number;
+
+type CmdSet = { kind:"SET"; path:EnginePath; value:number|number[]|string|boolean };
+type CmdRamp = { kind:"RAMP"; path:EnginePath; to:number|number[]; durationBars:Bars; curve?:"linear"|"easeInOut"|"expo" };
+type CmdPulse = { kind:"PULSE"; path:EnginePath; amount:number|number[]; decayBeats:number };
+type CmdSchedule = { kind:"SCHEDULE"; atBar:number; commands:Command[] };
+type CmdAttachEmitter = { kind:"ATTACH_EMITTER"; path:"particles.main.emitters"; source:"dot-keypoints"|"bright-pixels"|"saliency"; maxRate?:number };
+type CmdSetPalette = { kind:"SET_PALETTE"; path:"mixer.palette"; paletteId:string };
+
+type Command = CmdSet|CmdRamp|CmdPulse|CmdSchedule|CmdAttachEmitter|CmdSetPalette;
+```
+
+### Core Knobs (v2 MVP)
+
+* **Particles**: `spawnRate`, `lifeBeats`, `size`, `kickImpulse`, `colorMode(enum: sampleImage|fixed|palette)`, `maxParticles`
+* **Outlines**: `strokeWidth`, `glowStrength`, `dashSpeed`, `style(enum: neon|ink|glow)`
+* **Warp**: `elasticity`, `radius`
+* **Kaleido**: `symmetry`, `rotationBeats`
+* **Mixer/PostFX**: `bloomThreshold`, `bloomRadius`, `blendMode`
+* **Global**: `reactivityGain`, `fpsFloor`
+
+---
+
+## 🧠 Maestro: Evaluator → Policy → Planner → Conductor (Use v2 Commands)
+
+**Opportunities (0..1):**
+
+* `manyDots = sigmoid(keypoints.count/800) * (1 - edges.density)`
+* `strongSilhouette = maxComponentArea(segments|saliency)`
+* `edgeParty = clamp01(edges.density * (1 - luminanceMean))`
+* `dramaBeat = rmsFast > p95 && nearDownbeat(beatPhase)`
+* `novelty = 1 - cosine(embedding, lastEmbedding)`
+
+**Policy (initial rules):**
+
+* If `manyDots>.7 && dramaBeat` → **pixie-dust**: attach emitter `dot-keypoints`; `spawnRate∝RMS`; `lifeBeats=8`; inheritColor.
+* If `strongSilhouette>.6` → **trace-outline**: `style="neon"`; `strokeWidth∝midEnergy`; `glowStrength` ramp 4 bars.
+* If `edgeParty>.65 && BPM>120` → **warp-bass**: `elasticity∝bass`; `radius` mild.
+* Guards: FPS floors (Tier 2≥45, Tier 3≥60), cool-downs (12–16 bars), diversity rotation, deterministic seeds `(barIndex,intentId)`.
+
+**Planner:** bar-aligned `RAMP/PULSE/SCHEDULE` to Control Plane.
+
+---
+
+## 🎨 DNA + Artist Statement → Interpretation Layer
+
+* **Bias Map** (JSON): map DNA ranges + keywords from `artistStatement` to defaults/limits:
+
+  * *melancholy* → lower `bloomThreshold`, longer `lifeBeats`, slower `dashSpeed`
+  * *neon/cyber* → higher `glowStrength`, quicker `dashSpeed`, higher saturation LUT
+  * high fractal DNA → allow higher `spawnRate` cap
+* **Palette/LUT** selection from DNA color warmth/contrast.
+* This layer runs on each new **ImagePerformance** and sets target knobs or schedules ramps.
+
+---
+
+## 🔌 Generator Endpoint (Extended, Back-Compat)
+
+* **Modify** `POST /api/generate-art` to support `?v=2` (or header `X-Algorhythmic-Version: 2`).
+* **Response v2:**
+
+```json
+{
+  "imageUrl": "https://…",
+  "seed": 123456789,
+  "model": "dalle-3|flux|sdxl",
+  "dna": [ /* 50 ints 0–255 */ ],
+  "artistStatement": "melancholy, soft gradients, warm twilight glow",
+  "createdAt": "2025-11-08T00:00:00Z"
+}
+```
+
+* **How to make DNA now:**
+
+  * If image available: HSV palette, luminance stats, edge density, DoG count, symmetry → normalize to 50D; quantize 0..255.
+  * If CLIP embedding available: PCA→50D; mix 60/40 with heuristics.
+  * Else: seeded pseudo-DNA from `SHA256(prompt|model|seed)`, keyword biases.
+* **Artist statement**: templated short sentence; optional LLM polish.
+
+---
+
+## 🧭 Scheduling & Timing
+
+* **Vision tick**: 10–15 Hz (heavy nets 0.5–1.0 s or on novelty)
+* **Audio snapshot**: 50–100 ms; fast EMA ≈120 ms; slow EMA ≈2–3 s
+* **Decision tick**: **bar-aligned** (Kalman-smoothed tempo/phase)
+* **FPS watchdog**: Downshift particle caps, disable bloom/outlines as needed
+
+---
+
+## 🧪 Testing & Quality Bars
+
+* **Perf**: Tier 3 ≥ 60 FPS with 50–100k particles; Tier 2 ≥ 45 FPS with 20–30k; Tier 1 ≥ 30 FPS minimal.
+* **Stability**: No uncaught rejections; events emitted for applied/finished.
+* **Determinism**: Seed by `(barIndex,intentId)`; repeatable effects.
+* **Smoke test**: Headless loop starts; bar-aligned directive fires within ±20 ms.
+
+---
+
+## 🧵 Milestones (parallelizable; each ends with a demo)
+
+1. **A — Scaffolding & /maestro route (Infra/Tooling)**
+2. **B — AudioProbe + Clock (Audio DSP)**
+3. **C — VisionPipeline (Vision Specialist)**
+4. **D — MorphEngine v2 Control Plane (Core Engineer)**
+5. **E — ParticlesNode + emitter from DoG (Shader Engineer)**
+6. **F — OutlinesNode + glow/dash (Shader Engineer)**
+7. **G — Maestro core (Evaluator/Policy/Planner/Conductor) (Core)**
+8. **H — ImagePerformer + DNA/artistStatement interpretation (Core)**
+9. **I — Tiering, FPS watchdog, cost controls (Core/Infra)**
+
+**Priority to monetize quickly:** **A → B → D → E → G → H** (pixie-dust + conductor + DNA).
+
+---
+
+## 📦 Example Commands (use in demo)
+
+```ts
+bus.dispatch({ kind:"ATTACH_EMITTER", path:"particles.main.emitters", source:"dot-keypoints", maxRate:60000 });
+bus.dispatch({ kind:"RAMP", path:"particles.main.spawnRate", to:50000, durationBars:16, curve:"easeInOut" });
+bus.dispatch({ kind:"PULSE", path:"outlines.edge.strokeWidth", amount:0.6, decayBeats:2 });
+bus.dispatch({ kind:"SET", path:"mixer.bloomThreshold", value:0.72 });
+bus.dispatch({ kind:"SCHEDULE", atBar:clock.currentBar + 32, commands:[
+  { kind:"SET_PALETTE", path:"mixer.palette", paletteId:"warm-glow" }
+]});
+```
+
+---
+
+## 🔐 Flags & Fallbacks
+
+* `USE_V2=true` to enable MorphEngine v2; legacy kept at `engine/legacy`
+* `MAESTRO_ENABLED=true` toggles Maestro mode
+* If no generator keys: **mock ImagePerformance** with plausible DNA + artistStatement
+
+---
+
+## 📜 Output Format (this turn)
+
+Return **one message** that includes:
+
+1. Directory tree
+2. **Actual file contents** for all new/changed files (concise but complete)
+3. Run instructions for Replit
+4. Notes for enabling mocks vs. real APIs
+5. A short section listing **which sub-agents you delegated to** and what they produced
+
+**Do not** provide “plan only.” Deliver **runnable code** and demo scripts.
+
+---
+
+**End of prompt.**
