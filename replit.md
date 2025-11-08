@@ -48,6 +48,8 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 - **Scheduler**: Frame-aligned command dispatcher with 2ms/frame budget tracking
 - **ParameterRegistry**: Declarative parameter metadata (12 parameters) with range/unit/curve definitions
 - **RendererManager Integration**: Lifecycle-independent parameter store with functional command execution (SET/RAMP/PULSE) supporting scalar and array interpolation, exposed via RenderContext.parameters
+- **ParticlesNode (Milestone E)**: WebGL2 GPGPU particle system with transform feedback (INTERLEAVED_ATTRIBS), ping-pong buffers, audio-reactive spawning, integrated with Morpheus03Renderer
+- **Browser Compatibility**: Custom EventEmitter implementation (client/src/lib/utils/EventEmitter.ts) replaces Node.js events module for AudioProbe, MaestroLoop, and FeatureBus
 
 ### Data Models
 - **ArtPreferences**: User-selected styles and artists.
