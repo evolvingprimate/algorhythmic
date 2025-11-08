@@ -121,7 +121,7 @@ export class Morpheus02Renderer implements IMorphRenderer {
       frameA.imageData.height,
       canvas.width,
       canvas.height,
-      morphState.totalProgress,
+      morphState.viewProgressA, // CRITICAL: Use Frame A's independent progress
       morphState.currentDNA
     );
     
@@ -130,8 +130,8 @@ export class Morpheus02Renderer implements IMorphRenderer {
       frameB.imageData.height,
       canvas.width,
       canvas.height,
-      morphState.totalProgress,
-      morphState.currentDNA
+      morphState.viewProgressB, // CRITICAL: Use Frame B's independent progress
+      morphState.nextDNA // CRITICAL: Use Frame B's DNA for independent Ken Burns path
     );
     
     gl.uniform4f(

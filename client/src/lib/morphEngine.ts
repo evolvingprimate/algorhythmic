@@ -3,6 +3,12 @@ import type { AudioAnalysis } from '@shared/schema';
 
 export type MorphPhase = 'hold' | 'ramp' | 'morph';
 
+// Per-frame Ken Burns progress tracker
+interface FrameTracker {
+  cycleStart: number; // When this frame's Ken Burns cycle started
+  progress: number; // 0-1 progress through Ken Burns cycle
+}
+
 export interface MorphState {
   phase: MorphPhase;
   currentFrameIndex: number;
@@ -11,6 +17,8 @@ export interface MorphState {
   totalProgress: number;
   currentDNA: DNAVector;
   nextDNA: DNAVector; // Frame B's DNA for Ken Burns continuity
+  viewProgressA: number; // Frame A's independent Ken Burns progress (0-1)
+  viewProgressB: number; // Frame B's independent Ken Burns progress (0-1)
   morphProgress: number;
   audioIntensity: number;
   frameForeshadowMix: number;
@@ -30,6 +38,9 @@ export class MorphEngine {
   private isRunning: boolean = false;
   private animationFrameId: number | null = null;
   
+  // Per-frame Ken Burns progress trackers (keyed by imageUrl for stability)
+  private frameTrackers: Map<string, FrameTracker> = new Map();
+  
   // Beat burst tracking
   private lastBeatTime: number = 0;
   private beatBurstValue: number = 0;
@@ -42,6 +53,7 @@ export class MorphEngine {
   private readonly RAMP_DURATION = 8000; // 8 seconds to ramp up effects
   private readonly MORPH_DURATION = 292000; // 4:52 minutes morph (292s)
   private readonly TOTAL_CYCLE = 300000; // 5 minutes total (0+8+292=300s)
+  private readonly KEN_BURNS_CYCLE = 300000; // Ken Burns cycle matches morph cycle
 
   constructor() {
     // Don't initialize phaseStartTime until frames are added
@@ -50,6 +62,14 @@ export class MorphEngine {
 
   addFrame(frame: DNAFrame): void {
     this.frames.push(frame);
+    
+    // Initialize Ken Burns tracker for this frame
+    if (!this.frameTrackers.has(frame.imageUrl)) {
+      this.frameTrackers.set(frame.imageUrl, {
+        cycleStart: Date.now(),
+        progress: 0,
+      });
+    }
     
     // CRITICAL: Reset timing when first frame is added to prevent starting at 11.6% progress
     if (this.frames.length === 1) {
@@ -83,6 +103,12 @@ export class MorphEngine {
     
     // Check if we're removing the currently active frame
     const removingActiveFrame = this.currentIndex < framesToRemove;
+    
+    // Clean up trackers for removed frames
+    const removedFrames = this.frames.slice(0, framesToRemove);
+    removedFrames.forEach(frame => {
+      this.frameTrackers.delete(frame.imageUrl);
+    });
     
     // Remove from the beginning (oldest frames)
     this.frames.splice(0, framesToRemove);
@@ -130,8 +156,37 @@ export class MorphEngine {
     this.frames = [];
     this.currentIndex = 0;
     this.phaseStartTime = Date.now();
+    this.frameTrackers.clear(); // Clear all trackers on reset
     this.stop();
     console.log('[MorphEngine] Reset');
+  }
+  
+  // Calculate per-frame Ken Burns progress (0-1), updating tracker
+  private getFrameProgress(frame: DNAFrame | null): number {
+    if (!frame) return 0;
+    
+    let tracker = this.frameTrackers.get(frame.imageUrl);
+    
+    // Initialize tracker if missing (shouldn't happen, but safety first)
+    if (!tracker) {
+      tracker = { cycleStart: Date.now(), progress: 0 };
+      this.frameTrackers.set(frame.imageUrl, tracker);
+    }
+    
+    // Calculate progress based on elapsed time
+    const elapsed = Date.now() - tracker.cycleStart;
+    const progress = Math.min(elapsed / this.KEN_BURNS_CYCLE, 1.0);
+    
+    // Update tracker
+    tracker.progress = progress;
+    
+    // Reset cycle when complete (for looping)
+    if (progress >= 1.0) {
+      tracker.cycleStart = Date.now();
+      tracker.progress = 0;
+    }
+    
+    return progress;
   }
 
   getMorphState(audioAnalysis?: AudioAnalysis): MorphState {
@@ -146,6 +201,8 @@ export class MorphEngine {
         totalProgress: 0,
         currentDNA: defaultDNA,
         nextDNA: defaultDNA,
+        viewProgressA: 0,
+        viewProgressB: 0,
         morphProgress: 0,
         audioIntensity: 0,
         frameForeshadowMix: 0,
@@ -170,6 +227,8 @@ export class MorphEngine {
         totalProgress: 0,
         currentDNA: defaultDNA,
         nextDNA: defaultDNA,
+        viewProgressA: 0,
+        viewProgressB: 0,
         morphProgress: 0,
         audioIntensity: 0,
         frameForeshadowMix: 0,
@@ -314,7 +373,16 @@ export class MorphEngine {
       }
     }
 
-    // Apply audio reactivity with smooth intensity scaling
+    // Calculate per-frame Ken Burns progress (independent of global cycle)
+    const viewProgressA = this.getFrameProgress(currentFrame);
+    const viewProgressB = this.getFrameProgress(nextFrame);
+    
+    // Calculate nextDNA for Frame B's Ken Burns continuity
+    let nextDNA = nextFrame?.dnaVector 
+      ? [...nextFrame.dnaVector]
+      : [...currentFrame.dnaVector]; // Fallback to current if only 1 frame
+    
+    // Apply audio reactivity with smooth intensity scaling to BOTH DNAs
     if (audioAnalysis && audioIntensity > 0) {
       // Scale the audio analysis by intensity before applying
       const scaledAnalysis = {
@@ -324,6 +392,7 @@ export class MorphEngine {
         trebleLevel: audioAnalysis.trebleLevel * audioIntensity,
       };
       currentDNA = applyAudioReactivity(currentDNA, scaledAnalysis);
+      nextDNA = applyAudioReactivity(nextDNA, scaledAnalysis); // CRITICAL: Apply to both for sync
     }
 
     // ====== BEAT BURST DETECTION ======
@@ -357,11 +426,6 @@ export class MorphEngine {
     const nextIndex = this.frames.length > 1 
       ? (this.currentIndex + 1) % this.frames.length 
       : this.currentIndex;
-    
-    // Calculate nextDNA for Frame B's Ken Burns continuity
-    const nextDNA = nextFrame?.dnaVector 
-      ? [...nextFrame.dnaVector]
-      : [...currentFrame.dnaVector]; // Fallback to current if only 1 frame
 
     return {
       phase,
@@ -371,6 +435,8 @@ export class MorphEngine {
       totalProgress,
       currentDNA,
       nextDNA,
+      viewProgressA, // Per-frame Ken Burns progress for Frame A
+      viewProgressB, // Per-frame Ken Burns progress for Frame B
       morphProgress,
       audioIntensity,
       frameForeshadowMix,
