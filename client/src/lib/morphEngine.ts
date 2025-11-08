@@ -167,15 +167,24 @@ export class MorphEngine {
   }
   
   // Calculate per-frame Ken Burns progress (0-1), updating tracker
-  private getFrameProgress(frame: DNAFrame | null): { progress: number; direction: 'in' | 'out' } {
-    if (!frame) return { progress: 0, direction: 'out' };
+  // Direction is set by role (Frame A='out', Frame B='in'), NOT by elapsed time
+  private getFrameProgress(frame: DNAFrame | null, forceDirection?: 'in' | 'out'): { progress: number; direction: 'in' | 'out' } {
+    if (!frame) return { progress: 0, direction: forceDirection || 'out' };
     
     let tracker = this.frameTrackers.get(frame.imageUrl);
     
     // Initialize tracker if missing (shouldn't happen, but safety first)
     if (!tracker) {
-      tracker = { cycleStart: Date.now(), progress: 0, zoomDirection: 'out' };
+      tracker = { cycleStart: Date.now(), progress: 0, zoomDirection: forceDirection || 'out' };
       this.frameTrackers.set(frame.imageUrl, tracker);
+    }
+    
+    // CRITICAL: Update direction if forced (by role assignment)
+    if (forceDirection && tracker.zoomDirection !== forceDirection) {
+      tracker.zoomDirection = forceDirection;
+      // Reset cycle when direction changes to prevent jump
+      tracker.cycleStart = Date.now();
+      tracker.progress = 0;
     }
     
     // Calculate progress based on elapsed time
@@ -185,12 +194,11 @@ export class MorphEngine {
     // Update tracker
     tracker.progress = progress;
     
-    // Reset cycle when complete (for looping) and toggle direction
+    // Reset cycle when complete (for looping) - keep same direction
     if (progress >= 1.0) {
       tracker.cycleStart = Date.now();
       tracker.progress = 0;
-      // Toggle direction for next cycle (ships passing in the night)
-      tracker.zoomDirection = tracker.zoomDirection === 'out' ? 'in' : 'out';
+      // Direction stays the same - it's controlled by role, not time
     }
     
     return { progress, direction: tracker.zoomDirection };
@@ -385,13 +393,16 @@ export class MorphEngine {
     }
 
     // Calculate per-frame Ken Burns progress with bidirectional zoom (independent of global cycle)
-    const frameAData = this.getFrameProgress(currentFrame);
-    const frameBData = this.getFrameProgress(nextFrame);
+    // CRITICAL: Direction is assigned by ROLE, not elapsed time
+    // Frame A (foreground) ALWAYS zooms OUT while fading IN
+    // Frame B (background) ALWAYS zooms IN while fading OUT
+    const frameAData = this.getFrameProgress(currentFrame, 'out'); // Force 'out' for Frame A
+    const frameBData = this.getFrameProgress(nextFrame, 'in'); // Force 'in' for Frame B
     
     const viewProgressA = frameAData.progress;
     const viewProgressB = frameBData.progress;
-    const zoomDirectionA = frameAData.direction;
-    const zoomDirectionB = frameBData.direction;
+    const zoomDirectionA = frameAData.direction; // Will always be 'out'
+    const zoomDirectionB = frameBData.direction; // Will always be 'in'
     
     // Calculate nextDNA for Frame B's Ken Burns continuity
     let nextDNA = nextFrame?.dnaVector 
