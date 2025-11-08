@@ -122,7 +122,8 @@ export class Morpheus02Renderer implements IMorphRenderer {
       canvas.width,
       canvas.height,
       morphState.viewProgressA, // CRITICAL: Use Frame A's independent progress
-      morphState.currentDNA
+      morphState.currentDNA,
+      morphState.zoomDirectionA // CRITICAL: Bidirectional zoom direction
     );
     
     const viewB = this.calculateKenBurnsView(
@@ -131,7 +132,8 @@ export class Morpheus02Renderer implements IMorphRenderer {
       canvas.width,
       canvas.height,
       morphState.viewProgressB, // CRITICAL: Use Frame B's independent progress
-      morphState.nextDNA // CRITICAL: Use Frame B's DNA for independent Ken Burns path
+      morphState.nextDNA, // CRITICAL: Use Frame B's DNA for independent Ken Burns path
+      morphState.zoomDirectionB // CRITICAL: Opposite zoom direction
     );
     
     gl.uniform4f(
@@ -153,7 +155,8 @@ export class Morpheus02Renderer implements IMorphRenderer {
     screenW: number,
     screenH: number,
     progress: number,
-    dna: number[]
+    dna: number[],
+    direction: 'in' | 'out' = 'out'
   ): ViewRect {
     const screenAspect = screenW / screenH;
     const imageAspect = imageW / imageH;
@@ -162,7 +165,11 @@ export class Morpheus02Renderer implements IMorphRenderer {
     const zoomEnd = 0.85 + (dna[1] ?? 0.5) * 0.15;
     
     const t = this.smootherstep(progress);
-    const zoom = zoomStart + (zoomEnd - zoomStart) * t;
+    
+    // Bidirectional Ken Burns: 'out' = expanding (zoomStart→zoomEnd), 'in' = contracting (zoomEnd→zoomStart)
+    const zoom = direction === 'out' 
+      ? zoomStart + (zoomEnd - zoomStart) * t  // Expanding: small → large
+      : zoomEnd - (zoomEnd - zoomStart) * t;   // Contracting: large → small
     
     let viewW, viewH;
     if (screenAspect > imageAspect) {

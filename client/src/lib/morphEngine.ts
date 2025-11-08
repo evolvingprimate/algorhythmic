@@ -7,6 +7,7 @@ export type MorphPhase = 'hold' | 'ramp' | 'morph';
 interface FrameTracker {
   cycleStart: number; // When this frame's Ken Burns cycle started
   progress: number; // 0-1 progress through Ken Burns cycle
+  zoomDirection: 'in' | 'out'; // Bidirectional: 'out' = expanding, 'in' = contracting
 }
 
 export interface MorphState {
@@ -19,6 +20,8 @@ export interface MorphState {
   nextDNA: DNAVector; // Frame B's DNA for Ken Burns continuity
   viewProgressA: number; // Frame A's independent Ken Burns progress (0-1)
   viewProgressB: number; // Frame B's independent Ken Burns progress (0-1)
+  zoomDirectionA: 'in' | 'out'; // Frame A zoom direction (bidirectional Ken Burns)
+  zoomDirectionB: 'in' | 'out'; // Frame B zoom direction (opposite of A)
   morphProgress: number;
   audioIntensity: number;
   frameForeshadowMix: number;
@@ -64,10 +67,12 @@ export class MorphEngine {
     this.frames.push(frame);
     
     // Initialize Ken Burns tracker for this frame
+    // New frames start with 'out' direction (zooming out when they become visible)
     if (!this.frameTrackers.has(frame.imageUrl)) {
       this.frameTrackers.set(frame.imageUrl, {
         cycleStart: Date.now(),
         progress: 0,
+        zoomDirection: 'out', // Start zooming out when visible
       });
     }
     
@@ -162,14 +167,14 @@ export class MorphEngine {
   }
   
   // Calculate per-frame Ken Burns progress (0-1), updating tracker
-  private getFrameProgress(frame: DNAFrame | null): number {
-    if (!frame) return 0;
+  private getFrameProgress(frame: DNAFrame | null): { progress: number; direction: 'in' | 'out' } {
+    if (!frame) return { progress: 0, direction: 'out' };
     
     let tracker = this.frameTrackers.get(frame.imageUrl);
     
     // Initialize tracker if missing (shouldn't happen, but safety first)
     if (!tracker) {
-      tracker = { cycleStart: Date.now(), progress: 0 };
+      tracker = { cycleStart: Date.now(), progress: 0, zoomDirection: 'out' };
       this.frameTrackers.set(frame.imageUrl, tracker);
     }
     
@@ -180,13 +185,15 @@ export class MorphEngine {
     // Update tracker
     tracker.progress = progress;
     
-    // Reset cycle when complete (for looping)
+    // Reset cycle when complete (for looping) and toggle direction
     if (progress >= 1.0) {
       tracker.cycleStart = Date.now();
       tracker.progress = 0;
+      // Toggle direction for next cycle (ships passing in the night)
+      tracker.zoomDirection = tracker.zoomDirection === 'out' ? 'in' : 'out';
     }
     
-    return progress;
+    return { progress, direction: tracker.zoomDirection };
   }
 
   getMorphState(audioAnalysis?: AudioAnalysis): MorphState {
@@ -203,6 +210,8 @@ export class MorphEngine {
         nextDNA: defaultDNA,
         viewProgressA: 0,
         viewProgressB: 0,
+        zoomDirectionA: 'out',
+        zoomDirectionB: 'in',
         morphProgress: 0,
         audioIntensity: 0,
         frameForeshadowMix: 0,
@@ -229,6 +238,8 @@ export class MorphEngine {
         nextDNA: defaultDNA,
         viewProgressA: 0,
         viewProgressB: 0,
+        zoomDirectionA: 'out',
+        zoomDirectionB: 'in',
         morphProgress: 0,
         audioIntensity: 0,
         frameForeshadowMix: 0,
@@ -373,9 +384,14 @@ export class MorphEngine {
       }
     }
 
-    // Calculate per-frame Ken Burns progress (independent of global cycle)
-    const viewProgressA = this.getFrameProgress(currentFrame);
-    const viewProgressB = this.getFrameProgress(nextFrame);
+    // Calculate per-frame Ken Burns progress with bidirectional zoom (independent of global cycle)
+    const frameAData = this.getFrameProgress(currentFrame);
+    const frameBData = this.getFrameProgress(nextFrame);
+    
+    const viewProgressA = frameAData.progress;
+    const viewProgressB = frameBData.progress;
+    const zoomDirectionA = frameAData.direction;
+    const zoomDirectionB = frameBData.direction;
     
     // Calculate nextDNA for Frame B's Ken Burns continuity
     let nextDNA = nextFrame?.dnaVector 
@@ -437,6 +453,8 @@ export class MorphEngine {
       nextDNA,
       viewProgressA, // Per-frame Ken Burns progress for Frame A
       viewProgressB, // Per-frame Ken Burns progress for Frame B
+      zoomDirectionA, // Bidirectional zoom direction for Frame A
+      zoomDirectionB, // Bidirectional zoom direction for Frame B
       morphProgress,
       audioIntensity,
       frameForeshadowMix,
