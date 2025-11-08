@@ -158,8 +158,8 @@ export class Morpheus02Renderer implements IMorphRenderer {
     const screenAspect = screenW / screenH;
     const imageAspect = imageW / imageH;
     
-    const zoomStart = 0.7 + (dna[0] ?? 0.5) * 0.2;
-    const zoomEnd = 0.9 + (dna[1] ?? 0.5) * 0.1;
+    const zoomStart = 0.5 + (dna[0] ?? 0.5) * 0.2;
+    const zoomEnd = 0.85 + (dna[1] ?? 0.5) * 0.15;
     
     const t = this.smootherstep(progress);
     const zoom = zoomStart + (zoomEnd - zoomStart) * t;
@@ -180,8 +180,8 @@ export class Morpheus02Renderer implements IMorphRenderer {
     const panY = (dna[3] ?? 0.5) - 0.5;
     
     const panProgress = this.smootherstep(progress);
-    const currentPanX = panX * panProgress * 0.1;
-    const currentPanY = panY * panProgress * 0.1;
+    const currentPanX = panX * panProgress * 0.3;
+    const currentPanY = panY * panProgress * 0.3;
     
     let x = 0.5 - viewW / 2 + currentPanX;
     let y = 0.5 - viewH / 2 + currentPanY;
