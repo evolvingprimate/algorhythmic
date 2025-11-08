@@ -43,11 +43,19 @@ export class MorphEngine {
   private readonly TOTAL_CYCLE = 300000; // 5 minutes total (0+8+292=300s)
 
   constructor() {
-    this.phaseStartTime = Date.now();
+    // Don't initialize phaseStartTime until frames are added
+    this.phaseStartTime = 0;
   }
 
   addFrame(frame: DNAFrame): void {
     this.frames.push(frame);
+    
+    // CRITICAL: Reset timing when first frame is added to prevent starting at 11.6% progress
+    if (this.frames.length === 1) {
+      this.phaseStartTime = Date.now();
+      console.log(`[MorphEngine] First frame added, timing reset to ensure Frame A appears at full opacity`);
+    }
+    
     console.log(`[MorphEngine] Added frame. Total frames: ${this.frames.length}`);
   }
 
@@ -132,6 +140,12 @@ export class MorphEngine {
         parallaxStrength: 0.0,
         burnIntensity: 0.0,
       };
+    }
+
+    // CRITICAL: Safety check - if phaseStartTime is 0, reset it now
+    if (this.phaseStartTime === 0) {
+      this.phaseStartTime = Date.now();
+      console.log('[MorphEngine] phaseStartTime was 0, resetting to current time');
     }
 
     let elapsed = Date.now() - this.phaseStartTime;

@@ -298,12 +298,88 @@ Provide structured output with ARTISTIC CONTEXT, SONG INSIGHT, VISUAL LANGUAGE, 
       });
     }
 
-    const response = await openai.chat.completions.create({
+    let response = await openai.chat.completions.create({
       model: musicInfo?.albumArtworkUrl ? "gpt-4o" : "gpt-5", // Use gpt-4o for vision, gpt-5 for text-only
       messages,
     });
 
-    const fullResponse = response.choices[0].message.content || "";
+    let fullResponse = response.choices[0].message.content || "";
+    
+    // CRITICAL: Detect GPT refusals (common when analyzing copyrighted album artwork)
+    const refusalPatterns = [
+      /I'm sorry,?\s+(?:but\s+)?I\s+can't\s+(?:assist|help|provide|comply)/i,
+      /I\s+cannot\s+(?:help|assist|provide|comply)/i,
+      /I'm\s+not\s+able\s+to/i,
+      /I\s+don't\s+have\s+access/i,
+      /against\s+(?:my\s+)?(?:policy|guidelines)/i,
+      /I\s+apologize,?\s+but\s+I\s+(?:can't|cannot)/i,
+      /I'm\s+afraid\s+I\s+(?:can't|cannot)/i,
+      /I'm\s+unable\s+to/i,
+      /I\s+can't\s+(?:help|provide|assist|comply)\s+with/i,
+      /I\s+cannot\s+provide\s+that/i,
+      /not\s+able\s+to\s+(?:analyze|provide|assist|help)/i,
+    ];
+    
+    const isRefusal = refusalPatterns.some(pattern => pattern.test(fullResponse));
+    
+    if (isRefusal && musicInfo?.albumArtworkUrl) {
+      console.warn("[GPT Vision] Detected refusal when analyzing album artwork, falling back to text-only generation");
+      console.log("[GPT Vision] Refusal response:", fullResponse);
+      
+      // Retry WITHOUT album artwork (text-only mode using gpt-5)
+      const textOnlyMessages: any[] = messages.filter(msg => {
+        // Remove any messages containing image_url
+        if (typeof msg.content === 'object' && Array.isArray(msg.content)) {
+          return false;
+        }
+        return true;
+      });
+      
+      // Add a clean text-only user prompt
+      textOnlyMessages.push({
+        role: "user",
+        content: dynamicMode
+          ? `DYNAMIC MODE: Choose the artistic style that best matches the genre. ${musicContext}
+
+${audioDescription}
+
+${voteContext}
+
+Deeply analyze "${musicInfo.title}" by ${musicInfo.artist}. Consider:
+- Artist's intention: What inspired this song? What was the artist trying to express?
+- Lyrical meaning: Analyze the lyrics for dominant themes, motifs, symbolism, and emotional narrative
+- Visual metaphors: Translate lyrical themes into visual imagery
+- Music video aesthetic (if one exists, or imagine what it would look like)
+- Genre-specific visual culture
+- The artist's creative visual identity
+- SELECT the artistic style (surrealism, impressionism, cubism, abstract, realism, cartoon, horror, kids, trippy, digital, etc.) that naturally fits the genre and mood
+
+Provide structured output with ARTISTIC CONTEXT (including your chosen art style), SONG INSIGHT, VISUAL LANGUAGE, DNA VECTOR, and FINAL PROMPT sections.`
+          : `Create artwork ${styleContext} ${artistContext}. ${musicContext}
+          
+${audioDescription}
+
+${voteContext}
+
+Deeply analyze "${musicInfo.title}" by ${musicInfo.artist}. Consider:
+- Artist's intention: What inspired this song? What was the artist trying to express?
+- Lyrical meaning: Analyze the lyrics for dominant themes, motifs, symbolism, and emotional narrative
+- Visual metaphors: Translate lyrical themes into visual imagery
+- Music video aesthetic (if one exists, or imagine what it would look like)
+- Genre-specific visual culture
+- The artist's creative visual identity
+
+Provide structured output with ARTISTIC CONTEXT, SONG INSIGHT, VISUAL LANGUAGE, DNA VECTOR, and FINAL PROMPT sections.`
+      });
+      
+      response = await openai.chat.completions.create({
+        model: "gpt-5", // Use gpt-5 for text-only fallback
+        messages: textOnlyMessages,
+      });
+      
+      fullResponse = response.choices[0].message.content || "";
+      console.log("[GPT Vision] Text-only fallback complete");
+    }
     
     // Parse structured response - accept markdown variants (##, **, etc.)
     const artisticContextMatch = fullResponse.match(/(?:#+\s*)?(?:\*\*)?ARTISTIC CONTEXT:?\*?\*?\s*\n?([\s\S]+?)(?=\n\n(?:#+\s*)?(?:\*\*)?SONG INSIGHT:|$)/i);
@@ -405,6 +481,14 @@ Provide structured output with ARTISTIC CONTEXT, SONG INSIGHT, VISUAL LANGUAGE, 
     if (cleanedPrompt !== artPrompt && cleanedPrompt.length > 20) {
       console.log(`Sanitized prompt from "${artPrompt}" to "${cleanedPrompt}"`);
       artPrompt = cleanedPrompt;
+    }
+    
+    // CRITICAL: Final safety check - ensure we're not sending a refusal string to DALL-E
+    const finalRefusalCheck = refusalPatterns.some(pattern => pattern.test(artPrompt));
+    if (finalRefusalCheck) {
+      console.error("CRITICAL: Detected refusal pattern in final prompt, using safe fallback");
+      console.log("Blocked prompt:", artPrompt);
+      artPrompt = `${moodMapping[audioAnalysis.mood]}, ${styleContext} ${artistContext}, dreamlike artistic composition`;
     }
     
     // Final fallback if still empty or too short
