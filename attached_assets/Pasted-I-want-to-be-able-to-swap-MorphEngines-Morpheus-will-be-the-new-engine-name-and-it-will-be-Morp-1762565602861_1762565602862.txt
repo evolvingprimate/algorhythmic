@@ -1,0 +1,279 @@
+I want to be able to swap MorphEngines. 
+
+Morpheus will be the new engine name and it will be Morpheus0.1 
+
+
+**End-to-End Flow Summary**:
+Mic → Web Audio → FFT/BPM/Mood  
+     ↓ (every 5s)  
+ACRCloud → Song + Spotify ID  
+     ↓  
+Spotify → Album Art  
+     ↓  
+GPT-4o Vision → Prompt + 50-Point DNA  
+     ↓  
+DALL·E 3 → Image  
+     ↓  
+{image_url, dna} → IndexedDB  
+     ↓  
+Device Tier → Renderer  
+     ↓  
+DNA Interpolation + Audio Reactivity  
+     ↓  
+MorphEngine01.: Procedural Morphing (GAN-like, infinite variation)
+
+
+Morpheus0.1 just does fame fade as it's effect.
+Morpheus0.2  does a fade and the Ken Burns effect.
+
+# What the Ken Burns effect is
+
+A slow, cinematic **pan-and-zoom over a still image**. It fakes camera motion: you choose a **start view** (a crop inside the photo) and an **end view** (another crop), then interpolate position and scale over time—often with gentle easing. On macOS the “Ken Burns” screensaver sequences many photos, doing one pan/zoom per photo with crossfades.
+
+# Core concept (in one sentence)
+
+Animate a 2D transform that maps a **screen-sized viewport** onto a **moving, scaled rectangle** inside the source image.
+
+---
+
+## Inputs and outputs (for the agent)
+
+**Inputs**
+
+* `image`: width `Iw`, height `Ih`
+* `screen`: width `Sw`, height `Sh` (render surface)
+* `duration`: seconds per photo (e.g., 8–15s)
+* `direction`: `"zoom-in"` | `"zoom-out"` | `"pan-left"` | `"pan-right"` | `"auto"`
+* `easing`: easing function (e.g., cubic in/out)
+* Optional guidance:
+
+  * `focalPoint`: `(fx, fy)` in image coords (face/saliency center)
+  * `zoomRange`: `[sMin, sMax]` image-scale bounds
+  * `panBias`: favors left→right, top→bottom, etc.
+  * `safeMargin`: percentage to keep borders off-screen (e.g., 3–5%)
+  * `bpmSync`: beats per minute (for timing/pause choices)
+
+**Output each frame**
+
+* A transform (scale `S(t)`, translation `(Tx(t), Ty(t))`) to draw the image to the screen, or equivalently:
+* A **view window** `V(t) = [x, y, w, h]` inside the image that, when scaled to the screen, fills it (no letterbox).
+
+---
+
+## How the view is defined
+
+Think in **image space**. Pick two **axis-aligned view rectangles** inside the image:
+
+* `StartView = [x0, y0, w0, h0]`
+* `EndView   = [x1, y1, w1, h1]`
+
+Each view must maintain the screen aspect ratio:
+
+```
+ARs = Sw / Sh
+w* / h* = ARs
+```
+
+and must be fully inside `[0, 0, Iw, Ih]`.
+
+To draw, you scale the view to fill the screen:
+
+```
+Scale S(t) = Sw / W(t)  =  Sh / H(t)
+Translation centers the scaled view on the screen.
+```
+
+---
+
+## Picking good Start/End views (the “tasteful” part)
+
+1. **Aspect-correct box**
+   Choose a view width/height with screen aspect:
+
+   ```
+   w = k
+   h = k / ARs
+   ```
+
+   where `k` is selected so the box stays inside the image.
+
+2. **Respect focal content**
+   If you have `focalPoint (fx, fy)`, center the start or end view near it.
+   If you have no focal point:
+
+   * Run a simple **saliency/face** detector if available.
+   * Else bias toward the **rule-of-thirds** intersection points.
+
+3. **Zoom strategy**
+
+   * Zoom-in: `StartView` is **wider** (smaller scale), `EndView` is **tighter** (bigger scale).
+   * Zoom-out: reverse.
+   * Pan-only: keep scale constant; shift `x,y`.
+
+   Example scales (in terms of view width relative to image width):
+
+   ```
+   Start zoom (w0): 60–80% of min image dimension projected to ARs
+   End   zoom (w1): 30–60% (for zoom-in)
+   Clamp to zoomRange and ensure views fit within image.
+   ```
+
+4. **Safe margins**
+   Add a small `safeMargin` so you don’t show edges due to easing overshoot or rounding.
+
+5. **Direction choice**
+
+   * If focal point is left-of-center, start wider on the left and end tighter center/right (a left→right “sweep”).
+   * Vary direction across photos for visual rhythm.
+
+---
+
+## Time and easing
+
+Let normalized time `u = t / duration`, `u ∈ [0,1]`.
+Use a smooth ease (e.g., cubic in/out):
+
+```
+ease(u) = 3u^2 - 2u^3
+```
+
+Interpolate each parameter:
+
+```
+x(u) = LERP(x0, x1, ease(u))
+y(u) = LERP(y0, y1, ease(u))
+w(u) = LERP(w0, w1, ease(u))
+h(u) = LERP(h0, h1, ease(u))
+```
+
+Then compute scale and translation for your renderer from `V(u) = [x(u), y(u), w(u), h(u)]`.
+
+Optional: add **micro-dwell** (hold 0.4–1.0s at start or end) by using a piecewise easing curve that flattens near 0 or 1.
+
+---
+
+## Crossfades between photos
+
+When `PhotoN` finishes, crossfade to `PhotoN+1` over ~0.6–1.2s:
+
+* Keep `PhotoN` animating to its end view.
+* Start `PhotoN+1` at the beginning of its animation but multiply by an alpha ramp.
+* Add a subtle audio-aligned beat for the transition moment if you’re syncing to music.
+
+---
+
+## WebGL/Canvas implementation sketch
+
+**Strategy A (Canvas 2D / CSS transforms)**
+
+* For each frame:
+
+  * Compute `V(u)` in image coords.
+  * Draw image sub-rect to the screen rect:
+
+    ```
+    ctx.drawImage(img,
+      Vx, Vy, Vw, Vh,   // source rect in image
+      0, 0, Sw, Sh      // destination: fill screen
+    )
+    ```
+
+**Strategy B (WebGL)**
+
+* Upload the image as a texture.
+* Render a full-screen quad.
+* In the fragment shader, sample the texture using normalized coordinates derived from `V(u)`:
+
+  ```glsl
+  // pseudo
+  vec2 uv = fragCoord / vec2(Sw, Sh);
+  vec2 viewMin = vec2(Vx/Iw, Vy/Ih);
+  vec2 viewSize = vec2(Vw/Iw, Vh/Ih);
+  vec2 texUV = viewMin + uv * viewSize;
+  vec4 color = texture(uTex, texUV);
+  ```
+* This keeps it fast and resolution-independent.
+
+---
+
+## Minimal pseudo-code
+
+```js
+function kenBurnsParams(imageW, imageH, screenW, screenH, opts) {
+  const ARs = screenW / screenH;
+
+  // Helper to build a view centered at (cx, cy) with width w (height by aspect)
+  function makeView(cx, cy, w) {
+    const h = w / ARs;
+    // clamp to image bounds
+    let x = clamp(cx - w/2, 0, imageW - w);
+    let y = clamp(cy - h/2, 0, imageH - h);
+    return { x, y, w, h };
+  }
+
+  // pick focal center
+  const cx = opts.focalPoint?.x ?? imageW * 0.5;
+  const cy = opts.focalPoint?.y ?? imageH * 0.5;
+
+  // choose start/end widths (larger w = more zoomed out)
+  const imgMin = Math.min(imageW, imageH);
+  const w0 = clamp(imgMin * 0.85, imgMin * 0.4, imgMin);   // start wide
+  const w1 = clamp(imgMin * 0.45, imgMin * 0.25, imgMin);  // end tighter
+
+  // bias pan direction a bit (e.g., start left/top, end near focal)
+  const start = makeView(cx - w0*0.2, cy - (w0/ARs)*0.1, w0);
+  const end   = makeView(cx, cy, w1);
+
+  return { start, end };
+}
+
+function easeInOut(u) { return 3*u*u - 2*u*u*u; }
+
+function viewAt(u, start, end) {
+  const e = easeInOut(u);
+  const x = lerp(start.x, start.x + (end.x - start.x), e);
+  const y = lerp(start.y, start.y + (end.y - start.y), e);
+  const w = lerp(start.w, start.w + (end.w - start.w), e);
+  const h = lerp(start.h, start.h + (end.h - start.h), e);
+  return { x, y, w, h };
+}
+
+// Rendering (Canvas2D example):
+// ctx.drawImage(img, x, y, w, h, 0, 0, screenW, screenH)
+```
+
+---
+
+## Guardrails & polish
+
+* **No letterboxing:** always enforce screen aspect on view rects.
+* **Clamp zoom:** keep `w` in `[Iw * minFrac, Iw * maxFrac]`.
+* **Prevent edge peeking:** add `safeMargin` (inflate screen by a few pixels in math or shrink view slightly).
+* **Easing:** use smooth ease; avoid linear which feels robotic.
+* **Saliency-aware framing:** face/saliency center gets at least one end anchored near it.
+* **Variety:** alternate zoom-in/zoom-out, reverse pan directions across the playlist.
+* **Performance:** precompute start/end views once per photo; per-frame only interpolate 4 numbers and issue one draw.
+* **Audio sync (optional):**
+
+  * Align **start/end dwells** or **crossfades** to bars/phrases.
+  * Map `duration` to an integer multiple of beats: `duration ≈ (n * 60 / bpm)`.
+
+---
+
+## Extensions (if you want “magic”)
+
+* **Parallax-lite:** generate a coarse depth map (ML or manual masks). Render 2–3 layers with slightly different pan/zoom factors for a subtle 2.5D look.
+* **Auto-composition:** bias the start view to include leading lines or high-contrast regions (basic saliency).
+* **Micro-jitter reduction:** quantize `x,y` to 0.25px before draw to avoid shimmer on downscaled displays.
+* **Filmic feel:** add a tiny vignette and very light grain after sampling.
+
+---
+
+## One-liner for the agent
+
+> Implement Ken Burns by picking **two aspect-correct view rectangles inside the image** (start/end), then **ease-interpolate their x/y/width/height over time** and **sample the texture** from that moving rectangle to **fill the screen**; add crossfades between photos, face/saliency-aware framing, and clamp zooms/margins to avoid edges.
+
+
+
+
+
