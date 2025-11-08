@@ -44,6 +44,9 @@ export class EngineRegistry {
   }
   
   getDefaultEngine(): string {
-    return 'morpheus_0.4';
+    // TEMPORARY: Using Morpheus 0.3 as default until OpenCV.js blocking issue is resolved
+    // Morpheus 0.4 (feature-based morphing with OpenCV) causes browser freezes during initialization
+    // TODO: Investigate async OpenCV loading or move to web worker
+    return 'morpheus_0.3';
   }
 }
