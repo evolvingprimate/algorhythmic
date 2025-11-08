@@ -372,6 +372,22 @@ export class RendererManager {
         console.log(`[RendererManager] SET_PALETTE ${command.paletteId} at ${command.path}`);
         break;
         
+      case "PARTICLE_SPAWN_FIELD":
+        // Forward to engine's particle system
+        console.log(`[RendererManager] PARTICLE_SPAWN_FIELD with ${command.anchors.length} anchors`);
+        if (this.currentEngine && 'executeCommand' in this.currentEngine) {
+          (this.currentEngine as any).executeCommand(command);
+        }
+        break;
+        
+      case "PARTICLE_BURST":
+        // Forward to engine's particle system
+        console.log(`[RendererManager] PARTICLE_BURST duration=${command.durationBeats} intensity=${command.intensityMultiplier}x`);
+        if (this.currentEngine && 'executeCommand' in this.currentEngine) {
+          (this.currentEngine as any).executeCommand(command);
+        }
+        break;
+        
       default:
         console.warn('[RendererManager] Unknown command kind:', (command as any).kind);
     }

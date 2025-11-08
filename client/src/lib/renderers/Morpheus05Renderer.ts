@@ -432,6 +432,29 @@ export class Morpheus05Renderer implements IMorphRenderer {
     return program;
   }
   
+  /**
+   * Execute command from Maestro (forward particle commands to ParticlesNode)
+   */
+  executeCommand(command: any): void {
+    if (!this.particlesNode) {
+      console.warn('[Morpheus05] Cannot execute command: ParticlesNode not initialized');
+      return;
+    }
+    
+    switch (command.kind) {
+      case "PARTICLE_SPAWN_FIELD":
+        this.particlesNode.setSpawnField(command.anchors);
+        break;
+        
+      case "PARTICLE_BURST":
+        this.particlesNode.triggerBurst(command.durationBeats, command.intensityMultiplier);
+        break;
+        
+      default:
+        console.warn('[Morpheus05] Unknown command kind:', command.kind);
+    }
+  }
+  
   destroy(): void {
     if (this.particlesNode) {
       this.particlesNode.destroy();

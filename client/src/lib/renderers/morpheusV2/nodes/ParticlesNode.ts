@@ -60,6 +60,19 @@ export class ParticlesNode {
   private lastUpdateTime: number = 0;
   private isInitialized: boolean = false;
   
+  // Phase 1: Intelligent spawn anchors
+  private maxAnchors: number = 16;
+  private currentAnchors: Array<{ x: number; y: number; weight: number }> = [];
+  private previousAnchors: Array<{ x: number; y: number; weight: number }> = [];
+  private anchorLerpProgress: number = 1.0; // 1.0 = fully transitioned
+  private anchorLerpDuration: number = 0.5; // seconds
+  private anchorLerpStartTime: number = 0;
+  
+  // Burst mode state
+  private burstActive: boolean = false;
+  private burstIntensity: number = 1.0;
+  private burstEndTime: number = 0;
+  
   constructor(gl: WebGL2RenderingContext) {
     this.gl = gl;
   }
@@ -255,10 +268,29 @@ export class ParticlesNode {
   update(deltaTime: number, audioEnergy: number, beatPulse: number): void {
     if (!this.isInitialized || !this.updateProgram) return;
     
+    const now = performance.now();
+    
+    // Update anchor lerp progress
+    if (this.anchorLerpProgress < 1.0) {
+      const elapsed = (now - this.anchorLerpStartTime) / 1000;
+      this.anchorLerpProgress = Math.min(elapsed / this.anchorLerpDuration, 1.0);
+    }
+    
+    // Update burst state
+    if (this.burstActive && now >= this.burstEndTime) {
+      this.burstActive = false;
+      this.burstIntensity = 1.0;
+      console.log('[ParticlesNode] Burst ended');
+    }
+    
+    // Apply burst multiplier to spawn rate
+    const effectiveSpawnRate = this.uniforms.spawnRate * (this.burstActive ? this.burstIntensity : 1.0);
+    
     this.uniforms.deltaTime = deltaTime;
     this.uniforms.audioEnergy = audioEnergy;
     this.uniforms.beatPulse = beatPulse;
-    this.uniforms.time = performance.now() / 1000;
+    this.uniforms.spawnRate = effectiveSpawnRate;
+    this.uniforms.time = now / 1000;
     
     // Use update program
     this.gl.useProgram(this.updateProgram);
@@ -370,6 +402,32 @@ export class ParticlesNode {
     this.gl.uniform1f(loc('u_damping'), this.uniforms.damping);
     this.gl.uniform1f(loc('u_velocity'), this.uniforms.velocity);
     this.gl.uniform1f(loc('u_time'), this.uniforms.time);
+    
+    // Pass anchor data (vec4 array: x, y, weight, unused)
+    this.gl.uniform1i(loc('u_anchorCount'), this.currentAnchors.length);
+    
+    if (this.currentAnchors.length > 0) {
+      // Build cumulative weight array for weighted random selection
+      const cumulativeWeights: number[] = [];
+      let sum = 0;
+      for (const anchor of this.currentAnchors) {
+        sum += anchor.weight;
+        cumulativeWeights.push(sum);
+      }
+      
+      // Pack anchors into vec4 array (x, y, cumulativeWeight, jitterRadius)
+      const anchorData = new Float32Array(this.maxAnchors * 4);
+      for (let i = 0; i < this.currentAnchors.length; i++) {
+        const anchor = this.currentAnchors[i];
+        const baseIdx = i * 4;
+        anchorData[baseIdx + 0] = anchor.x * 2 - 1; // Convert [0,1] to [-1,1]
+        anchorData[baseIdx + 1] = anchor.y * 2 - 1; // Convert [0,1] to [-1,1]
+        anchorData[baseIdx + 2] = cumulativeWeights[i]; // Cumulative weight for selection
+        anchorData[baseIdx + 3] = 0.1 * anchor.weight; // Jitter radius proportional to weight
+      }
+      
+      this.gl.uniform4fv(loc('u_anchors'), anchorData);
+    }
   }
   
   /**
@@ -391,6 +449,47 @@ export class ParticlesNode {
     if (projectionMatrix) {
       this.gl.uniformMatrix4fv(loc('u_projectionMatrix'), false, projectionMatrix);
     }
+  }
+  
+  /**
+   * Set spawn field anchors for intelligent particle emission
+   * Implements smooth lerp transition from previous anchors
+   */
+  setSpawnField(anchors: Array<{ x: number; y: number; weight: number }>): void {
+    if (anchors.length === 0) {
+      console.log('[ParticlesNode] Received empty anchor array, will use random spawn');
+      this.currentAnchors = [];
+      return;
+    }
+    
+    // Store previous anchors for lerping
+    this.previousAnchors = [...this.currentAnchors];
+    
+    // Normalize weights to sum to 1.0
+    const totalWeight = anchors.reduce((sum, a) => sum + a.weight, 0);
+    this.currentAnchors = anchors.map(a => ({
+      x: a.x,
+      y: a.y,
+      weight: a.weight / totalWeight,
+    })).slice(0, this.maxAnchors);
+    
+    // Start lerp transition
+    this.anchorLerpProgress = 0.0;
+    this.anchorLerpStartTime = performance.now();
+    
+    console.log(`[ParticlesNode] Loaded ${this.currentAnchors.length} spawn anchors`);
+  }
+  
+  /**
+   * Trigger burst mode for intense particle emission
+   */
+  triggerBurst(durationBeats: number, intensityMultiplier: number): void {
+    const durationMs = (durationBeats / 120) * 60000; // Assume 120 BPM
+    this.burstActive = true;
+    this.burstIntensity = intensityMultiplier;
+    this.burstEndTime = performance.now() + durationMs;
+    
+    console.log(`[ParticlesNode] Burst triggered: ${intensityMultiplier}x for ${durationMs}ms`);
   }
   
   /**
@@ -435,6 +534,10 @@ uniform float u_damping;
 uniform float u_velocity;
 uniform float u_time;
 
+// Phase 1: Intelligent spawn anchors (vec4: x, y, cumulativeWeight, jitterRadius)
+uniform int u_anchorCount;
+uniform vec4 u_anchors[16]; // Max 16 anchors
+
 // Simple hash function for pseudo-random numbers
 float hash(float n) {
   return fract(sin(n) * 43758.5453123);
@@ -448,6 +551,35 @@ vec3 hash3(float n) {
   );
 }
 
+// Select anchor using weighted random (cumulative weight binary search)
+vec3 selectSpawnPosition(float rnd, float seed) {
+  if (u_anchorCount == 0) {
+    // Fallback: random spawn at center
+    return vec3(0.0, 0.0, 0.0);
+  }
+  
+  // Find anchor by cumulative weight
+  int selectedIdx = 0;
+  for (int i = 0; i < 16; i++) {
+    if (i >= u_anchorCount) break;
+    if (rnd <= u_anchors[i].z) {
+      selectedIdx = i;
+      break;
+    }
+  }
+  
+  // Get anchor position and jitter radius
+  vec4 anchor = u_anchors[selectedIdx];
+  vec2 basePos = anchor.xy;
+  float jitterRadius = anchor.w;
+  
+  // Add jitter around anchor
+  vec2 jitter = hash3(seed + float(selectedIdx) * 7.0).xy * 2.0 - 1.0;
+  jitter = normalize(jitter) * jitterRadius * hash(seed + float(selectedIdx));
+  
+  return vec3(basePos + jitter, 0.0);
+}
+
 void main() {
   // Dead particle check
   if (life <= 0.0) {
@@ -456,10 +588,14 @@ void main() {
     float rnd = hash(seed + u_time);
     
     if (rnd < spawnChance * u_deltaTime * 60.0) {
-      // Spawn at center with random velocity
+      // Select spawn position (intelligent anchor or random center)
+      float anchorRnd = hash(seed + u_time * 2.0);
+      vec3 spawnPos = selectSpawnPosition(anchorRnd, seed);
+      
+      // Generate random velocity
       vec3 rndVec = hash3(seed + u_time * 3.0) * 2.0 - 1.0;
       
-      out_position = vec3(0.0, 0.0, 0.0);
+      out_position = spawnPos;
       out_velocity = normalize(rndVec) * u_velocity * (0.5 + u_audioEnergy);
       out_life = 1.0;
       out_seed = seed;
