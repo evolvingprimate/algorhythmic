@@ -27,13 +27,14 @@ export function AnimatedBackground() {
         aria-hidden="true"
         onLoadedMetadata={handleLoadedMetadata}
         className="absolute inset-0 w-full h-full object-cover"
+        style={{
+          willChange: 'transform',
+          transform: 'translateZ(0)',
+        }}
         data-testid="hero-background-video"
       >
         <source src={heroVideo} type="video/mp4" />
       </video>
-      <div className="animated-blob-1" />
-      <div className="animated-blob-2" />
-      <div className="animated-blob-3" />
     </div>
   );
 }
