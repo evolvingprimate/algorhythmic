@@ -871,7 +871,7 @@ export default function Display() {
             },
             audioMetrics: scaledAudio ? {
               bassLevel: scaledAudio.bassLevel / 100,
-              midsLevel: 0,
+              midsLevel: scaledAudio.amplitude / 100,
               trebleLevel: scaledAudio.trebleLevel / 100,
               beatBurst: morphState.beatBurst,
             } : {
