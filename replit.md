@@ -42,12 +42,18 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
     - **Frame A (foreground)**: ALWAYS zooms OUT (expanding) while fading IN (0%→100% opacity)
     - **Frame B (background)**: ALWAYS zooms IN (contracting) while fading OUT (100%→0% opacity)
     - **Role-Based Direction Control**: Direction assigned by role (A='out', B='in'), NOT wall-clock time
+    - **Mirrored-Progress Handoff**: When frame changes roles, progress mirrors (1 - currentProgress) instead of resetting to 0
+      - Example: Frame at 70% 'in' becomes 30% 'out' → seamless zoom/pan continuity
+      - cycleStart back-computed to preserve timing: `cycleStart = now - (mirroredProgress * KEN_BURNS_CYCLE)`
+      - Prevents visual jumps by maintaining equivalent position on opposite zoom curve
+    - **Inverted Pan**: Pan progress inverted for 'out' direction (`1 - panProgress`) to reverse smoothly
+      - 'in' direction: pan 0→1 (center→edge) as zooming in
+      - 'out' direction: pan 1→0 (edge→center) as zooming out
+      - Creates smooth reversal instead of snap-back to center
     - **Smooth Crossover**: Frames meet at midpoint opacity, creating continuous bidirectional motion
     - **Imperceptible Swap**: When Frame B reaches 0% opacity (fully zoomed in), new frame loaded → invisible to viewer
     - **Per-Frame Progress Tracking**: Map-based tracker keyed by imageUrl with cycleStart, progress, zoomDirection fields
-    - **Direction Reset on Role Change**: When frame changes roles (A↔B), tracker resets to prevent jumps
     - **Audio Synchronization**: Audio reactivity applied to BOTH currentDNA and nextDNA for identical zoom modulation
-    - **No Time-Based Drift**: Direction never toggles on elapsed time, only when forced by role assignment
     - **viewProgressA/B**: Independent 0-1 progress values exposed in MorphState for per-frame zoom curves
     - Trackers cleaned up on frame prune and full reset to prevent stale state
 - **Visual Effects System**: 
