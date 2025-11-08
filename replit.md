@@ -46,6 +46,7 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
       - Example: Frame at 70% 'in' becomes 30% 'out' → seamless zoom/pan continuity
       - cycleStart back-computed to preserve timing: `cycleStart = now - (mirroredProgress * KEN_BURNS_CYCLE)`
       - Prevents visual jumps by maintaining equivalent position on opposite zoom curve
+      - **New Frame Exception**: Frames with progress < 0.01 skip mirroring and start from 0 to prevent teleport to end
     - **Inverted Pan**: Pan progress inverted for 'out' direction (`1 - panProgress`) to reverse smoothly
       - 'in' direction: pan 0→1 (center→edge) as zooming in
       - 'out' direction: pan 1→0 (edge→center) as zooming out
