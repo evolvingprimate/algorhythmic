@@ -44,6 +44,6 @@ export class EngineRegistry {
   }
   
   getDefaultEngine(): string {
-    return 'morpheus_0.4';
+    return 'morpheus_0.3';
   }
 }
