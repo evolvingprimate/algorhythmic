@@ -1,0 +1,147 @@
+Excellent — this is a strong foundation. What Agent 3 produced gives you a good control + event architecture, but it’s missing the deeper layer we discussed: the **Real-Time Aesthetic Intelligence (RAI)** loop — the system that learns from user behavior and artistic data to *conduct itself* over time.
+
+Below is a **new, consolidated prompt** you can paste directly into Agent 3 in Replit.
+It merges your current plan with the **Creative Nervous System** and **RAI** concepts, plus explicit guidance for the *Architect* agent to be consulted on structure, parallelization, and scalability.
+
+---
+
+## 🚀 Prompt for Replit Agent 3
+
+> **Project:** AlgoRhythmic — Real-Time Aesthetic Intelligence System
+> **Objective:** Redesign and extend the current Maestro / MorphEngine / Canvas architecture into an adaptive, learning, multi-layer system that evolves based on audio, visual, and user data.
+> **Collaboration:** Consult the **Architect** agent whenever design or orchestration decisions are made (especially data schema, service boundaries, or parallel execution).
+
+---
+
+### **Architecture Overview**
+
+**Foundation Layer**
+
+* **MaestroControlStore** (policy + state layer):
+
+  * Stores user effect preferences (enable/disable, intensity).
+  * Caches AI vision spawn anchors per artwork (TTL = 10 min).
+  * Maintains climax-detection thresholds, cooldowns, and global intent state (`calm`, `build`, `crescendo`, `resolve`).
+  * Exposes read/write APIs to other services.
+  * Persists key metrics to Telemetry DB.
+
+---
+
+### **User Control Layer**
+
+* **Effects Control Panel** (UI + CommandBus):
+
+  * Controls: Particles (spawn rate, size, velocity), Warp (elasticity, radius), Color Mixer (saturation, brightness, contrast).
+  * Connected to a `CommandBus` that issues `SET` commands to the MorphEngine and MaestroControlStore.
+  * Reflects Maestro’s current intent state (visual indicators for calm/build/crescendo/resolve).
+  * Captures engagement telemetry: dwell time, skips, replays.
+
+---
+
+### **AI Perception Layer**
+
+* **VisionFeatureService** → Integrate GPT-4o Vision:
+
+  * Analyzes current frame for edges, contrast, and focal points.
+  * Generates 8 spawn anchors per artwork (10-minute TTL).
+  * Throttled to one call every 45 seconds.
+  * Exposes anchors to Particle and Warp nodes for composition awareness.
+
+* **ClimaxDetector** → Musical moment analysis:
+
+  * Monitors sustained energy, onset bursts, and beat confidence.
+  * Triggers at musical crescendos with a 24-bar cooldown.
+  * Emits short 2-second particle bursts and signals intent = “crescendo”.
+
+---
+
+### **MorphEngine + Canvas Layer**
+
+* **ParticlesNode**
+
+  * Accepts AI-detected spawn points; bursts at climax events.
+  * Falls back to ambient idle state otherwise.
+  * Parameterized through CommandBus.
+
+* **MorphEngine Kernel**
+
+  * Unifies param bus for all visual knobs (exposure, palette, displacement, flow, etc.).
+  * Hosts pluggable FX Modules (warp, flow-field, particles, ripple, fracture).
+  * Responds to both Maestro intent and audio reactors.
+
+* **Canvas Runtime**
+
+  * WebGL / GPU pipeline: vertex/fragment shaders, feedback buffers, compositing, post-FX.
+  * Capable of 60 fps target rendering with graceful fallback on low-end devices.
+  * Emits frame-level telemetry (fps, GPU time, shader cost).
+
+---
+
+### **🧠 RAI – Real-Time Aesthetic Intelligence Layer**
+
+Integrate a *Creative Nervous System* to analyze and evolve the aesthetic experience.
+
+**Telemetry Collector**
+
+* Logs music DNA (BPM, key, genre, loudness), visual DNA (palette, texture, motion density), and user engagement (dwell, likes, skips).
+* Batches data to a lightweight SQL or Replit DB instance.
+
+**Trend Engine**
+
+* Periodically analyzes aggregated telemetry (nightly job).
+* Detects trending moods, palettes, and morph profiles.
+* Outputs updated weighting tables (e.g., which DNA genes to favor).
+
+**Intent Model**
+
+* Uses Trend Engine outputs + session context to set Maestro’s intent probabilities.
+* Learns pacing and emotional arcs over time (calm → build → crescendo → resolve).
+
+**Evolution System (DNA Breeder)**
+
+* Artwork genomes evolve under selection pressure from engagement.
+* High-engagement traits increase in probability for future spawns.
+* Provides a visual feedback loop — the system learns what viewers find beautiful.
+
+**Recommendation Loop**
+
+* After each session, updates user’s personal DNA profile.
+* Suggests or preloads next styles likely to resonate.
+* Feeds RAI outputs back into MaestroControlStore.
+
+---
+
+### **Data Flow Summary**
+
+1. Audio + Visual input → Maestro Perception → Intent.
+2. Intent → MorphEngine and Canvas for visual execution.
+3. Output + User interactions → Telemetry.
+4. Telemetry → Trend Engine → RAI Insights.
+5. RAI Insights → Adjust Intent weights and DNA evolution.
+6. Loop continues, creating an adaptive aesthetic organism.
+
+---
+
+### **Implementation Guidance**
+
+* Favor **event-driven micro-modules** (each service subscribes to CommandBus topics).
+* Use **async task queues** for external API calls to avoid frame stalls.
+* Log every AI call (cost and latency) for budget tracking.
+* Schedule RAI Trend Engine as a **Replit Scheduled Deployment** (runs nightly).
+* Cache prompt results to minimize API credit usage.
+* Store policy and state in **MaestroControlStore** (DB backed) for continuity across sessions.
+* Coordinate with the **Architect agent** before creating new subsystems or changing data contracts.
+
+---
+
+### **Deliverables for this Phase**
+
+1. Updated MaestroControlStore schema including intent weights and RAI hooks.
+2. Revised MorphEngine API to accept RAI-weighted parameters.
+3. Telemetry collector service + nightly Trend Engine job.
+4. Logging for RAI feedback loop visible in Replit console.
+5. Testing scenarios for ClimaxDetector and Particle bursts driven by VisionFeatureService.
+
+---
+
+This prompt instructs Agent 3 to merge the reactive control architecture it already built with your broader **Creative Nervous System** — making AlgoRhythmic not just responsive, but *self-tuning and emotionally aware*.
