@@ -1,4 +1,5 @@
 import type { IMorphRenderer, RenderContext } from './types';
+import { ParticlesNode } from './morpheusV2/nodes/ParticlesNode';
 
 const vertexShader = `
   attribute vec2 a_position;
@@ -56,6 +57,8 @@ export class Morpheus03Renderer implements IMorphRenderer {
   private program: WebGLProgram | null = null;
   private positionBuffer: WebGLBuffer | null = null;
   private texCoordBuffer: WebGLBuffer | null = null;
+  private particlesNode: ParticlesNode | null = null;
+  private lastFrameTime: number = 0;
   
   initialize(gl: WebGL2RenderingContext): void {
     this.gl = gl;
@@ -85,7 +88,16 @@ export class Morpheus03Renderer implements IMorphRenderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.texCoordBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, texCoords, gl.STATIC_DRAW);
     
-    console.log('[Morpheus03] Initialized');
+    // Initialize particle system
+    this.particlesNode = new ParticlesNode(gl);
+    this.particlesNode.initialize().catch(err => {
+      console.error('[Morpheus03] Failed to initialize ParticlesNode:', err);
+      this.particlesNode = null;
+    });
+    
+    this.lastFrameTime = performance.now();
+    
+    console.log('[Morpheus03] Initialized with particle system');
   }
   
   render(context: RenderContext): void {
@@ -178,6 +190,24 @@ export class Morpheus03Renderer implements IMorphRenderer {
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     
     gl.disable(gl.BLEND);
+    
+    // Update and render particles overlay
+    if (this.particlesNode && context.parameters) {
+      const now = performance.now();
+      const deltaTime = (now - this.lastFrameTime) / 1000; // Convert to seconds
+      this.lastFrameTime = now;
+      
+      // Update particles from Maestro parameters
+      this.particlesNode.updateParameters(context.parameters);
+      
+      // Update particle simulation
+      const audioEnergy = audioAnalysis?.amplitude || 0;
+      const beatPulse = (audioAnalysis?.bassLevel || 0) + (audioAnalysis?.trebleLevel || 0);
+      this.particlesNode.update(deltaTime, audioEnergy, beatPulse);
+      
+      // Render particles as overlay
+      this.particlesNode.render();
+    }
   }
   
   private calculateZoomView(
@@ -312,6 +342,11 @@ export class Morpheus03Renderer implements IMorphRenderer {
     if (this.texCoordBuffer) {
       this.gl.deleteBuffer(this.texCoordBuffer);
       this.texCoordBuffer = null;
+    }
+    
+    if (this.particlesNode) {
+      this.particlesNode.destroy();
+      this.particlesNode = null;
     }
     
     console.log('[Morpheus03] Destroyed');

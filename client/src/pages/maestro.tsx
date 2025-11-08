@@ -17,7 +17,11 @@ import { useToast } from "@/hooks/use-toast";
 import { AudioProbe } from "@/lib/audio/AudioProbe";
 import { MaestroLoop } from "@/lib/maestro/control/MaestroLoop";
 import { FeatureBus } from "@/lib/maestro/control/FeatureBus";
-import type { ClockState, AudioFeatures } from "@shared/maestroTypes";
+import { CommandBus } from "@/lib/maestro/control/CommandBus";
+import { Scheduler } from "@/lib/maestro/control/Scheduler";
+import { ParameterRegistry } from "@/lib/maestro/control/ParameterRegistry";
+import { RendererManager } from "@/lib/RendererManager";
+import type { ClockState, AudioFeatures, Command } from "@shared/maestroTypes";
 
 export default function Maestro() {
   const [isPlaying, setIsPlaying] = useState(false);
@@ -31,19 +35,61 @@ export default function Maestro() {
   const audioProbeRef = useRef<AudioProbe | null>(null);
   const maestroLoopRef = useRef<MaestroLoop | null>(null);
   const featureBusRef = useRef<FeatureBus | null>(null);
+  const commandBusRef = useRef<CommandBus | null>(null);
+  const schedulerRef = useRef<Scheduler | null>(null);
+  const paramRegistryRef = useRef<ParameterRegistry | null>(null);
+  const rendererManagerRef = useRef<RendererManager | null>(null);
   const { toast } = useToast();
 
   // Initialize Maestro system
   useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    // Initialize WebGL
+    const gl = canvas.getContext("webgl2");
+    if (!gl) {
+      console.error("[Maestro] WebGL2 not supported");
+      toast({
+        title: "WebGL2 Not Supported",
+        description: "Your browser does not support WebGL2",
+        variant: "destructive",
+      });
+      return;
+    }
+    
     // Create FeatureBus
     const featureBus = FeatureBus.getInstance();
     featureBusRef.current = featureBus;
+    
+    // Create CommandBus
+    const commandBus = new CommandBus();
+    commandBusRef.current = commandBus;
+    
+    // Create ParameterRegistry
+    const paramRegistry = new ParameterRegistry();
+    paramRegistryRef.current = paramRegistry;
+    
+    // Create Scheduler
+    const scheduler = new Scheduler(commandBus);
+    schedulerRef.current = scheduler;
+    
+    // Create RendererManager (using canvas parent as container)
+    const container = canvas.parentElement;
+    if (!container) {
+      console.error("[Maestro] Canvas has no parent element");
+      return;
+    }
+    container.id = 'maestro-container';
+    canvas.id = 'maestro-canvas';
+    const rendererManager = new RendererManager('maestro-container', 'morpheus_0.3');
+    rendererManagerRef.current = rendererManager;
     
     // Create MaestroLoop
     const maestroLoop = new MaestroLoop();
     maestroLoopRef.current = maestroLoop;
     
-    // Subscribe MaestroLoop to FeatureBus
+    // Subscribe MaestroLoop to FeatureBus and generate commands
     featureBus.onClock((clock: ClockState) => {
       maestroLoop.updateClock(clock);
       setTempo(clock.tempo);
@@ -54,6 +100,25 @@ export default function Maestro() {
     featureBus.onAudio((audio: AudioFeatures) => {
       maestroLoop.updateAudio(audio);
       setAudioLevel(audio.rms * 100);
+    });
+    
+    // Simple particle policy: generate commands on audio events
+    featureBus.on("onset", () => {
+      // Pulse spawn rate on beats
+      commandBus.enqueue({
+        kind: 'PULSE',
+        path: 'particles.spawnRate',
+        amount: 0.5,
+        decayBeats: 0.5,
+      });
+      
+      // Pulse velocity on beats
+      commandBus.enqueue({
+        kind: 'PULSE',
+        path: 'particles.velocity',
+        amount: 2.0,
+        decayBeats: 1.0,
+      });
     });
     
     // Create AudioProbe
@@ -69,11 +134,13 @@ export default function Maestro() {
       featureBus.publishAudio(audio);
     });
     
-    console.log("[Maestro] Initialized: AudioProbe → FeatureBus → MaestroLoop");
+    console.log("[Maestro] Initialized: Full pipeline ready");
     
     return () => {
       audioProbe.stop();
       maestroLoop.stop();
+      scheduler.stop();
+      rendererManager.destroy();
       featureBus.cleanup();
     };
   }, []);
@@ -104,10 +171,14 @@ export default function Maestro() {
       try {
         await audioProbeRef.current?.initialize();
         maestroLoopRef.current?.start();
+        // Start scheduler with callback to RendererManager
+        schedulerRef.current?.start((commands: Command[]) => {
+          rendererManagerRef.current?.dispatchCommands(commands);
+        });
         setIsPlaying(true);
         toast({
           title: "Maestro Started",
-          description: "Listening to audio and analyzing beats...",
+          description: "Audio-reactive particles activated!",
         });
       } catch (error) {
         console.error("[Maestro] Failed to start:", error);
@@ -121,6 +192,7 @@ export default function Maestro() {
       // Stop
       audioProbeRef.current?.stop();
       maestroLoopRef.current?.stop();
+      schedulerRef.current?.stop();
       setIsPlaying(false);
       toast({
         title: "Maestro Paused",
