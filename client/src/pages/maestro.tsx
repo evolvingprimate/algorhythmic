@@ -82,7 +82,7 @@ export default function Maestro() {
     }
     container.id = 'maestro-container';
     canvas.id = 'maestro-canvas';
-    const rendererManager = new RendererManager('maestro-container', 'morpheus_0.3');
+    const rendererManager = new RendererManager('maestro-container', 'morpheus_0.5');
     rendererManagerRef.current = rendererManager;
     
     // Create MaestroLoop
@@ -104,20 +104,28 @@ export default function Maestro() {
     
     // Simple particle policy: generate commands on audio events
     featureBus.on("onset", () => {
-      // Pulse spawn rate on beats
+      // Pulse spawn rate on beats (aligned with ParameterRegistry)
       commandBus.enqueue({
         kind: 'PULSE',
-        path: 'particles.spawnRate',
-        amount: 0.5,
+        path: 'particles.main.spawnRate',
+        amount: 50,
         decayBeats: 0.5,
       });
       
-      // Pulse velocity on beats
+      // Pulse velocity on beats (aligned with ParameterRegistry)
       commandBus.enqueue({
         kind: 'PULSE',
-        path: 'particles.velocity',
+        path: 'particles.main.velocity',
         amount: 2.0,
         decayBeats: 1.0,
+      });
+      
+      // Pulse warp on bass hits
+      commandBus.enqueue({
+        kind: 'PULSE',
+        path: 'warp.elasticity',
+        amount: 0.3,
+        decayBeats: 0.8,
       });
     });
     
@@ -132,9 +140,55 @@ export default function Maestro() {
     
     audioProbe.on("audio", (audio: AudioFeatures) => {
       featureBus.publishAudio(audio);
+      
+      // Audio-reactive mixer controls
+      const energyLevel = audio.energy;
+      const bassLevel = audio.bass;
+      
+      // Ramp saturation based on energy (more energetic = more saturated)
+      if (energyLevel > 0.7) {
+        commandBus.enqueue({
+          kind: 'RAMP',
+          path: 'mixer.saturation',
+          to: 1.3,
+          durationBars: 0.5,
+          curve: 'easeInOut',
+        });
+      } else if (energyLevel < 0.3) {
+        commandBus.enqueue({
+          kind: 'RAMP',
+          path: 'mixer.saturation',
+          to: 0.9,
+          durationBars: 1.0,
+          curve: 'easeInOut',
+        });
+      }
+      
+      // Bass-reactive brightness (subtle)
+      if (bassLevel > 0.6) {
+        commandBus.enqueue({
+          kind: 'RAMP',
+          path: 'mixer.brightness',
+          to: 1.1,
+          durationBars: 0.25,
+          curve: 'easeInOut',
+        });
+      }
     });
     
-    console.log("[Maestro] Initialized: Full pipeline ready");
+    // Initialize Maestro parameters with good defaults
+    commandBus.enqueue({ kind: 'SET', path: 'mixer.saturation', value: 1.0 });
+    commandBus.enqueue({ kind: 'SET', path: 'mixer.brightness', value: 1.0 });
+    commandBus.enqueue({ kind: 'SET', path: 'mixer.contrast', value: 1.0 });
+    commandBus.enqueue({ kind: 'SET', path: 'warp.elasticity', value: 0.5 });
+    commandBus.enqueue({ kind: 'SET', path: 'warp.radius', value: 0.3 });
+    commandBus.enqueue({ kind: 'SET', path: 'particles.main.spawnRate', value: 100 });
+    commandBus.enqueue({ kind: 'SET', path: 'particles.main.velocity', value: 1.0 });
+    commandBus.enqueue({ kind: 'SET', path: 'particles.main.size', value: 1.0 });
+    commandBus.enqueue({ kind: 'SET', path: 'particles.main.trailLength', value: 0.5 });
+    commandBus.enqueue({ kind: 'SET', path: 'particles.main.colorBias', value: [1.0, 1.0, 1.0] });
+    
+    console.log("[Maestro] Initialized: Full pipeline ready with parameter defaults");
     
     return () => {
       audioProbe.stop();

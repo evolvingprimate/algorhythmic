@@ -44,9 +44,8 @@ export class EngineRegistry {
   }
   
   getDefaultEngine(): string {
-    // TEMPORARY: Using Morpheus 0.3 as default until OpenCV.js blocking issue is resolved
-    // Morpheus 0.4 (feature-based morphing with OpenCV) causes browser freezes during initialization
-    // TODO: Investigate async OpenCV loading or move to web worker
-    return 'morpheus_0.3';
+    // Morpheus 0.5: Fully Maestro-controlled renderer with audio-reactive effects
+    // All visual parameters driven by Maestro commands (mixer, warp, particles)
+    return 'morpheus_0.5';
   }
 }
