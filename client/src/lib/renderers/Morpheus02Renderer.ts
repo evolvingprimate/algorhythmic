@@ -186,7 +186,16 @@ export class Morpheus02Renderer implements IMorphRenderer {
     const panX = (dna[2] ?? 0.5) - 0.5;
     const panY = (dna[3] ?? 0.5) - 0.5;
     
-    const panProgress = this.smootherstep(progress);
+    // Calculate pan progress with smootherstep easing
+    let panProgress = this.smootherstep(progress);
+    
+    // CRITICAL: Invert pan for 'out' direction to maintain continuity
+    // 'in' direction: pan progresses 0→1 (center→edge) as it zooms in
+    // 'out' direction: pan progresses 1→0 (edge→center) as it zooms out
+    if (direction === 'out') {
+      panProgress = 1.0 - panProgress;
+    }
+    
     const currentPanX = panX * panProgress * 0.3;
     const currentPanY = panY * panProgress * 0.3;
     
