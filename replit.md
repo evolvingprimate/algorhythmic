@@ -38,6 +38,12 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
   - **First-Run Experience**: Brand new users get placeholder frames + automatic generation trigger (no black screen)
   - **Timed Generation**: Triggers artwork creation every 5 minutes → smart sync automatically adds result → pruning maintains cap
   - **Architecture**: No `morphEngine.reset()` calls except on first-run empty check → ensures continuous morphing without jump cuts
+  - **Per-Frame Ken Burns Tracking**: Map-based tracker keyed by imageUrl preserves independent zoom progress for each frame through transitions
+    - Each frame maintains its own 5-minute zoom timeline via `FrameTracker` (cycleStart, progress)
+    - `viewProgressA`/`viewProgressB` exposed in MorphState replace global totalProgress for renderer
+    - Audio reactivity applied to BOTH currentDNA and nextDNA ensuring synchronized zoom parameters
+    - When Frame B becomes Frame A, tracker transfers unchanged → NO zoom reset or jump
+    - Trackers cleaned up on frame prune and full reset to prevent stale state
 - **Visual Effects System**: 
   - **Trace Extraction**: Three-pass rendering with Frame B alpha/luminance extraction, Sobel edge detection, 5×5 Gaussian blur, and temporal accumulation (0.85-0.95 decay) creates ethereal trailing ribbons. Multiply blend composite makes Frame B appear to "birth" from behind Frame A with DNA-controlled strength and parallax offset.
   - **Soft Bloom/Glow**: Single-pass Kawase bloom on downsampled (1/4 resolution) framebuffer extracts bright regions with DNA[48]-controlled intensity, modulated by burnIntensity for dreamy halos around bright areas during transitions.
