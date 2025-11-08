@@ -185,17 +185,30 @@ export class MorphEngine {
       const currentElapsed = Date.now() - tracker.cycleStart;
       const currentProgress = Math.min(currentElapsed / this.KEN_BURNS_CYCLE, 1.0);
       
-      // Mirror progress for smooth handoff (frame at 70% 'in' becomes 30% 'out')
-      const mirroredProgress = 1.0 - currentProgress;
-      
-      // Update direction
-      tracker.zoomDirection = forceDirection;
-      
-      // Back-compute cycleStart to preserve mirrored progress
-      // If mirroredProgress = 0.3, we want elapsed time to equal 0.3 * KEN_BURNS_CYCLE
-      const mirroredElapsed = mirroredProgress * this.KEN_BURNS_CYCLE;
-      tracker.cycleStart = Date.now() - mirroredElapsed;
-      tracker.progress = mirroredProgress;
+      // CRITICAL FIX: Skip mirroring for brand new frames (progress ≈ 0)
+      // New frames should start from 0 with their assigned direction, not mirror to 1.0
+      if (currentProgress < 0.01) {
+        // Frame is brand new - just set the direction and keep progress at 0
+        tracker.zoomDirection = forceDirection;
+        // cycleStart already set to Date.now() from initialization
+        console.log('[MorphEngine] New frame direction set:', forceDirection, 'progress: 0');
+      } else {
+        // Frame is mid-cycle - mirror progress for smooth handoff
+        // Example: frame at 70% 'in' becomes 30% 'out'
+        const mirroredProgress = 1.0 - currentProgress;
+        
+        // Update direction
+        tracker.zoomDirection = forceDirection;
+        
+        // Back-compute cycleStart to preserve mirrored progress
+        const mirroredElapsed = mirroredProgress * this.KEN_BURNS_CYCLE;
+        tracker.cycleStart = Date.now() - mirroredElapsed;
+        tracker.progress = mirroredProgress;
+        
+        console.log('[MorphEngine] Frame role swap - mirrored progress:', 
+          currentProgress.toFixed(2), '→', mirroredProgress.toFixed(2), 
+          'direction:', tracker.zoomDirection);
+      }
     }
     
     // Calculate progress based on elapsed time
