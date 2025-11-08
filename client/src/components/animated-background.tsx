@@ -7,8 +7,8 @@ export function AnimatedBackground() {
 
   const handleLoadedMetadata = () => {
     if (videoRef.current) {
-      // Set playback rate to normal speed (1.0)
-      videoRef.current.playbackRate = 1.0;
+      // Set playback rate to 80% slower (0.2x speed)
+      videoRef.current.playbackRate = 0.2;
     }
   };
 
