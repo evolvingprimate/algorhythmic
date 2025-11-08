@@ -15,6 +15,8 @@ export interface RenderContext {
   morphState: MorphState;
   audioAnalysis?: AudioAnalysis;
   time: number;
+  // Maestro parameter store (Phase 2)
+  parameters?: Map<string, number | number[] | boolean | string>;
 }
 
 export interface IMorphRenderer {

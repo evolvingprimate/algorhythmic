@@ -1,6 +1,7 @@
 import { EngineRegistry, type IMorphRenderer, type RenderContext } from './renderers';
 import type { MorphState } from './morphEngine';
 import type { AudioAnalysis } from '@shared/schema';
+import type { Command } from '@shared/maestroTypes';
 
 export class RendererManager {
   private canvas: HTMLCanvasElement | null = null;
@@ -19,6 +20,22 @@ export class RendererManager {
   private imageCache: Map<string, HTMLImageElement> = new Map();
   private startTime: number = Date.now();
   private resizeHandler: (() => void) | null = null;
+  
+  // Maestro parameter store
+  private parameterStore: Map<string, number | number[] | boolean | string> = new Map();
+  private activeRamps: Map<string, {
+    from: number | number[];
+    to: number | number[];
+    startTime: number;
+    durationMs: number;
+    curve: "linear" | "easeInOut" | "expo";
+  }> = new Map();
+  private activePulses: Map<string, {
+    baseValue: number | number[];
+    pulseAmount: number | number[];
+    startTime: number;
+    decayMs: number;
+  }> = new Map();
   
   constructor(containerId: string, initialEngine: string) {
     this.container = document.getElementById(containerId);
@@ -195,6 +212,9 @@ export class RendererManager {
       return;
     }
     
+    // Update parameter animations (ramps and pulses)
+    this.updateParameterAnimations();
+    
     try {
       const imgA = await this.loadImage(imageUrlA);
       const imgB = await this.loadImage(imageUrlB);
@@ -219,6 +239,8 @@ export class RendererManager {
         morphState,
         audioAnalysis,
         time: (Date.now() - this.startTime) / 1000,
+        // Maestro parameters (exposed to engines)
+        parameters: this.parameterStore,
       };
       
       this.currentEngine.render(context);
@@ -262,6 +284,179 @@ export class RendererManager {
       this.gl.UNSIGNED_BYTE,
       image
     );
+  }
+  
+  /**
+   * Dispatch commands from Maestro to the rendering pipeline
+   * 
+   * This is the bridge between Maestro's command system and the
+   * existing rendering engines. Commands update parameterStore
+   * regardless of engine lifecycle, ensuring no commands are dropped.
+   */
+  dispatchCommands(commands: Command[]): void {
+    // Execute commands even if engine is not ready yet
+    // parameterStore updates are independent of engine lifecycle
+    if (commands.length > 0) {
+      console.log(`[RendererManager] Dispatching ${commands.length} commands (engine: ${this.currentEngineKey || 'none'})`);
+      
+      for (const command of commands) {
+        this.executeCommand(command);
+      }
+    }
+  }
+  
+  /**
+   * Execute a single command (functional implementation)
+   */
+  private executeCommand(command: Command): void {
+    switch (command.kind) {
+      case "SET":
+        // Set parameter immediately
+        this.parameterStore.set(command.path, command.value);
+        console.log(`[RendererManager] SET ${command.path} = ${command.value}`);
+        break;
+        
+      case "RAMP":
+        // Ramp parameter over time
+        const currentValue = this.parameterStore.get(command.path) ?? 0;
+        const durationMs = command.durationBars * (60000 / 120); // Assume 120 BPM for now
+        
+        // Only create ramps for numeric values
+        if (typeof currentValue === "number" || Array.isArray(currentValue)) {
+          this.activeRamps.set(command.path, {
+            from: currentValue as number | number[],
+            to: command.to,
+            startTime: performance.now(),
+            durationMs: durationMs,
+            curve: command.curve ?? "linear",
+          });
+          
+          console.log(`[RendererManager] RAMP ${command.path} to ${command.to} over ${command.durationBars} bars (${durationMs}ms)`);
+        } else {
+          console.warn(`[RendererManager] Cannot RAMP non-numeric parameter: ${command.path}`);
+        }
+        break;
+        
+      case "PULSE":
+        // Pulse parameter (spike and decay)
+        const baseValue = this.parameterStore.get(command.path) ?? 0;
+        const decayMs = command.decayBeats * (60000 / 120); // Assume 120 BPM for now
+        
+        // Only create pulses for numeric values
+        if (typeof baseValue === "number" || Array.isArray(baseValue)) {
+          this.activePulses.set(command.path, {
+            baseValue: baseValue as number | number[],
+            pulseAmount: command.amount,
+            startTime: performance.now(),
+            decayMs: decayMs,
+          });
+          
+          console.log(`[RendererManager] PULSE ${command.path} by ${command.amount} with ${command.decayBeats} beat decay (${decayMs}ms)`);
+        } else {
+          console.warn(`[RendererManager] Cannot PULSE non-numeric parameter: ${command.path}`);
+        }
+        break;
+        
+      case "SCHEDULE":
+        // Schedule future commands (logged for now)
+        console.log(`[RendererManager] SCHEDULE ${command.commands.length} commands at bar ${command.atBar}`);
+        break;
+        
+      case "ATTACH_EMITTER":
+        // Attach particle emitter (Phase 3)
+        console.log(`[RendererManager] ATTACH_EMITTER ${command.source} to ${command.path}`);
+        break;
+        
+      case "SET_PALETTE":
+        // Set color palette (Phase 3)
+        console.log(`[RendererManager] SET_PALETTE ${command.paletteId} at ${command.path}`);
+        break;
+        
+      default:
+        console.warn('[RendererManager] Unknown command kind:', (command as any).kind);
+    }
+  }
+  
+  /**
+   * Update parameter animations (ramps and pulses)
+   * Call this every frame before rendering
+   */
+  private updateParameterAnimations(): void {
+    const now = performance.now();
+    
+    // Update ramps
+    this.activeRamps.forEach((ramp, path) => {
+      const elapsed = now - ramp.startTime;
+      const progress = Math.min(elapsed / ramp.durationMs, 1.0);
+      
+      // Apply easing curve
+      let easedProgress = progress;
+      switch (ramp.curve) {
+        case "easeInOut":
+          easedProgress = progress < 0.5
+            ? 2 * progress * progress
+            : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+          break;
+        case "expo":
+          easedProgress = progress === 0 ? 0 : Math.pow(2, 10 * progress - 10);
+          break;
+      }
+      
+      // Interpolate value (support both scalars and arrays)
+      if (typeof ramp.from === "number" && typeof ramp.to === "number") {
+        const value = ramp.from + (ramp.to - ramp.from) * easedProgress;
+        this.parameterStore.set(path, value);
+      } else if (Array.isArray(ramp.from) && Array.isArray(ramp.to)) {
+        const fromArray = ramp.from as number[];
+        const toArray = ramp.to as number[];
+        const value = fromArray.map((fromVal, i) => {
+          const toVal = toArray[i] ?? fromVal;
+          return fromVal + (toVal - fromVal) * easedProgress;
+        });
+        this.parameterStore.set(path, value);
+      }
+      
+      // Remove completed ramps
+      if (progress >= 1.0) {
+        this.activeRamps.delete(path);
+      }
+    });
+    
+    // Update pulses
+    this.activePulses.forEach((pulse, path) => {
+      const elapsed = now - pulse.startTime;
+      const progress = Math.min(elapsed / pulse.decayMs, 1.0);
+      
+      // Exponential decay
+      const decay = Math.exp(-5 * progress); // Decay factor
+      
+      // Apply pulse on top of base value (support both scalars and arrays)
+      if (typeof pulse.baseValue === "number" && typeof pulse.pulseAmount === "number") {
+        const value = pulse.baseValue + pulse.pulseAmount * decay;
+        this.parameterStore.set(path, value);
+      } else if (Array.isArray(pulse.baseValue) && Array.isArray(pulse.pulseAmount)) {
+        const baseArray = pulse.baseValue as number[];
+        const pulseArray = pulse.pulseAmount as number[];
+        const value = baseArray.map((baseVal, i) => {
+          const pulseVal = pulseArray[i] ?? 0;
+          return baseVal + pulseVal * decay;
+        });
+        this.parameterStore.set(path, value);
+      }
+      
+      // Remove completed pulses
+      if (progress >= 1.0) {
+        this.parameterStore.set(path, pulse.baseValue);
+        this.activePulses.delete(path);
+      }
+    });
+  }
+  
+  /**
+   * Get parameter value from store
+   */
+  getParameter(path: string): number | number[] | boolean | string | undefined {
+    return this.parameterStore.get(path);
   }
   
   destroy(): void {
