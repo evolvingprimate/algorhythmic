@@ -39,6 +39,16 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 - **Audio-Reactive Control System**: Real-time audio analysis (FFT, RMS, spectral centroid, beat detection, BPM estimation) intelligently maps parameters to visual effects with safety caps and provides a public API for engine integration.
 - **Tiered Rendering**: Adaptive rendering based on device capabilities for optimal performance.
 
+### Maestro - Intelligent Audio-Reactive Orchestration System
+**Phase 1 Complete** - Core data pipeline operational at /maestro route:
+- **AudioProbe**: Advanced audio analysis with onset detection (energy flux + adaptive threshold), tempo estimation (90s autocorrelation), and phase tracking (PLL + Kalman filter)
+- **FeatureBus**: Event-driven pub/sub system for decoupled audio feature distribution
+- **MaestroLoop**: Central control orchestrator connecting audio analysis to command generation
+- **CommandBus**: Bounded priority queue (120 capacity) with back-pressure handling
+- **Scheduler**: Frame-aligned command dispatcher with 2ms/frame budget tracking
+- **ParameterRegistry**: Declarative parameter metadata (12 parameters) with range/unit/curve definitions
+- **RendererManager Integration**: Lifecycle-independent parameter store with functional command execution (SET/RAMP/PULSE) supporting scalar and array interpolation, exposed via RenderContext.parameters
+
 ### Data Models
 - **ArtPreferences**: User-selected styles and artists.
 - **ArtVotes**: Upvote/downvote history.
