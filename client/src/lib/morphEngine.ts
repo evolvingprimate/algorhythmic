@@ -181,10 +181,21 @@ export class MorphEngine {
     
     // CRITICAL: Update direction if forced (by role assignment)
     if (forceDirection && tracker.zoomDirection !== forceDirection) {
+      // Calculate current progress before direction change
+      const currentElapsed = Date.now() - tracker.cycleStart;
+      const currentProgress = Math.min(currentElapsed / this.KEN_BURNS_CYCLE, 1.0);
+      
+      // Mirror progress for smooth handoff (frame at 70% 'in' becomes 30% 'out')
+      const mirroredProgress = 1.0 - currentProgress;
+      
+      // Update direction
       tracker.zoomDirection = forceDirection;
-      // Reset cycle when direction changes to prevent jump
-      tracker.cycleStart = Date.now();
-      tracker.progress = 0;
+      
+      // Back-compute cycleStart to preserve mirrored progress
+      // If mirroredProgress = 0.3, we want elapsed time to equal 0.3 * KEN_BURNS_CYCLE
+      const mirroredElapsed = mirroredProgress * this.KEN_BURNS_CYCLE;
+      tracker.cycleStart = Date.now() - mirroredElapsed;
+      tracker.progress = mirroredProgress;
     }
     
     // Calculate progress based on elapsed time
