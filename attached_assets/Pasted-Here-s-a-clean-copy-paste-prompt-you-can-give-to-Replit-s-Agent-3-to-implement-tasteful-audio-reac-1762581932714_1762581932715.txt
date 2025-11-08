@@ -1,0 +1,174 @@
+Here’s a clean, copy-paste prompt you can give to Replit’s Agent 3 to implement tasteful, audio-reactive control of your MorphEngine—without assuming any existing parameter ranges.
+
+---
+
+**Prompt for Replit Agent 3**
+
+Build an **audio-reactive control layer** for an existing `MorphEngine` that morphs between two frames. The layer must extract simple music features in real time and map them—subtly—to MorphEngine controls. Do not assume prior ranges; implement sensible defaults and hard caps.
+
+### 1) Expose a small control surface on MorphEngine
+
+Add a `controls` object with these fields and default values:
+
+```ts
+type MorphControls = {
+  // Progress control
+  t: number;                 // 0..1 morph position
+  tRateBase: number;         // base auto-progress per second (default 0)
+  tRate: number;             // effective per-frame increment computed each tick
+  tBeatNudge: number;        // added on each beat (default 0.03)
+
+  // Warping intensity
+  dispAmp: number;           // 0..0.015 (default 0.006)
+  seamFeather: number;       // pixels (default 1.0)
+  tpsLambda: number;         // regularization (default 0.02)
+  meshSharpen: number;       // 0..0.15 (default 0)
+
+  // Background variant (optional)
+  bgDispAmp: number;         // 0..dispAmp (default dispAmp*0.5)
+
+  // Safety caps
+  caps: {
+    maxDispAmp: number;      // 0.015
+    maxTRate: number;        // 0.15  // per second
+    maxSharpen: number;      // 0.15
+  };
+};
+```
+
+Initialize with the defaults shown.
+
+### 2) Web Audio feature block (no external libs)
+
+Create a lightweight analyzer:
+
+* Inputs: mic or system audio.
+* Outputs every animation frame:
+
+  * `rms` (instant loudness, 0..1)
+  * `rmsSlow` (smoothed loudness envelope)
+  * `centroid` (spectral brightness, 0..1)
+  * `beatPulse` (0..1 short pulse right after each beat)
+  * `barBoundary` (boolean once every 4 beats)
+  * `tempoBpm` (start with 120; allow manual override)
+
+Implementation notes:
+
+* Use `AnalyserNode` (`fftSize=2048`).
+* `rms`: sqrt(mean(x^2)) on time-domain buffer; normalize by observed peak tracking.
+* `rmsSlow`: one-pole filter (attack 30ms, release 160ms).
+* `centroid`: weighted index of magnitude spectrum normalized by Nyquist.
+* **Beat/Bar “quantizer”:**
+
+  * Define “bar quantizer” = a musical clock that emits a **beat tick** each `60/tempoBpm` seconds and a **bar tick** every 4 beats.
+  * Implement as a phase accumulator using `audioContext.currentTime`.
+  * On each new beat, set `beatPulse=1` and then decay exponentially (`beatPulse *= exp(-dt*6)`).
+  * Flip `barBoundary=true` on beat indices divisible by 4.
+
+Expose:
+
+```ts
+type AudioSignals = {
+  rms: number; rmsSlow: number; peak: number;
+  centroid: number;
+  beatPulse: number;          // decays to 0 within ~200 ms
+  barBoundary: boolean;
+  tempoBpm: number;
+};
+```
+
+### 3) Map audio → MorphEngine controls (tasteful defaults)
+
+Every frame, compute:
+
+```ts
+// 3.1 Progress: small, beat-quantized nudges (not volume-driven)
+controls.tRate = clamp(controls.tRateBase + 0.0, -controls.caps.maxTRate, controls.caps.maxTRate);
+if (beatPulse > 0.5) {                  // on beat edge
+  controls.t = clamp01(controls.t + controls.tBeatNudge);
+}
+
+// 3.2 Warping intensity: micro-displacement from loudness envelope
+controls.dispAmp = clamp(lerp(0.003, 0.012, rmsSlow), 0, controls.caps.maxDispAmp);
+controls.bgDispAmp = 0.5 * controls.dispAmp;
+
+// 3.3 Edge hiding
+controls.seamFeather = 1.0 + 0.8 * rmsSlow;
+
+// 3.4 Mode flavor from brightness (centroid)
+controls.tpsLambda   = clamp(0.02 * (1.0 + (centroid - 0.5) * 0.3), 0.01, 0.03); // ±15%
+controls.meshSharpen = clamp(0.15 * centroid * beatPulse, 0, controls.caps.maxSharpen);
+
+// 3.5 Apply tRate
+controls.t = clamp01(controls.t + controls.tRate * dtSeconds);
+```
+
+**Clamp helpers**:
+
+* `clamp01(x) = min(1,max(0,x))`
+* `clamp(x,a,b) = min(b,max(a,x))`
+* `lerp(a,b,t) = a + (b-a)*t`
+
+### 4) Stage transitions aligned to bars
+
+If MorphEngine uses stages (mesh/TPS/flow), **only** allow stage changes at `barBoundary === true`. Expose:
+
+```ts
+function maybeAdvanceStage(audio: AudioSignals) {
+  if (!audio.barBoundary) return;
+  if (rmsSlow > 0.2) engine.nextPlannedStage(); // simple gate; make threshold configurable
+}
+```
+
+### 5) Latency compensation & safety
+
+* Add a global `audioVisualOffsetMs` control (default −50ms) to shift the beat clock slightly **earlier** than the audio for better perceptual sync.
+* Enforce hard caps each frame:
+
+  * `dispAmp ≤ 0.015`
+  * `tRate ≤ 0.15 / s`
+  * `meshSharpen ≤ 0.15`
+
+### 6) Debug overlay (HTML/CSS)
+
+A small fixed panel showing:
+
+* BPM, beat phase, “BAR!” flash
+* `rms`, `rmsSlow`, `centroid` (0..1 with tiny bars)
+* current `t`, current stage name
+* active caps (turn text amber when a cap clamps)
+
+### 7) Public API
+
+Add:
+
+```ts
+interface AudioReactiveOpts {
+  tempoBpm?: number;
+  barBeats?: number;            // default 4
+  audioVisualOffsetMs?: number; // default -50
+  enableStageGating?: boolean;  // default true
+}
+
+function enableAudioReactive(engine: MorphEngine, opts?: AudioReactiveOpts): {
+  start(): Promise<void>;
+  stop(): void;
+  setTempo(bpm: number): void;
+  setOffset(ms: number): void;
+}
+```
+
+`start()` requests mic permission, wires the analyzer, and begins per-frame updates.
+
+### 8) Testing checklist
+
+* With a metronome at 120 BPM, `t` should bump ~0.03 every beat.
+* RMS slider test: simulate `rmsSlow` 0→1 and verify `dispAmp` goes ~0.003→0.012 with clamping.
+* Toggle centroid 0→1 and verify `tpsLambda` moves ±15% and `meshSharpen` spikes briefly post-beat.
+* Confirm stage changes only occur on bar boundaries.
+
+Keep the implementation dependency-free (plain Web Audio + Canvas/WebGL2). Use TypeScript and strict typing. Keep all numeric constants at the top as tunables. Document each control with min/default/max.
+
+---
+
+If you want me to tailor the exact defaults after you see it run once, I can tweak the numbers to your taste.
