@@ -76,6 +76,20 @@ export async function loadOpenCV(): Promise<any> {
           console.error('[OpenCV] ❌', errorMsg);
           console.error('[OpenCV] window.cv type:', typeof (window as any).cv);
           console.error('[OpenCV] Check: 1) File exists at public/opencv/opencv.js, 2) File is valid JS, 3) No console errors above');
+          console.warn('[OpenCV] Resetting loader state - future calls will retry');
+          
+          // Remove failed script to prevent conflicts
+          if (script.parentNode) {
+            script.parentNode.removeChild(script);
+          }
+          
+          // Reset all global state for clean retry
+          cvPromise = null;
+          cvLoaded = false;
+          if (typeof (window as any).cv !== 'undefined') {
+            delete (window as any).cv;
+          }
+          
           reject(new Error(errorMsg));
         }
       }, 10000);
@@ -87,6 +101,20 @@ export async function loadOpenCV(): Promise<any> {
       const errorMsg = `Failed to load OpenCV.js from local server: ${script.src}`;
       console.error('[OpenCV] ❌ Network error:', errorMsg, error);
       console.error('[OpenCV] Check: 1) File exists at public/opencv/opencv.js, 2) Server serving static files correctly');
+      console.warn('[OpenCV] Resetting loader state - future calls will retry');
+      
+      // Remove failed script to prevent conflicts
+      if (script.parentNode) {
+        script.parentNode.removeChild(script);
+      }
+      
+      // Reset all global state for clean retry
+      cvPromise = null;
+      cvLoaded = false;
+      if (typeof (window as any).cv !== 'undefined') {
+        delete (window as any).cv;
+      }
+      
       reject(new Error(errorMsg));
     };
 

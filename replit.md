@@ -1,7 +1,7 @@
 # Algorhythmic - AI-Powered Audio-Reactive Art Platform
 
 ## Overview
-Algorhythmic is a revenue-generating web application that transforms sound into stunning AI-generated artwork in real-time. Users select artistic styles and artists, and the AI creates audio-reactive visualizations. The system learns from user preferences through voting to continuously improve personalization. The project aims to be a cross-platform web app, with future plans for native TV applications and social features, operating on a freemium model.
+Algorhythmic is a revenue-generating web application that transforms sound into real-time AI-generated artwork. Users can select artistic styles and artists, and the AI creates audio-reactive visualizations. The system continuously improves personalization through user voting. The project aims to be a cross-platform web app with future plans for native TV applications and social features, operating on a freemium model.
 
 ## User Preferences
 - Theme: Light mode default with dark mode toggle
@@ -13,7 +13,7 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 - **Framework**: React with TypeScript
 - **Styling**: Tailwind CSS + Shadcn UI components
 - **State Management**: TanStack Query (React Query)
-- **Audio Processing**: Web Audio API for microphone access and analysis
+- **Audio Processing**: Web Audio API
 - **UI/UX**: Fullscreen canvas, auto-hiding controls, responsive design, 10-foot UI for TV optimization, Ken Burns effect with enhanced zoom and parallax translation.
 
 ### Backend
@@ -21,135 +21,40 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 - **Database**: PostgreSQL with Drizzle ORM
 - **Authentication**: Replit Auth with OpenID Connect (Passport.js)
 - **Real-time**: WebSocket Server (ws package)
-- **Artwork Discovery**: Global artwork pool shared across all users, enabling instant display and organic discovery
 
 ### AI Art Generation & Morphing
 - **Audio Capture & Analysis**: Extracts frequency, amplitude, tempo, mood.
-- **Music Identification**: ACRCloud identifies the playing song.
-- **Prompt Generation**: GPT-4o Vision (with album art) or GPT-5 generates DALL-E prompts based on user preferences, audio mood, music identity, and voting history. A 50-point "DNA vector" is generated alongside the prompt.
+- **Music Identification**: ACRCloud identifies playing songs.
+- **Prompt Generation**: GPT-4o Vision or GPT-5 generates DALL-E prompts based on user preferences, audio mood, music identity, and voting history, including a 50-point "DNA vector".
 - **Image Generation**: DALL-E 3 creates 1024x1024 artwork.
-- **Permanent Storage**: Images are downloaded from DALL-E and stored permanently in Replit Object Storage with a comprehensive triple verification and retry pipeline to ensure persistence and integrity.
-- **DNA Morphing System**: Each artwork has a 50-point DNA vector enabling smooth, procedural morphing between frames over 5-minute cycles, with audio-reactive modulation.
-- **Frame Pool Management**: 
-  - **Smart Sync**: Watches `/api/recent-artworks` query and automatically adds only NEW frames to MorphEngine without resetting playback
-  - **Stable Deduplication**: Uses `hasImageUrl()` method to prevent duplicate frames (handles null IDs and placeholder frames)
-  - **Hard Cap Enforcement**: After adding new frames, prunes oldest frames to maintain exactly 20 frames max
-  - **Active Frame Protection**: Resets phase timing if currently playing frame is pruned, preventing mid-morph jump cuts
-  - **First-Run Experience**: Brand new users get placeholder frames + automatic generation trigger (no black screen)
-  - **Timed Generation**: Triggers artwork creation every 5 minutes → smart sync automatically adds result → pruning maintains cap
-  - **Architecture**: No `morphEngine.reset()` calls except on first-run empty check → ensures continuous morphing without jump cuts
-  
-  **Rendering Engines:**
-  - **Morpheus 0.1**: Simple cross-fade morphing (baseline)
-  - **Morpheus 0.2**: Bidirectional Ken Burns system (ships passing in the night)
-  - **Morpheus 0.3**: Single-direction zoom toward camera (cinematic slideshow)
-  
-  - **Morpheus 0.2 - Bidirectional Ken Burns System**: Frames zoom in opposite directions like "ships passing in the night" (∞ infinity symbol)
-    - **Frame A (foreground)**: ALWAYS zooms OUT (expanding) while fading IN (0%→100% opacity)
-    - **Frame B (background)**: ALWAYS zooms IN (contracting) while fading OUT (100%→0% opacity)
-    - **Role-Based Direction Control**: Direction assigned by role (A='out', B='in'), NOT wall-clock time
-    - **Mirrored-Progress Handoff**: When frame changes roles, progress mirrors (1 - currentProgress) instead of resetting to 0
-      - Example: Frame at 70% 'in' becomes 30% 'out' → seamless zoom/pan continuity
-      - cycleStart back-computed to preserve timing: `cycleStart = now - (mirroredProgress * KEN_BURNS_CYCLE)`
-      - Prevents visual jumps by maintaining equivalent position on opposite zoom curve
-      - **New Frame Exception**: Frames with progress < 0.01 skip mirroring and start from 0 to prevent teleport to end
-    - **Inverted Pan**: Pan progress inverted for 'out' direction (`1 - panProgress`) to reverse smoothly
-      - 'in' direction: pan 0→1 (center→edge) as zooming in
-      - 'out' direction: pan 1→0 (edge→center) as zooming out
-      - Creates smooth reversal instead of snap-back to center
-    - **Smooth Crossover**: Frames meet at midpoint opacity, creating continuous bidirectional motion
-    - **Imperceptible Swap**: When Frame B reaches 0% opacity (fully zoomed in), new frame loaded → invisible to viewer
-    - **Per-Frame Progress Tracking**: Map-based tracker keyed by imageUrl with cycleStart, progress, zoomDirection fields
-    - **Audio Synchronization**: Audio reactivity applied to BOTH currentDNA and nextDNA for identical zoom modulation
-    - **viewProgressA/B**: Independent 0-1 progress values exposed in MorphState for per-frame zoom curves
-    - Trackers cleaned up on frame prune and full reset to prevent stale state
-  
-  - **Morpheus 0.3 - Single-Direction Zoom System**: Simplified approach for smooth, predictable zoom motion
-    - **Frame A (foreground)**: Zooms from 100% → 200% scale toward camera over 5 minutes
-    - **Opacity Curve**: Holds at 100% until 150% scale (50% progress), then fades 100% → 0% by 200% scale
-    - **Frame B (background)**: Static at 100% scale, 100% opacity (always visible behind Frame A)
-    - **Subtle Dancer-Like Pan**: DNA-based directional bias (±2%) with gentle beat-reactive sway (±1% bass/treble modulation)
-      - Total movement capped at ±3% for smooth, subtle motion like a dancer gently swaying to the beat
-      - Bass affects X-axis (horizontal sway), treble affects Y-axis (vertical sway)
-    - **Pan Easing**: Ease-in-out curve for smooth acceleration/deceleration
-    - **UV Clamping**: View coordinates clamped to [0,1] to prevent texture repeat or black borders
-    - **Frame Swap**: When Frame A reaches 200% scale/0% opacity, Frame B becomes Frame A, load new Frame B
-    - **Design Goal**: Eliminate bidirectional complexity and mirrored progress calculations to prevent jumpiness
-    - **Linear Progression**: Single progress value (0-1) drives scale, opacity, and pan - no role swapping mid-cycle
-  
-  - **Morpheus 0.4 - Feature-Based Intelligent Morphing**: Advanced multi-stage morphing using computer vision (OpenCV.js)
-    - **Phase 1 - Image Analysis**: ORB feature detection, RANSAC homography, similarity metrics
-      - Extracts 500 ORB features per frame, matches with BFMatcher (Hamming distance)
-      - RANSAC homography with 5px threshold, counts inliers, measures reprojection error
-      - Computes coverage heatmap (8×8 grid), edge overlap (Sobel), RGB histogram distance (3×16 bins)
-    - **Phase 2 - Intelligent Planning**: Heuristic decision tree chooses 1-3 morphing stages
-      - **High alignment** (inlier ratio >0.6): mesh warping → TPS → crossfade
-      - **Moderate alignment** (ratio 0.3-0.6): optical flow → crossfade
-      - **Weak alignment** (<0.3): simple crossfade
-      - Each stage assigned parameters: triCount, lambda, flowWeight, dispAmp, seamFeather
-    - **Phase 3 - Data Baking**: Pre-compute transformations for GPU rendering
-      - **Mesh Baker**: Delaunator Delaunay triangulation, per-triangle affine transforms → RGBA32F textures
-      - **TPS Baker**: Solve thin-plate spline system (r² log(r) kernel), generate RG32F displacement map
-      - **Flow Baker**: Farneback optical flow (pyrScale=0.5, 3 levels, 15 winsize), Laplacian smoothing, confidence weighting
-    - **Phase 4 - WebGL2 Rendering**: Multi-program shader system
-      - Mesh shader: per-triangle vertex transformation with affine matrices
-      - TPS shader: displacement map sampling with UV warping
-      - Flow shader: dense flow field with confidence-weighted blending
-      - Crossfade shader: fallback linear interpolation
-    - **STATUS**: Core architecture complete, MISSING implementation: control point extraction, GL buffer creation, texture upload
-      - Current state: Falls back to crossfade (all analysis/planning/baking runs but data not fed to GPU)
-  
-- **Visual Effects System**: 
-  - **Trace Extraction**: Three-pass rendering with Frame B alpha/luminance extraction, Sobel edge detection, 5×5 Gaussian blur, and temporal accumulation (0.85-0.95 decay) creates ethereal trailing ribbons. Multiply blend composite makes Frame B appear to "birth" from behind Frame A with DNA-controlled strength and parallax offset.
-  - **Soft Bloom/Glow**: Single-pass Kawase bloom on downsampled (1/4 resolution) framebuffer extracts bright regions with DNA[48]-controlled intensity, modulated by burnIntensity for dreamy halos around bright areas during transitions.
-  - **Chromatic Drift**: Post-process RGB channel separation (<1.5px) applied to final composited framebuffer, controlled by DNA[47] and morphProgress. Horizontal-only offset creates subtle hallucinatory out-of-focus feel during morphs while preserving morph fidelity.
-  - **Displacement & Flow**: Curl noise flow fields with luminance weighting
-  - **Ken Burns Effect**: Enhanced zoom and parallax translation
-  - **Particle System**: Beat-triggered particles with bass peak detection and edge-weighted emission
-
-- **Audio-Reactive Control System**: Real-time audio analysis with tasteful parameter mapping and beat quantization
-  - **AudioAnalyzer**: Web Audio API feature extraction
-    - FFT analysis (2048 samples) → frequency bins and spectral features
-    - RMS energy calculation for overall loudness
-    - Spectral centroid for brightness/tonal quality
-    - Bass/treble isolation via frequency band summing
-    - Beat detection using energy flux with adaptive threshold
-    - BPM estimation via autocorrelation with tempo confidence
-  - **AudioReactiveMapper**: Intelligent parameter mapping with hard safety caps
-    - **Displacement Amplitude**: RMS → 0.003-0.012 range (tasteful, never overwhelming)
-    - **TPS Lambda Sharpening**: Spectral centroid → 0.1-0.8 (brighter = sharper warping)
-    - **Mesh Detail**: Centroid → triangle count boost (brighter = more triangles)
-    - **Flow Weight**: RMS-modulated optical flow strength
-    - **Stage Timing**: Bar-boundary gating for multi-stage transitions (respects musical structure)
-    - All parameters clamped to prevent visual chaos
-  - **AudioReactiveController**: Public API for morphEngine integration
-    - Single `update(deltaTime)` call per frame
-    - Exposes controls: displacement, tpsLambda, meshTriCount, flowWeight, stageGate
-    - Musical clock tracking: beat phase (0-1), bar phase (0-1), BPM
-  - **AudioDebugOverlay**: React UI component for real-time audio debugging
-    - Displays RMS, centroid, bass, treble, BPM, beat/bar phases
-    - Shows mapped control values and safety clamping status
-    - Toggled via debug menu for development visibility
-
-- **Tiered Rendering**: Adaptive rendering based on device capabilities (RAM, GPU, WebGL/WebGPU support) for optimal performance across various devices.
+- **Permanent Storage**: Images are downloaded and stored in Replit Object Storage with a robust verification and retry pipeline.
+- **DNA Morphing System**: Each artwork's 50-point DNA vector enables smooth, procedural morphing between frames over 5-minute cycles, with audio-reactive modulation.
+- **Frame Pool Management**: Ensures continuous morphing, smart synchronization of new frames, stable deduplication, hard cap enforcement (max 20 frames), and active frame protection. Provides a first-run experience with placeholder frames.
+- **Rendering Engines (Morpheus)**:
+    - **Morpheus 0.1**: Simple cross-fade.
+    - **Morpheus 0.2**: Bidirectional Ken Burns system ("ships passing in the night") with mirrored-progress handoff and inverted pan for seamless motion.
+    - **Morpheus 0.3**: Single-direction zoom toward camera with an opacity curve and subtle DNA-based, beat-reactive pan for cinematic slideshows.
+    - **Morpheus 0.4**: Feature-based intelligent morphing using computer vision (OpenCV.js) for multi-stage transitions (currently falls back to crossfade as core implementation details for control point extraction and GL buffer creation are pending).
+- **Visual Effects System**: Includes trace extraction, soft bloom/glow, chromatic drift, displacement & flow (curl noise), enhanced Ken Burns, and beat-triggered particle systems.
+- **Audio-Reactive Control System**: Real-time audio analysis (FFT, RMS, spectral centroid, beat detection, BPM estimation) intelligently maps parameters to visual effects with safety caps and provides a public API for engine integration.
+- **Tiered Rendering**: Adaptive rendering based on device capabilities for optimal performance.
 
 ### Data Models
 - **ArtPreferences**: User-selected styles and artists.
 - **ArtVotes**: Upvote/downvote history.
-- **ArtSessions**: Generated artwork history (globally shared across all users).
-- **ArtFavorites**: User favorites for weighted rotation (future feature).
+- **ArtSessions**: Globally shared generated artwork history.
 - **Users**: Auth profile data, subscription tier.
-- **DailyUsage**: Tracks daily generation count for users.
+- **DailyUsage**: Tracks daily generation count.
 
 ### Key Features
-- **Art Display**: Real-time audio-reactive visualizations, style/artist selection, voting system, WebSocket for multi-device sync, timed generation.
-- **Global Artwork Pool**: All generated artworks are shared across users for discovery. New users instantly see community art (no black screen). Future: weighted rotation based on user favorites.
-- **User Gallery Page**: Protected route to display, save, delete, and download user artworks.
-- **Subscription Page**: Stripe payment integration, 7-day free trial, feature comparison across tiers.
+- **Art Display**: Real-time audio-reactive visualizations, style/artist selection, voting system, WebSocket for multi-device sync, and timed generation.
+- **Global Artwork Pool**: All generated artworks are shared across users for instant discovery.
+- **User Gallery Page**: Protected route for managing user artworks.
+- **Subscription Page**: Stripe payment integration with a 7-day free trial and tier comparison.
 - **Style Selector**: Visual grid of 71 artistic styles across 8 master groups, with dynamic AI mode.
-- **Debug Overlay**: Toggle-able verbose mode (Bug icon button + D key) showing active effects, frame opacities, zoom levels, shader status, and FPS in real-time.
-- **Effects Control Menu**: Sphere icon with color ramp opens slide-out menu with checkboxes and sliders to toggle/adjust Trace, Bloom, Chromatic Drift, Particles, and Ken Burns effects individually.
-- **Effect History Logging**: Per-frame JSON logs capturing zoom, active effects, DNA vectors, audio analysis, and timing data for debugging and analysis. Downloadable via debug menu.
+- **Debug Overlay**: Toggle-able verbose mode showing active effects, frame opacities, zoom levels, shader status, and FPS.
+- **Effects Control Menu**: Slide-out menu with checkboxes and sliders to adjust visual effects.
+- **Effect History Logging**: Per-frame JSON logs for debugging and analysis.
 - **Design System**: Purple primary color, Inter font, Shadcn UI components, subtle animations, mobile-first and TV-optimized responsive design.
 
 ## External Dependencies
@@ -159,3 +64,4 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 - **Spotify API**: For retrieving album artwork and metadata.
 - **Replit Auth**: For user authentication.
 - **PostgreSQL**: Primary database.
+- **OpenCV.js**: Computer vision library, locally hosted for performance and reliability, with a fallback mechanism if loading fails.
