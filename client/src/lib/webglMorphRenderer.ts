@@ -152,10 +152,11 @@ export class WebGLMorphRenderer {
     const flowFragShader = this.compileShader(flowFieldFragmentShader, this.gl.FRAGMENT_SHADER);
     const feedbackFragShader = this.compileShader(feedbackFragmentShader, this.gl.FRAGMENT_SHADER);
     
-    // Compile optional effect shaders (trace, bloom, composite)
+    // Compile optional effect shaders (trace, bloom, composite, bloom passthrough)
     const traceFragShader = this.compileShader(traceExtractionFragmentShader, this.gl.FRAGMENT_SHADER);
     const bloomFragShader = this.compileShader(bloomFragmentShader, this.gl.FRAGMENT_SHADER);
     const compositeFragShader = this.compileShader(compositeFragmentShader, this.gl.FRAGMENT_SHADER);
+    const bloomPassthroughFragShader = this.compileShader(bloomPassthroughFragmentShader, this.gl.FRAGMENT_SHADER);
     
     // CRITICAL: Only fail if CORE shaders fail
     if (!vertexShader || !flowFragShader || !feedbackFragShader) {
@@ -195,8 +196,8 @@ export class WebGLMorphRenderer {
       console.warn('[WebGLMorphRenderer] ⚠️ Composite shader compilation failed (optional, disabling chromatic drift)');
     }
     
-    if (bloomPassthroughFragmentShader) {
-      this.bloomPassthroughProgram = this.createProgram(vertexShader, bloomPassthroughFragmentShader);
+    if (bloomPassthroughFragShader) {
+      this.bloomPassthroughProgram = this.createProgram(vertexShader, bloomPassthroughFragShader);
       if (!this.bloomPassthroughProgram) {
         console.warn('[WebGLMorphRenderer] ⚠️ Failed to create bloom passthrough program (optional, bloom will use composite shader)');
       }
