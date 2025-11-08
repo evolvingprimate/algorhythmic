@@ -23,7 +23,7 @@ export function AnimatedBackground() {
         poster={heroImage}
         aria-hidden="true"
         onLoadedMetadata={handleLoadedMetadata}
-        className="animated-gradient-bg object-cover w-full h-full"
+        className="absolute inset-0 w-full h-full object-cover"
         data-testid="hero-background-video"
       >
         <source src={heroVideo} type="video/mp4" />
