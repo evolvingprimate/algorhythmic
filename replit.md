@@ -68,7 +68,9 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
     - **Frame A (foreground)**: Zooms from 100% → 200% scale toward camera over 5 minutes
     - **Opacity Curve**: Holds at 100% until 150% scale (50% progress), then fades 100% → 0% by 200% scale
     - **Frame B (background)**: Static at 100% scale, 100% opacity (always visible behind Frame A)
-    - **Music-Reactive Pan**: DNA-based target direction with bass (X-axis) and treble (Y-axis) modulation (±5% offset)
+    - **Subtle Dancer-Like Pan**: DNA-based directional bias (±2%) with gentle beat-reactive sway (±1% bass/treble modulation)
+      - Total movement capped at ±3% for smooth, subtle motion like a dancer gently swaying to the beat
+      - Bass affects X-axis (horizontal sway), treble affects Y-axis (vertical sway)
     - **Pan Easing**: Ease-in-out curve for smooth acceleration/deceleration
     - **UV Clamping**: View coordinates clamped to [0,1] to prevent texture repeat or black borders
     - **Frame Swap**: When Frame A reaches 200% scale/0% opacity, Frame B becomes Frame A, load new Frame B

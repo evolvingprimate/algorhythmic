@@ -206,16 +206,15 @@ export class Morpheus03Renderer implements IMorphRenderer {
     viewW /= scale;
     viewH /= scale;
     
-    // Generate pan path based on DNA
-    // Use DNA values to determine target corner
+    // Generate subtle pan path based on DNA (like a dancer gently swaying)
     const panSeedX = dna[0] || 0.5; // DNA[0] controls horizontal direction
     const panSeedY = dna[1] || 0.5; // DNA[1] controls vertical direction
     
-    // Target offset (where we're panning toward)
-    const targetX = (panSeedX - 0.5) * 0.3; // ±15% horizontal
-    const targetY = (panSeedY - 0.5) * 0.3; // ±15% vertical
+    // Very subtle base target (±2% max) - gentle directional bias
+    const targetX = (panSeedX - 0.5) * 0.04; // ±2% horizontal
+    const targetY = (panSeedY - 0.5) * 0.04; // ±2% vertical
     
-    // Apply pan with easing (ease-in-out)
+    // Slow, smooth progression with gentle easing
     const easedProgress = progress < 0.5 
       ? 2 * progress * progress 
       : 1 - Math.pow(-2 * progress + 2, 2) / 2;
@@ -223,10 +222,11 @@ export class Morpheus03Renderer implements IMorphRenderer {
     let panX = targetX * easedProgress;
     let panY = targetY * easedProgress;
     
-    // Music-reactive modulation (±5% offset)
+    // Subtle beat-reactive sway (±1% max) - like a dancer moving to the beat
     if (audioAnalysis) {
-      const bassModulation = (audioAnalysis.bassLevel - 0.5) * 0.1; // Bass affects X (±5%)
-      const trebleModulation = (audioAnalysis.trebleLevel - 0.5) * 0.1; // Treble affects Y (±5%)
+      // Normalize to center around 0 and scale down to ±1%
+      const bassModulation = (audioAnalysis.bassLevel - 0.5) * 0.02; // Bass affects X (±1%)
+      const trebleModulation = (audioAnalysis.trebleLevel - 0.5) * 0.02; // Treble affects Y (±1%)
       
       panX += bassModulation;
       panY += trebleModulation;
