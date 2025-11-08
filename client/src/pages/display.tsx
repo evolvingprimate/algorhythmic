@@ -1050,7 +1050,154 @@ export default function Display() {
     // Schedule new generation
     setIsGenerating(true);
     generationTimeoutRef.current = window.setTimeout(async () => {
-      // Try to identify music before generating art
+      // CRITICAL: Reset MorphEngine and load 2 instant frames BEFORE generating new art
+      // This ensures users see images immediately (no black screen while waiting for DALL-E)
+      console.log('[Display] Resetting MorphEngine for new generation cycle');
+      
+      // Save current frames before reset (fallback if we can't load 2 new ones)
+      const currentFrameCount = morphEngineRef.current.getFrameCount();
+      const backupFrame = currentFrameCount > 0 ? morphEngineRef.current.getCurrentFrame() : null;
+      
+      // Helper: Generate fallback DNA vector if parsing fails
+      const generateFallbackDNA = (): number[] => {
+        return Array(50).fill(0).map(() => Math.random() * 3);
+      };
+      
+      // Helper: Create placeholder gradient image for brand new users
+      const createPlaceholderImage = (): string => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 1024;
+        canvas.height = 1024;
+        const ctx = canvas.getContext('2d')!;
+        
+        // Create a purple gradient (matching brand color)
+        const gradient = ctx.createLinearGradient(0, 0, 1024, 1024);
+        gradient.addColorStop(0, '#9333ea');    // purple-600
+        gradient.addColorStop(0.5, '#7c3aed');  // purple-700
+        gradient.addColorStop(1, '#6b21a8');    // purple-800
+        
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, 1024, 1024);
+        
+        return canvas.toDataURL('image/png');
+      };
+      
+      // SAFETY: If no artworks AND no backup (brand new user), create placeholder frames
+      if (!recentArtworks?.length && !backupFrame) {
+        console.warn('[Display] ⚠️ First-run user - creating placeholder frames');
+        
+        const placeholderImage = createPlaceholderImage();
+        const placeholderFrame = {
+          imageUrl: placeholderImage,
+          dnaVector: generateFallbackDNA(),
+          prompt: 'Loading your first artwork...',
+          explanation: 'Generating AI art based on audio analysis',
+          artworkId: null,
+          musicInfo: undefined,
+          audioAnalysis: analysis,
+        };
+        
+        // Add 2 placeholder frames with different DNA vectors
+        morphEngineRef.current.addFrame(placeholderFrame);
+        morphEngineRef.current.addFrame({
+          ...placeholderFrame,
+          dnaVector: generateFallbackDNA(), // Different DNA for variation
+        });
+        
+        morphEngineRef.current.start();
+        console.log('[Display] ✅ Placeholder frames active - waiting for DALL-E');
+        
+        // Trigger generation
+        const musicInfo = await identifyMusic();
+        generateArtMutation.mutate({ audioAnalysis: analysis, musicInfo });
+        generationTimeoutRef.current = undefined;
+        return;
+      }
+      
+      morphEngineRef.current.reset();
+      
+      // Load 2 pre-existing validated images as Frame A and B (instant display)
+      if (recentArtworks && recentArtworks.length > 0) {
+        const shuffled = [...recentArtworks].sort(() => Math.random() - 0.5);
+        let loaded = 0;
+        
+        for (const artwork of shuffled) {
+          if (loaded >= 2) break;
+          
+          // Parse DNA vector with fallback
+          let dnaVector = parseDNAFromSession(artwork);
+          if (!dnaVector) {
+            console.warn('[Display] DNA parsing failed, using fallback DNA');
+            dnaVector = generateFallbackDNA();
+          }
+          
+          const audioFeatures = artwork.audioFeatures ? JSON.parse(artwork.audioFeatures) : null;
+          const musicInfo = artwork.musicTrack ? {
+            title: artwork.musicTrack,
+            artist: artwork.musicArtist || '',
+            album: artwork.musicAlbum || undefined,
+            release_date: undefined,
+            albumArtworkUrl: undefined,
+            genres: audioFeatures?.genres || undefined,
+          } : undefined;
+          
+          morphEngineRef.current.addFrame({
+            imageUrl: artwork.imageUrl,
+            dnaVector,
+            prompt: artwork.prompt || '',
+            explanation: artwork.explanation || '',
+            artworkId: artwork.id,
+            musicInfo,
+            audioAnalysis: audioFeatures || analysis,
+          });
+          
+          loaded++;
+          console.log(`[Display] Loaded instant frame ${loaded}/2: ${artwork.imageUrl.substring(0, 60)}...`);
+        }
+        
+        // CRITICAL FALLBACK: If we loaded only 1 frame, duplicate it to ensure 2 frames
+        if (loaded === 1) {
+          const firstFrame = morphEngineRef.current.getCurrentFrame();
+          if (firstFrame) {
+            morphEngineRef.current.addFrame({
+              ...firstFrame,
+              dnaVector: generateFallbackDNA(), // Different DNA for variation
+            });
+            console.log('[Display] ⚠️ Only 1 artwork available - duplicated with different DNA');
+          }
+        }
+        
+        // Start morph engine with the 2 instant frames
+        if (morphEngineRef.current.getFrameCount() >= 2) {
+          morphEngineRef.current.start();
+          console.log('[Display] ✅ Instant display ready - morphing between frames');
+        } else {
+          console.warn('[Display] ⚠️ Failed to load 2 frames, keeping previous state');
+          // Restore backup frame if available
+          if (backupFrame) {
+            morphEngineRef.current.addFrame({
+              ...backupFrame,
+              dnaVector: backupFrame.dnaVector || generateFallbackDNA(),
+            });
+            morphEngineRef.current.addFrame({
+              ...backupFrame,
+              dnaVector: generateFallbackDNA(),
+            });
+            morphEngineRef.current.start();
+          }
+        }
+      } else {
+        // NO recent artworks - restore backup or wait for DALL-E
+        console.warn('[Display] ⚠️ No recent artworks - waiting for DALL-E generation');
+        if (backupFrame) {
+          morphEngineRef.current.addFrame({
+            ...backupFrame,
+            dnaVector: backupFrame.dnaVector || generateFallbackDNA(),
+          });
+        }
+      }
+      
+      // Now trigger DALL-E generation in background (result will be added as Frame C)
       const musicInfo = await identifyMusic();
       generateArtMutation.mutate({ audioAnalysis: analysis, musicInfo });
       generationTimeoutRef.current = undefined;
