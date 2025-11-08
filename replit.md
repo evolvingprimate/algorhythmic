@@ -41,7 +41,7 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 - **Tiered Rendering**: Adaptive rendering based on device capabilities for optimal performance.
 
 ### Maestro - Intelligent Audio-Reactive Orchestration System
-**Phase 1 Complete** - Core data pipeline operational at /maestro route:
+**Phase 1 Complete (November 2025)** - AI-Powered Particle Control System operational at /maestro route:
 - **AudioProbe**: Advanced audio analysis with onset detection (energy flux + adaptive threshold), tempo estimation (90s autocorrelation), and phase tracking (PLL + Kalman filter)
 - **FeatureBus**: Event-driven pub/sub system for decoupled audio feature distribution
 - **MaestroLoop**: Central control orchestrator connecting audio analysis to command generation
@@ -51,6 +51,12 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 - **RendererManager Integration**: Lifecycle-independent parameter store with functional command execution (SET/RAMP/PULSE) supporting scalar and array interpolation, exposed via RenderContext.parameters
 - **ParticlesNode (Milestone E)**: WebGL2 GPGPU particle system with transform feedback (INTERLEAVED_ATTRIBS), ping-pong buffers, audio-reactive spawning, integrated with Morpheus03Renderer
 - **Browser Compatibility**: Custom EventEmitter implementation (client/src/lib/utils/EventEmitter.ts) replaces Node.js events module for AudioProbe, MaestroLoop, and FeatureBus
+- **MaestroControlStore**: Policy layer managing user preferences (effect multipliers), vision-detected spawn anchor cache (10-min TTL), and climax cooldown state (24-bar minimum)
+- **ClimaxDetector**: Multi-factor musical moment detection (sustained RMS >0.8 for 4s+, onset density, beat confidence spikes) with automatic reset
+- **VisionFeatureService**: GPT-4o Vision integration for AI-detected spawn points (edges, focal areas, contrast), LRU caching, 45s throttling, golden ratio fallback
+- **Intelligent Particle Commands**: PARTICLE_SPAWN_FIELD (loads anchor arrays into GPU uniforms), PARTICLE_BURST (triggers intense emission with duration/multiplier)
+- **Smart Spawn Logic**: Weighted random anchor selection with jitter radius, graceful fallback to random when no anchors, 0.5s lerp transitions between anchor sets
+- **End-to-End Flow**: Audio climax → ClimaxDetector → Vision API → Anchor cache → CommandBus → RendererManager → ParticlesNode GPU shader → Intelligent emission at AI-detected visual focal points
 
 ### Data Models
 - **ArtPreferences**: User-selected styles and artists.
