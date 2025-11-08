@@ -5,6 +5,13 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Slider } from "@/components/ui/slider";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -48,6 +55,7 @@ import { WebGLMorphRenderer } from "@/lib/webglMorphRenderer";
 import { detectDeviceCapabilities } from "@/lib/deviceDetection";
 import { parseDNAFromSession } from "@/lib/dna";
 import { EffectLogger } from "@/lib/effectLogger";
+import { EngineRegistry } from "@/lib/renderers";
 import type { AudioAnalysis, ArtVote, ArtPreference, MusicIdentification } from "@shared/schema";
 
 export default function Display() {
@@ -73,6 +81,10 @@ export default function Display() {
   const [generationInterval, setGenerationInterval] = useState(5); // minutes (Frame A to Frame B duration)
   const [timeUntilNext, setTimeUntilNext] = useState<number>(0); // seconds
   const [showCountdown, setShowCountdown] = useState(false); // hide countdown timer (using 5min morph cycle)
+  const [selectedEngine, setSelectedEngine] = useState<string>(() => {
+    const registry = EngineRegistry.getInstance();
+    return registry.getDefaultEngine();
+  });
   const [isValidatingImages, setIsValidatingImages] = useState(false); // show spinner during validation/auto-generation
   
   // Debug and Effects Control
@@ -1530,6 +1542,20 @@ export default function Display() {
             >
               <Palette className={`h-4 w-4 ${showEffectsMenu ? 'text-purple-400' : 'text-muted-foreground'}`} />
             </Button>
+            
+            {/* Morph Engine Selector */}
+            <Select value={selectedEngine} onValueChange={setSelectedEngine}>
+              <SelectTrigger className="w-[140px] h-8 text-xs" data-testid="select-engine">
+                <SelectValue placeholder="Select engine" />
+              </SelectTrigger>
+              <SelectContent>
+                {EngineRegistry.getInstance().listEngines().map((engine) => (
+                  <SelectItem key={engine.name} value={engine.name} data-testid={`engine-${engine.name}`}>
+                    {engine.version} - {engine.description.split(' ').slice(0, 3).join(' ')}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             
             <ThemeToggle />
             <Button 
