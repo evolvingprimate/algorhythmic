@@ -10,6 +10,7 @@ export interface MorphState {
   phaseProgress: number;
   totalProgress: number;
   currentDNA: DNAVector;
+  nextDNA: DNAVector; // Frame B's DNA for Ken Burns continuity
   morphProgress: number;
   audioIntensity: number;
   frameForeshadowMix: number;
@@ -134,6 +135,8 @@ export class MorphEngine {
   }
 
   getMorphState(audioAnalysis?: AudioAnalysis): MorphState {
+    const defaultDNA = Array(50).fill(0.5);
+    
     if (this.frames.length === 0) {
       return {
         phase: 'hold',
@@ -141,7 +144,8 @@ export class MorphEngine {
         nextFrameIndex: 0,
         phaseProgress: 0,
         totalProgress: 0,
-        currentDNA: Array(50).fill(0.5),
+        currentDNA: defaultDNA,
+        nextDNA: defaultDNA,
         morphProgress: 0,
         audioIntensity: 0,
         frameForeshadowMix: 0,
@@ -164,7 +168,8 @@ export class MorphEngine {
         nextFrameIndex: 0,
         phaseProgress: 0,
         totalProgress: 0,
-        currentDNA: Array(50).fill(0.5),
+        currentDNA: defaultDNA,
+        nextDNA: defaultDNA,
         morphProgress: 0,
         audioIntensity: 0,
         frameForeshadowMix: 0,
@@ -352,6 +357,11 @@ export class MorphEngine {
     const nextIndex = this.frames.length > 1 
       ? (this.currentIndex + 1) % this.frames.length 
       : this.currentIndex;
+    
+    // Calculate nextDNA for Frame B's Ken Burns continuity
+    const nextDNA = nextFrame?.dnaVector 
+      ? [...nextFrame.dnaVector]
+      : [...currentFrame.dnaVector]; // Fallback to current if only 1 frame
 
     return {
       phase,
@@ -360,6 +370,7 @@ export class MorphEngine {
       phaseProgress,
       totalProgress,
       currentDNA,
+      nextDNA,
       morphProgress,
       audioIntensity,
       frameForeshadowMix,
