@@ -7,8 +7,8 @@ export function AnimatedBackground() {
 
   const handleLoadedMetadata = () => {
     if (videoRef.current) {
-      // Set playback rate to 80% slower (0.2x speed)
-      videoRef.current.playbackRate = 0.2;
+      // Set playback rate to 50% speed for smooth, browser-optimized slow motion
+      videoRef.current.playbackRate = 0.5;
     }
   };
 
@@ -20,6 +20,9 @@ export function AnimatedBackground() {
         loop
         muted
         playsInline
+        preload="auto"
+        disablePictureInPicture
+        disableRemotePlayback
         poster={heroImage}
         aria-hidden="true"
         onLoadedMetadata={handleLoadedMetadata}
