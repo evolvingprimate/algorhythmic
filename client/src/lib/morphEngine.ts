@@ -63,8 +63,39 @@ export class MorphEngine {
     return this.frames.length;
   }
 
-  hasFrame(artworkId: string): boolean {
+  hasFrame(artworkId: string | null): boolean {
+    if (!artworkId) return false;
     return this.frames.some(frame => frame.artworkId === artworkId);
+  }
+
+  hasImageUrl(imageUrl: string): boolean {
+    return this.frames.some(frame => frame.imageUrl === imageUrl);
+  }
+
+  pruneOldestFrames(count: number): void {
+    if (count <= 0 || this.frames.length === 0) return;
+    
+    const framesToRemove = Math.min(count, this.frames.length - 2); // Keep at least 2 frames
+    if (framesToRemove <= 0) return;
+    
+    console.log(`[MorphEngine] Pruning ${framesToRemove} oldest frames (current: ${this.frames.length})`);
+    
+    // Check if we're removing the currently active frame
+    const removingActiveFrame = this.currentIndex < framesToRemove;
+    
+    // Remove from the beginning (oldest frames)
+    this.frames.splice(0, framesToRemove);
+    
+    // Adjust currentIndex
+    this.currentIndex = Math.max(0, this.currentIndex - framesToRemove);
+    
+    // CRITICAL: Reset phase timing if we removed the active frame to prevent jump cuts
+    if (removingActiveFrame && this.isRunning) {
+      this.phaseStartTime = Date.now();
+      console.log(`[MorphEngine] ⚠️ Active frame was pruned - resetting phase timing to prevent jump cut`);
+    }
+    
+    console.log(`[MorphEngine] Pruned ${framesToRemove} frames. Remaining: ${this.frames.length}`);
   }
 
   getCurrentFrame(): DNAFrame | null {
