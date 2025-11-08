@@ -20,12 +20,15 @@ import { FeatureBus } from "@/lib/maestro/control/FeatureBus";
 import { CommandBus } from "@/lib/maestro/control/CommandBus";
 import { Scheduler } from "@/lib/maestro/control/Scheduler";
 import { ParameterRegistry } from "@/lib/maestro/control/ParameterRegistry";
+import { MaestroControlStore } from "@/lib/maestro/control/MaestroControlStore";
 import { RendererManager } from "@/lib/RendererManager";
+import { EffectsControlMenu } from "@/components/effects-control-menu";
 import type { ClockState, AudioFeatures, Command } from "@shared/maestroTypes";
 
 export default function Maestro() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [showControls, setShowControls] = useState(true);
+  const [showEffectsMenu, setShowEffectsMenu] = useState(false);
   const [tempo, setTempo] = useState(120);
   const [beatPhase, setBeatPhase] = useState(0);
   const [confidence, setConfidence] = useState(0);
@@ -39,6 +42,7 @@ export default function Maestro() {
   const schedulerRef = useRef<Scheduler | null>(null);
   const paramRegistryRef = useRef<ParameterRegistry | null>(null);
   const rendererManagerRef = useRef<RendererManager | null>(null);
+  const controlStoreRef = useRef<MaestroControlStore | null>(null);
   const { toast } = useToast();
 
   // Initialize Maestro system
@@ -70,6 +74,10 @@ export default function Maestro() {
     const paramRegistry = new ParameterRegistry();
     paramRegistryRef.current = paramRegistry;
     
+    // Create MaestroControlStore
+    const controlStore = new MaestroControlStore();
+    controlStoreRef.current = controlStore;
+    
     // Create Scheduler
     const scheduler = new Scheduler(commandBus);
     schedulerRef.current = scheduler;
@@ -89,6 +97,9 @@ export default function Maestro() {
     const maestroLoop = new MaestroLoop();
     maestroLoopRef.current = maestroLoop;
     
+    // Wire dependencies to MaestroLoop
+    maestroLoop.setDependencies(controlStore, commandBus);
+    
     // Subscribe MaestroLoop to FeatureBus and generate commands
     featureBus.onClock((clock: ClockState) => {
       maestroLoop.updateClock(clock);
@@ -102,31 +113,9 @@ export default function Maestro() {
       setAudioLevel(audio.rms * 100);
     });
     
-    // Simple particle policy: generate commands on audio events
+    // MaestroLoop now handles onset events internally with user preferences
     featureBus.on("onset", () => {
-      // Pulse spawn rate on beats (aligned with ParameterRegistry)
-      commandBus.enqueue({
-        kind: 'PULSE',
-        path: 'particles.main.spawnRate',
-        amount: 50,
-        decayBeats: 0.5,
-      });
-      
-      // Pulse velocity on beats (aligned with ParameterRegistry)
-      commandBus.enqueue({
-        kind: 'PULSE',
-        path: 'particles.main.velocity',
-        amount: 2.0,
-        decayBeats: 1.0,
-      });
-      
-      // Pulse warp on bass hits
-      commandBus.enqueue({
-        kind: 'PULSE',
-        path: 'warp.elasticity',
-        amount: 0.3,
-        decayBeats: 0.8,
-      });
+      maestroLoop.onOnset();
     });
     
     // Create AudioProbe
@@ -140,53 +129,22 @@ export default function Maestro() {
     
     audioProbe.on("audio", (audio: AudioFeatures) => {
       featureBus.publishAudio(audio);
-      
-      // Audio-reactive mixer controls
-      const energyLevel = audio.energy;
-      const bassLevel = audio.bass;
-      
-      // Ramp saturation based on energy (more energetic = more saturated)
-      if (energyLevel > 0.7) {
-        commandBus.enqueue({
-          kind: 'RAMP',
-          path: 'mixer.saturation',
-          to: 1.3,
-          durationBars: 0.5,
-          curve: 'easeInOut',
-        });
-      } else if (energyLevel < 0.3) {
-        commandBus.enqueue({
-          kind: 'RAMP',
-          path: 'mixer.saturation',
-          to: 0.9,
-          durationBars: 1.0,
-          curve: 'easeInOut',
-        });
-      }
-      
-      // Bass-reactive brightness (subtle)
-      if (bassLevel > 0.6) {
-        commandBus.enqueue({
-          kind: 'RAMP',
-          path: 'mixer.brightness',
-          to: 1.1,
-          durationBars: 0.25,
-          curve: 'easeInOut',
-        });
-      }
+      // MaestroLoop handles audio-reactive mixer controls with user preferences
     });
     
-    // Initialize Maestro parameters with good defaults
-    commandBus.enqueue({ kind: 'SET', path: 'mixer.saturation', value: 1.0 });
-    commandBus.enqueue({ kind: 'SET', path: 'mixer.brightness', value: 1.0 });
-    commandBus.enqueue({ kind: 'SET', path: 'mixer.contrast', value: 1.0 });
-    commandBus.enqueue({ kind: 'SET', path: 'warp.elasticity', value: 0.5 });
-    commandBus.enqueue({ kind: 'SET', path: 'warp.radius', value: 0.3 });
-    commandBus.enqueue({ kind: 'SET', path: 'particles.main.spawnRate', value: 100 });
-    commandBus.enqueue({ kind: 'SET', path: 'particles.main.velocity', value: 1.0 });
-    commandBus.enqueue({ kind: 'SET', path: 'particles.main.size', value: 1.0 });
+    // Initialize Maestro parameters from ControlStore preferences
+    const prefs = controlStore.getEffectPreferences();
+    commandBus.enqueue({ kind: 'SET', path: 'mixer.saturation', value: prefs.mixer.saturationMultiplier });
+    commandBus.enqueue({ kind: 'SET', path: 'mixer.brightness', value: prefs.mixer.brightnessMultiplier });
+    commandBus.enqueue({ kind: 'SET', path: 'mixer.contrast', value: prefs.mixer.contrastMultiplier });
+    commandBus.enqueue({ kind: 'SET', path: 'warp.elasticity', value: prefs.warp.enabled ? 0.3 * prefs.warp.elasticityMultiplier : 0 });
+    commandBus.enqueue({ kind: 'SET', path: 'warp.radius', value: prefs.warp.enabled ? 0.3 * prefs.warp.radiusMultiplier : 0 });
+    commandBus.enqueue({ kind: 'SET', path: 'particles.main.spawnRate', value: prefs.particles.enabled ? 30 * prefs.particles.spawnRateMultiplier : 0 });
+    commandBus.enqueue({ kind: 'SET', path: 'particles.main.velocity', value: prefs.particles.enabled ? prefs.particles.velocityMultiplier : 0 });
+    commandBus.enqueue({ kind: 'SET', path: 'particles.main.size', value: prefs.particles.enabled ? prefs.particles.sizeMultiplier : 0.1 });
     commandBus.enqueue({ kind: 'SET', path: 'particles.main.trailLength', value: 0.5 });
     commandBus.enqueue({ kind: 'SET', path: 'particles.main.colorBias', value: [1.0, 1.0, 1.0] });
+    commandBus.enqueue({ kind: 'SET', path: 'trace.strength', value: prefs.trace.enabled ? prefs.trace.strengthMultiplier : 0 });
     
     console.log("[Maestro] Initialized: Full pipeline ready with parameter defaults");
     
@@ -372,12 +330,22 @@ export default function Maestro() {
           <Button 
             variant="outline" 
             size="icon"
+            onClick={() => setShowEffectsMenu(!showEffectsMenu)}
             data-testid="button-settings"
           >
             <Settings className="h-4 w-4" />
           </Button>
         </div>
       </div>
+
+      {/* Effects Control Menu */}
+      {showEffectsMenu && controlStoreRef.current && commandBusRef.current && (
+        <EffectsControlMenu
+          controlStore={controlStoreRef.current}
+          commandBus={commandBusRef.current}
+          onClose={() => setShowEffectsMenu(false)}
+        />
+      )}
 
       {/* Development Notice */}
       <div className="absolute top-20 left-4 max-w-sm">

@@ -343,6 +343,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Vision API endpoint for GPT-4o Vision feature detection
+  app.post("/api/vision/analyze", async (req, res) => {
+    try {
+      const { image, prompt } = req.body;
+      
+      if (!image || !prompt) {
+        return res.status(400).json({ message: "Missing image or prompt" });
+      }
+      
+      // Call OpenAI GPT-4o Vision API
+      const OpenAI = await import("openai");
+      const openai = new OpenAI.default({
+        apiKey: process.env.OPENAI_API_KEY,
+      });
+      
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: prompt },
+              {
+                type: "image_url",
+                image_url: {
+                  url: `data:image/png;base64,${image}`,
+                  detail: "low", // Use low detail for cost efficiency
+                },
+              },
+            ],
+          },
+        ],
+        max_tokens: 500,
+      });
+      
+      const analysis = response.choices[0]?.message?.content || "";
+      
+      res.json({ analysis });
+    } catch (error: any) {
+      console.error("Vision API error:", error);
+      res.status(500).json({ message: "Vision analysis failed: " + error.message });
+    }
+  });
+
   // Health check
   app.get("/api/health", (req, res) => {
     res.json({ status: "healthy", timestamp: new Date().toISOString() });

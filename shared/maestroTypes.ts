@@ -164,13 +164,30 @@ export interface CmdSetPalette {
   paletteId: string;
 }
 
+// Load spawn field anchors for intelligent particle emission
+export interface CmdParticleSpawnField {
+  kind: "PARTICLE_SPAWN_FIELD";
+  path: "particles.main.spawnField";
+  anchors: Array<{ x: number; y: number; weight: number }>;
+}
+
+// Trigger particle burst at climax moments
+export interface CmdParticleBurst {
+  kind: "PARTICLE_BURST";
+  path: "particles.main.burst";
+  durationBeats: number;      // How long to burst (typically 2s / ~4 beats)
+  intensityMultiplier: number; // Spawn rate multiplier during burst
+}
+
 export type Command = 
   | CmdSet 
   | CmdRamp 
   | CmdPulse 
   | CmdSchedule 
   | CmdAttachEmitter 
-  | CmdSetPalette;
+  | CmdSetPalette
+  | CmdParticleSpawnField
+  | CmdParticleBurst;
 
 // ============================================================================
 // Zod Validators
@@ -216,6 +233,23 @@ export const cmdSetPaletteSchema = z.object({
   paletteId: z.string(),
 });
 
+export const cmdParticleSpawnFieldSchema = z.object({
+  kind: z.literal("PARTICLE_SPAWN_FIELD"),
+  path: z.literal("particles.main.spawnField"),
+  anchors: z.array(z.object({
+    x: z.number(),
+    y: z.number(),
+    weight: z.number(),
+  })),
+});
+
+export const cmdParticleBurstSchema = z.object({
+  kind: z.literal("PARTICLE_BURST"),
+  path: z.literal("particles.main.burst"),
+  durationBeats: z.number(),
+  intensityMultiplier: z.number(),
+});
+
 export const commandSchema = z.discriminatedUnion("kind", [
   cmdSetSchema,
   cmdRampSchema,
@@ -223,6 +257,8 @@ export const commandSchema = z.discriminatedUnion("kind", [
   cmdScheduleSchema,
   cmdAttachEmitterSchema,
   cmdSetPaletteSchema,
+  cmdParticleSpawnFieldSchema,
+  cmdParticleBurstSchema,
 ]);
 
 // ============================================================================
