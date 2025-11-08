@@ -121,9 +121,8 @@ export class Morpheus04Renderer implements IMorphRenderer {
 
   async render(context: RenderContext): Promise<void> {
     if (!this.initialized || !this.gl) {
-      console.warn('[Morpheus04] Not initialized, falling back to simple crossfade');
-      this.renderCrossfade(context);
-      return;
+      console.warn('[Morpheus04] Not initialized, cannot render - skipping frame');
+      return; // Don't try to render with null WebGL resources
     }
 
     // Check if frames changed - if so, re-analyze
@@ -197,11 +196,33 @@ export class Morpheus04Renderer implements IMorphRenderer {
     const width = imageA.width;
     const height = imageA.height;
 
-    // CRITICAL TODO: If controlPointsA/B are empty, we cannot proceed with mesh/TPS
+    // CRITICAL: If controlPointsA/B are empty, downgrade plan to pure crossfade
     // Need to implement: extractControlPoints(analysis: ImageAnalysisResult): {A: Point2D[], B: Point2D[]}
     if (controlPointsA.length < 3) {
-      console.warn('[Morpheus04] Insufficient control points, skipping advanced morphing');
-      return; // Fall back to crossfade
+      console.warn('[Morpheus04] Insufficient control points, downgrading to pure crossfade plan');
+      
+      // Replace plan with single crossfade stage
+      this.currentPlan = {
+        stages: [{
+          mode: 'crossfade',
+          tStart: 0,
+          tEnd: 1,
+          triCount: 0,
+          lambda: 0,
+          flowWeight: 0,
+          seamFeather: 0
+        }],
+        reasoning: 'Insufficient control points (<3), falling back to simple crossfade',
+        confidence: 1.0
+      };
+      
+      // Clear any baked assets
+      this.meshData = null;
+      this.tpsData = null;
+      this.flowData = null;
+      
+      console.log('[Morpheus04] Plan downgraded to pure crossfade');
+      return;
     }
 
     // Bake mesh if needed
@@ -288,8 +309,14 @@ export class Morpheus04Renderer implements IMorphRenderer {
   }
 
   private renderCrossfade(context: RenderContext): void {
-    const gl = this.gl!;
-    const program = this.programs.crossfade!;
+    // Defensive guards - check for missing WebGL resources
+    if (!this.gl || !this.programs.crossfade || !this.quadVAO) {
+      console.warn('[Morpheus04] Missing WebGL resources in renderCrossfade, cannot render');
+      return;
+    }
+
+    const gl = this.gl;
+    const program = this.programs.crossfade;
 
     gl.useProgram(program);
     gl.bindVertexArray(this.quadVAO);
