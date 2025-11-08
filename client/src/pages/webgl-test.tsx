@@ -52,12 +52,11 @@ export default function WebGLTest() {
       ]
     },
     {
-      name: "Phase 4: External Libraries",
-      description: "Test third-party library loading",
+      name: "Phase 4: External Libraries (Priority)",
+      description: "Test OpenCV.js loading (critical for Morpheus 0.4)",
       tests: [
         { name: "OpenCV.js Loading", status: 'pending' },
         { name: "cv.Mat Creation", status: 'pending' },
-        { name: "Delaunator Triangulation", status: 'pending' },
       ]
     },
     {
@@ -124,9 +123,68 @@ export default function WebGLTest() {
       completedTests += phase1Results.length;
       setProgress((completedTests / totalTests) * 100);
 
-      // TODO: Phases 2-5 will be implemented next
-      // For now, mark remaining tests as pending
-      console.log('[WebGLTest] Phase 1 complete. Phases 2-5 coming soon...');
+      // Phase 2: Image Loading
+      const phase2Results = await tester.runPhase2Tests();
+      
+      setTestGroups(prev => {
+        const updated = [...prev];
+        phase2Results.forEach((result) => {
+          const testIndex = updated[1].tests.findIndex(t => t.name === result.name);
+          if (testIndex !== -1) {
+            updated[1].tests[testIndex] = result;
+          }
+        });
+        return updated;
+      });
+
+      completedTests += phase2Results.length;
+      setProgress((completedTests / totalTests) * 100);
+
+      // Skip Phase 3 (visual effects) for now - complex shader tests
+      // Mark Phase 3 tests as skipped
+      setTestGroups(prev => {
+        const updated = [...prev];
+        updated[2].tests.forEach((_, idx) => {
+          updated[2].tests[idx].status = 'skipped';
+          updated[2].tests[idx].message = 'Skipped for now - complex shader tests';
+        });
+        return updated;
+      });
+      
+      completedTests += testGroups[2].tests.length; // Count skipped tests for progress
+      setProgress((completedTests / totalTests) * 100);
+
+      // Phase 4: OpenCV.js Loading (CRITICAL - diagnose emergency fixes)
+      const phase4Results = await tester.runPhase4Tests();
+      
+      setTestGroups(prev => {
+        const updated = [...prev];
+        phase4Results.forEach((result) => {
+          const testIndex = updated[3].tests.findIndex(t => t.name === result.name);
+          if (testIndex !== -1) {
+            updated[3].tests[testIndex] = result;
+          }
+        });
+        return updated;
+      });
+
+      completedTests += phase4Results.length;
+      setProgress((completedTests / totalTests) * 100);
+
+      // Skip Phase 5 (memory/performance) for now
+      setTestGroups(prev => {
+        const updated = [...prev];
+        updated[4].tests.forEach((_, idx) => {
+          updated[4].tests[idx].status = 'skipped';
+          updated[4].tests[idx].message = 'Skipped for now - performance tests';
+        });
+        return updated;
+      });
+
+      completedTests += testGroups[4].tests.length; // Count skipped tests for progress
+      setProgress(100); // All tests complete (run or skipped)
+
+      console.log('[WebGLTest] Critical tests complete (Phases 1, 2, 4). Phases 3 & 5 skipped.');
       
     } catch (error) {
       console.error('[WebGLTest] Test execution error:', error);
