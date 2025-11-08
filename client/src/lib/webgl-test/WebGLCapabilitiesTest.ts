@@ -629,10 +629,10 @@ export class WebGLCapabilitiesTest {
     const startTime = performance.now();
 
     try {
-      // Test the EXACT same URL that our emergency fix uses
-      const cvUrl = 'https://docs.opencv.org/4.5.2/opencv.js';
+      // Test loading from local server (public/opencv/opencv.js)
+      const cvUrl = '/opencv/opencv.js';
       
-      console.log('[WebGLTest] Testing OpenCV.js load from:', cvUrl);
+      console.log('[WebGLTest] Testing OpenCV.js load from local server:', cvUrl);
 
       // Load OpenCV.js with timeout (same as emergency fix: 10s)
       const loaded = await Promise.race([

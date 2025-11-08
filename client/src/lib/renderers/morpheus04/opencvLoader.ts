@@ -1,6 +1,7 @@
 /**
  * OpenCV.js Dynamic Loader
- * Loads OpenCV.js on demand and ensures it's available globally
+ * Loads OpenCV.js from local server (public/opencv/opencv.js)
+ * Uses non-blocking async pattern to prevent browser freezes
  */
 
 let cvPromise: Promise<any> | null = null;
@@ -25,35 +26,56 @@ export async function loadOpenCV(): Promise<any> {
       return;
     }
 
-    console.log('[OpenCV] Loading OpenCV.js from CDN...');
+    console.log('[OpenCV] Loading OpenCV.js from local server...');
 
-    // Create script tag - using stable 4.5.2 version (4.x redirects, 4.11.0 returns 404)
+    // Create script tag - load from local public/opencv/opencv.js (version 4.5.2)
     const script = document.createElement('script');
-    script.src = 'https://docs.opencv.org/4.5.2/opencv.js';
+    script.src = '/opencv/opencv.js';
     script.async = true;
 
-    // Handle successful load
+    let timeoutId: number | null = null;
+    let rafId: number | null = null;
+
+    // Cleanup function
+    const cleanup = () => {
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+    };
+
+    // Non-blocking check using requestAnimationFrame
+    const checkCV = () => {
+      if (typeof (window as any).cv !== 'undefined' && (window as any).cv.Mat) {
+        cleanup();
+        cvLoaded = true;
+        console.log('[OpenCV] ✅ OpenCV.js ready! Version:', (window as any).cv.getBuildInformation?.() || '4.5.2');
+        resolve((window as any).cv);
+      } else {
+        // Schedule next check without blocking
+        rafId = requestAnimationFrame(checkCV);
+      }
+    };
+
+    // Handle successful script load
     script.onload = () => {
       console.log('[OpenCV] Script loaded, waiting for cv object...');
       
-      // OpenCV.js needs a moment to initialize after script loads
-      const checkCV = setInterval(() => {
-        if (typeof (window as any).cv !== 'undefined' && (window as any).cv.Mat) {
-          clearInterval(checkCV);
-          cvLoaded = true;
-          console.log('[OpenCV] ✅ OpenCV.js ready! Version:', (window as any).cv.getBuildInformation?.() || 'unknown');
-          resolve((window as any).cv);
-        }
-      }, 100);
+      // Start non-blocking check loop
+      rafId = requestAnimationFrame(checkCV);
 
-      // Timeout after 10 seconds (reduced from 30s for faster failure feedback)
-      setTimeout(() => {
-        clearInterval(checkCV);
+      // Timeout after 10 seconds with proper cleanup
+      timeoutId = window.setTimeout(() => {
+        cleanup();
         if (!cvLoaded) {
-          const errorMsg = `OpenCV.js script loaded but cv object never initialized. URL: ${script.src}`;
+          const errorMsg = `OpenCV.js script loaded but cv object never initialized after 10s. Local path: ${script.src}`;
           console.error('[OpenCV] ❌', errorMsg);
           console.error('[OpenCV] window.cv type:', typeof (window as any).cv);
-          console.error('[OpenCV] Possible causes: CDN returned HTML error page, CORS blocked, incompatible build');
+          console.error('[OpenCV] Check: 1) File exists at public/opencv/opencv.js, 2) File is valid JS, 3) No console errors above');
           reject(new Error(errorMsg));
         }
       }, 10000);
@@ -61,9 +83,10 @@ export async function loadOpenCV(): Promise<any> {
 
     // Handle error
     script.onerror = (error) => {
-      const errorMsg = `Failed to load OpenCV.js script from ${script.src}`;
+      cleanup();
+      const errorMsg = `Failed to load OpenCV.js from local server: ${script.src}`;
       console.error('[OpenCV] ❌ Network error:', errorMsg, error);
-      console.error('[OpenCV] Check: 1) CDN accessible, 2) No CORS issues, 3) URL returns JS not HTML');
+      console.error('[OpenCV] Check: 1) File exists at public/opencv/opencv.js, 2) Server serving static files correctly');
       reject(new Error(errorMsg));
     };
 

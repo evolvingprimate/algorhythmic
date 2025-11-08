@@ -1,0 +1,10 @@
+OpenCV.js Version: 4.5.2
+Downloaded: Sat Nov  8 06:09:13 PM UTC 2025
+Source: https://docs.opencv.org/4.5.2/opencv.js
+Size: 7.7M
+
+Update Instructions:
+1. Download new version from https://docs.opencv.org/<VERSION>/opencv.js
+2. Replace public/opencv/opencv.js
+3. Update this file with new version and date
+4. Test with /webgl-test page Phase 4a
