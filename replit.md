@@ -38,7 +38,13 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
   - **First-Run Experience**: Brand new users get placeholder frames + automatic generation trigger (no black screen)
   - **Timed Generation**: Triggers artwork creation every 5 minutes → smart sync automatically adds result → pruning maintains cap
   - **Architecture**: No `morphEngine.reset()` calls except on first-run empty check → ensures continuous morphing without jump cuts
-  - **Bidirectional Ken Burns System**: Frames zoom in opposite directions like "ships passing in the night" (∞ infinity symbol)
+  
+  **Rendering Engines:**
+  - **Morpheus 0.1**: Simple cross-fade morphing (baseline)
+  - **Morpheus 0.2**: Bidirectional Ken Burns system (ships passing in the night)
+  - **Morpheus 0.3**: Single-direction zoom toward camera (cinematic slideshow)
+  
+  - **Morpheus 0.2 - Bidirectional Ken Burns System**: Frames zoom in opposite directions like "ships passing in the night" (∞ infinity symbol)
     - **Frame A (foreground)**: ALWAYS zooms OUT (expanding) while fading IN (0%→100% opacity)
     - **Frame B (background)**: ALWAYS zooms IN (contracting) while fading OUT (100%→0% opacity)
     - **Role-Based Direction Control**: Direction assigned by role (A='out', B='in'), NOT wall-clock time
@@ -57,6 +63,18 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
     - **Audio Synchronization**: Audio reactivity applied to BOTH currentDNA and nextDNA for identical zoom modulation
     - **viewProgressA/B**: Independent 0-1 progress values exposed in MorphState for per-frame zoom curves
     - Trackers cleaned up on frame prune and full reset to prevent stale state
+  
+  - **Morpheus 0.3 - Single-Direction Zoom System**: Simplified approach for smooth, predictable zoom motion
+    - **Frame A (foreground)**: Zooms from 100% → 200% scale toward camera over 5 minutes
+    - **Opacity Curve**: Holds at 100% until 150% scale (50% progress), then fades 100% → 0% by 200% scale
+    - **Frame B (background)**: Static at 100% scale, 100% opacity (always visible behind Frame A)
+    - **Music-Reactive Pan**: DNA-based target direction with bass (X-axis) and treble (Y-axis) modulation (±5% offset)
+    - **Pan Easing**: Ease-in-out curve for smooth acceleration/deceleration
+    - **UV Clamping**: View coordinates clamped to [0,1] to prevent texture repeat or black borders
+    - **Frame Swap**: When Frame A reaches 200% scale/0% opacity, Frame B becomes Frame A, load new Frame B
+    - **Design Goal**: Eliminate bidirectional complexity and mirrored progress calculations to prevent jumpiness
+    - **Linear Progression**: Single progress value (0-1) drives scale, opacity, and pan - no role swapping mid-cycle
+  
 - **Visual Effects System**: 
   - **Trace Extraction**: Three-pass rendering with Frame B alpha/luminance extraction, Sobel edge detection, 5×5 Gaussian blur, and temporal accumulation (0.85-0.95 decay) creates ethereal trailing ribbons. Multiply blend composite makes Frame B appear to "birth" from behind Frame A with DNA-controlled strength and parallax offset.
   - **Soft Bloom/Glow**: Single-pass Kawase bloom on downsampled (1/4 resolution) framebuffer extracts bright regions with DNA[48]-controlled intensity, modulated by burnIntensity for dreamy halos around bright areas during transitions.
