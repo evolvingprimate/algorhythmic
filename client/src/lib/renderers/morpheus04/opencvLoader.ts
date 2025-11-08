@@ -27,9 +27,9 @@ export async function loadOpenCV(): Promise<any> {
 
     console.log('[OpenCV] Loading OpenCV.js from CDN...');
 
-    // Create script tag
+    // Create script tag - using stable 4.5.2 version (4.x redirects, 4.11.0 returns 404)
     const script = document.createElement('script');
-    script.src = 'https://docs.opencv.org/4.11.0/opencv.js';
+    script.src = 'https://docs.opencv.org/4.5.2/opencv.js';
     script.async = true;
 
     // Handle successful load
@@ -41,25 +41,30 @@ export async function loadOpenCV(): Promise<any> {
         if (typeof (window as any).cv !== 'undefined' && (window as any).cv.Mat) {
           clearInterval(checkCV);
           cvLoaded = true;
-          console.log('[OpenCV] OpenCV.js ready!');
+          console.log('[OpenCV] ✅ OpenCV.js ready! Version:', (window as any).cv.getBuildInformation?.() || 'unknown');
           resolve((window as any).cv);
         }
       }, 100);
 
-      // Timeout after 30 seconds
+      // Timeout after 10 seconds (reduced from 30s for faster failure feedback)
       setTimeout(() => {
         clearInterval(checkCV);
         if (!cvLoaded) {
-          console.error('[OpenCV] Timeout waiting for cv object');
-          reject(new Error('OpenCV.js initialization timeout'));
+          const errorMsg = `OpenCV.js script loaded but cv object never initialized. URL: ${script.src}`;
+          console.error('[OpenCV] ❌', errorMsg);
+          console.error('[OpenCV] window.cv type:', typeof (window as any).cv);
+          console.error('[OpenCV] Possible causes: CDN returned HTML error page, CORS blocked, incompatible build');
+          reject(new Error(errorMsg));
         }
-      }, 30000);
+      }, 10000);
     };
 
     // Handle error
     script.onerror = (error) => {
-      console.error('[OpenCV] Failed to load script:', error);
-      reject(new Error('Failed to load OpenCV.js script'));
+      const errorMsg = `Failed to load OpenCV.js script from ${script.src}`;
+      console.error('[OpenCV] ❌ Network error:', errorMsg, error);
+      console.error('[OpenCV] Check: 1) CDN accessible, 2) No CORS issues, 3) URL returns JS not HTML');
+      reject(new Error(errorMsg));
     };
 
     // Add to document

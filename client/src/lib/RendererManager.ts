@@ -58,9 +58,12 @@ export class RendererManager {
     
     this.createTextures();
     
-    this.switchEngine(initialEngine);
+    // Initialize with the initial engine asynchronously
+    this.switchEngine(initialEngine).catch((error) => {
+      console.error('[RendererManager] Failed to initialize initial engine:', error);
+    });
     
-    console.log('[RendererManager] Initialized with engine:', initialEngine);
+    console.log('[RendererManager] Initializing with engine:', initialEngine);
   }
   
   private resize(): void {
@@ -91,14 +94,14 @@ export class RendererManager {
     console.log('[RendererManager] Textures created');
   }
   
-  switchEngine(engineKey: string): void {
+  async switchEngine(engineKey: string, fallbackEngines: string[] = ['morpheus_0.3', 'morpheus_0.2', 'morpheus_0.1']): Promise<boolean> {
     if (!this.gl) {
       console.error('[RendererManager] Cannot switch engine - GL not initialized');
-      return;
+      return false;
     }
     
     if (this.currentEngineKey === engineKey) {
-      return;
+      return true;
     }
     
     if (this.currentEngine) {
@@ -111,15 +114,59 @@ export class RendererManager {
     
     if (!newEngine) {
       console.error('[RendererManager] Failed to create engine:', engineKey);
-      return;
+      return false;
     }
     
-    newEngine.initialize(this.gl);
-    this.currentEngine = newEngine;
-    this.currentEngineKey = engineKey;
-    this.pendingEngineKey = null;
-    
-    console.log(`[RendererManager] Switched to engine: ${engineKey}`);
+    try {
+      console.log(`[RendererManager] Initializing engine: ${engineKey}...`);
+      await newEngine.initialize(this.gl);
+      this.currentEngine = newEngine;
+      this.currentEngineKey = engineKey;
+      this.pendingEngineKey = null;
+      console.log(`[RendererManager] ✅ Successfully switched to engine: ${engineKey}`);
+      return true;
+    } catch (error) {
+      console.error(`[RendererManager] ❌ Failed to initialize ${engineKey}:`, error);
+      newEngine.destroy();
+      
+      // Try fallback engines
+      for (const fallback of fallbackEngines) {
+        if (fallback === engineKey) continue; // Skip the one we just tried
+        
+        console.warn(`[RendererManager] 🔄 Attempting fallback to ${fallback}...`);
+        const fallbackEngine = registry.create(fallback);
+        
+        if (!fallbackEngine) {
+          console.error(`[RendererManager] Fallback engine ${fallback} not found`);
+          continue;
+        }
+        
+        try {
+          await fallbackEngine.initialize(this.gl);
+          this.currentEngine = fallbackEngine;
+          this.currentEngineKey = fallback;
+          this.pendingEngineKey = null;
+          console.log(`[RendererManager] ✅ Fallback successful: ${fallback}`);
+          
+          // Emit fallback event for UI notification
+          window.dispatchEvent(new CustomEvent('renderer-fallback', {
+            detail: {
+              attempted: engineKey,
+              fallback: fallback,
+              reason: error instanceof Error ? error.message : 'Unknown error'
+            }
+          }));
+          
+          return true;
+        } catch (fallbackError) {
+          console.error(`[RendererManager] Fallback ${fallback} also failed:`, fallbackError);
+          fallbackEngine.destroy();
+        }
+      }
+      
+      console.error('[RendererManager] ❌ All engines failed to initialize');
+      return false;
+    }
   }
   
   requestEngineSwitch(engineKey: string): void {
@@ -127,9 +174,9 @@ export class RendererManager {
     console.log(`[RendererManager] Engine switch requested: ${engineKey} (will apply at cycle boundary)`);
   }
   
-  applyPendingEngineSwitch(): void {
+  async applyPendingEngineSwitch(): Promise<void> {
     if (this.pendingEngineKey) {
-      this.switchEngine(this.pendingEngineKey);
+      await this.switchEngine(this.pendingEngineKey);
     }
   }
   

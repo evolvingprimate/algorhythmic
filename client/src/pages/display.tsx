@@ -228,6 +228,24 @@ export default function Display() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  // Listen for renderer fallback events
+  useEffect(() => {
+    const handleRendererFallback = (event: CustomEvent) => {
+      const { attempted, fallback, reason } = event.detail;
+      
+      toast({
+        title: "Renderer Updated",
+        description: `${attempted} encountered an issue (${reason}). Using ${fallback} instead.`,
+        variant: "default",
+      });
+      
+      console.log(`[Display] Renderer fallback: ${attempted} → ${fallback}`);
+    };
+
+    window.addEventListener('renderer-fallback', handleRendererFallback as EventListener);
+    return () => window.removeEventListener('renderer-fallback', handleRendererFallback as EventListener);
+  }, [toast]);
+
   // Helper: Check if image is black/blank by analyzing pixel data
   const isImageBlank = (img: HTMLImageElement): boolean => {
     try {

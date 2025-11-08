@@ -8,6 +8,7 @@ import Landing from "@/pages/landing";
 import Display from "@/pages/display";
 import Gallery from "@/pages/gallery";
 import Subscribe from "@/pages/subscribe";
+import WebGLTest from "@/pages/webgl-test";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -17,6 +18,7 @@ function Router() {
       <Route path="/display" component={Display} />
       <Route path="/gallery" component={Gallery} />
       <Route path="/subscribe" component={Subscribe} />
+      <Route path="/webgl-test" component={WebGLTest} />
       <Route component={NotFound} />
     </Switch>
   );
