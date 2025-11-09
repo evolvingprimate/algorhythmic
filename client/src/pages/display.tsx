@@ -580,7 +580,20 @@ export default function Display() {
     
     console.log(`[Display] 🔄 Smart sync: Found ${newArtworks.length} new artworks to add to MorphEngine`);
     
-    // Add new frames without resetting
+    // CRITICAL: Prune BEFORE inserting to prevent index corruption
+    // This ensures pendingJumpIndex set by insertFrameAfterCurrent remains valid
+    const MAX_FRAMES = 20;
+    const currentFrameCount = morphEngineRef.current.getFrameCount();
+    const predictedTotal = currentFrameCount + newArtworks.length;
+    
+    if (predictedTotal > MAX_FRAMES) {
+      const framesToRemove = predictedTotal - MAX_FRAMES;
+      console.log(`[Display] 🗑️ Pre-pruning ${framesToRemove} oldest frames (current: ${currentFrameCount}, incoming: ${newArtworks.length})`);
+      morphEngineRef.current.pruneOldestFrames(framesToRemove);
+    }
+    
+    // Add new frames with immediate jump priority (backend returns fresh → storage order)
+    // insertFrameAfterCurrent ensures fresh artwork appears IMMEDIATELY (no 60s wait)
     newArtworks.forEach(artwork => {
       let dnaVector = parseDNAFromSession(artwork);
       
@@ -610,21 +623,11 @@ export default function Display() {
         audioAnalysis: audioFeatures,
       });
       
-      console.log(`[Display] ✅ Smart sync prioritized fresh frame (next in queue): ${artwork.prompt?.substring(0, 50)}...`);
+      console.log(`[Display] ✅ Inserted fresh frame with immediate jump (safe - pruning already done): ${artwork.prompt?.substring(0, 50)}...`);
     });
     
-    // CRITICAL: Enforce frame cap AFTER adding new frames
-    const MAX_FRAMES = 20;
-    const totalFrames = morphEngineRef.current.getFrameCount();
-    
-    if (totalFrames > MAX_FRAMES) {
-      const framesToRemove = totalFrames - MAX_FRAMES;
-      console.log(`[Display] 🗑️ Pruning ${framesToRemove} oldest frames to maintain ${MAX_FRAMES} frame cap (total: ${totalFrames})`);
-      morphEngineRef.current.pruneOldestFrames(framesToRemove);
-      console.log(`[Display] Smart sync complete. Frames after pruning: ${morphEngineRef.current.getFrameCount()}`);
-    } else {
-      console.log(`[Display] Smart sync complete. Total frames: ${totalFrames}`);
-    }
+    const finalFrameCount = morphEngineRef.current.getFrameCount();
+    console.log(`[Display] Smart sync complete. Final frames: ${finalFrameCount} (≤${MAX_FRAMES})`);
   }, [recentArtworks]);
 
   // Fetch voting history
