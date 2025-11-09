@@ -348,6 +348,30 @@ export const insertUserDnaProfileSchema = createInsertSchema(userDnaProfiles).om
   lastUpdated: true,
 });
 
+export const insertGenerationJobSchema = createInsertSchema(generationJobs).omit({
+  id: true,
+  createdAt: true,
+});
+
+// Audio Context DTO for hybrid gen+retrieve
+export const audioContextSchema = z.object({
+  musicId: z.object({
+    track: z.string().optional(),
+    artist: z.string().optional(),
+    album: z.string().optional(),
+    genre: z.string().optional(),
+  }).optional(),
+  audioFeatures: z.object({
+    rms: z.number().optional(),
+    spectralCentroid: z.number().optional(),
+    tempo: z.number().optional(),
+    energy: z.number().optional(),
+    mood: z.string().optional(),
+  }).optional(),
+  targetDNA: z.array(z.number()).length(50).optional(),
+  motifs: z.array(z.string()).optional(),
+});
+
 // Types
 export type ArtPreference = typeof artPreferences.$inferSelect;
 export type InsertArtPreference = z.infer<typeof insertArtPreferenceSchema>;
@@ -388,6 +412,11 @@ export type InsertEngagementRollup = z.infer<typeof insertEngagementRollupSchema
 
 export type UserDnaProfile = typeof userDnaProfiles.$inferSelect;
 export type InsertUserDnaProfile = z.infer<typeof insertUserDnaProfileSchema>;
+
+export type GenerationJob = typeof generationJobs.$inferSelect;
+export type InsertGenerationJob = z.infer<typeof insertGenerationJobSchema>;
+
+export type AudioContext = z.infer<typeof audioContextSchema>;
 
 // Replit Auth specific type
 export type UpsertUser = typeof users.$inferInsert;

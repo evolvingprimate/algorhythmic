@@ -16,6 +16,8 @@ import {
   type InsertRaiSession,
   type TelemetryEvent,
   type InsertTelemetryEvent,
+  type GenerationJob,
+  type InsertGenerationJob,
   artPreferences,
   artVotes,
   artSessions,
@@ -25,6 +27,7 @@ import {
   storageMetrics,
   raiSessions,
   telemetryEvents,
+  generationJobs,
   SUBSCRIPTION_TIERS,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
@@ -98,6 +101,12 @@ export interface IStorage {
   endRaiSession(sessionId: string): Promise<void>;
   createTelemetryEvents(events: InsertTelemetryEvent[]): Promise<void>;
   getTelemetryEventsSince(cutoffTime: Date): Promise<TelemetryEvent[]>;
+
+  // Generation Jobs (Hybrid gen+retrieve)
+  createGenerationJob(job: InsertGenerationJob): Promise<GenerationJob>;
+  getGenerationJob(id: string): Promise<GenerationJob | undefined>;
+  updateGenerationJob(id: string, updates: Partial<GenerationJob>): Promise<GenerationJob>;
+  getPoolCandidates(userId: string, limit?: number, minQuality?: number): Promise<ArtSession[]>;
 }
 
 export class MemStorage implements IStorage {
@@ -466,6 +475,39 @@ export class MemStorage implements IStorage {
   async getTelemetryEventsSince(cutoffTime: Date): Promise<TelemetryEvent[]> {
     // MemStorage doesn't persist telemetry
     return [];
+  }
+
+  // Generation Jobs (MemStorage stubs)
+  async createGenerationJob(job: InsertGenerationJob): Promise<GenerationJob> {
+    const id = randomUUID();
+    return {
+      id,
+      ...job,
+      audioContext: job.audioContext ?? null,
+      warmStartArtworkId: job.warmStartArtworkId ?? null,
+      generatedArtworkId: job.generatedArtworkId ?? null,
+      status: job.status ?? 'pending',
+      attemptCount: job.attemptCount ?? 0,
+      errorMessage: job.errorMessage ?? null,
+      createdAt: new Date(),
+      startedAt: job.startedAt ?? null,
+      completedAt: job.completedAt ?? null,
+    };
+  }
+
+  async getGenerationJob(id: string): Promise<GenerationJob | undefined> {
+    return undefined;
+  }
+
+  async updateGenerationJob(id: string, updates: Partial<GenerationJob>): Promise<GenerationJob> {
+    throw new Error('MemStorage does not support generation jobs');
+  }
+
+  async getPoolCandidates(userId: string, limit: number = 20, minQuality: number = 35): Promise<ArtSession[]> {
+    // MemStorage: return unseen artworks (same as getUnseenArtworks)
+    return Array.from(this.sessions.values())
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, limit);
   }
 }
 
@@ -906,6 +948,66 @@ export class PostgresStorage implements IStorage {
       console.error('[PostgresStorage] Failed to query telemetry events:', error);
       return [];
     }
+  }
+
+  // ============================================================================
+  // Generation Jobs (Hybrid gen+retrieve)
+  // ============================================================================
+
+  async createGenerationJob(job: InsertGenerationJob): Promise<GenerationJob> {
+    const [created] = await this.db
+      .insert(generationJobs)
+      .values(job)
+      .returning();
+    return created;
+  }
+
+  async getGenerationJob(id: string): Promise<GenerationJob | undefined> {
+    const results = await this.db
+      .select()
+      .from(generationJobs)
+      .where(eq(generationJobs.id, id))
+      .limit(1);
+    return results[0];
+  }
+
+  async updateGenerationJob(id: string, updates: Partial<GenerationJob>): Promise<GenerationJob> {
+    const [updated] = await this.db
+      .update(generationJobs)
+      .set(updates)
+      .where(eq(generationJobs.id, id))
+      .returning();
+    return updated;
+  }
+
+  async getPoolCandidates(userId: string, limit: number = 20, minQuality: number = 35): Promise<ArtSession[]> {
+    // Build conditional where clauses
+    const whereConditions = [
+      isNull(userArtImpressions.id), // Unseen only
+      eq(artSessions.poolStatus, 'active'), // Active pool items only
+    ];
+    
+    // Add quality filter if specified
+    if (minQuality > 0) {
+      whereConditions.push(gte(artSessions.qualityScore, minQuality));
+    }
+    
+    // Query unseen artworks with optional quality filter
+    const results = await this.db
+      .select(getTableColumns(artSessions))
+      .from(artSessions)
+      .leftJoin(
+        userArtImpressions,
+        and(
+          eq(artSessions.id, userArtImpressions.artworkId),
+          eq(userArtImpressions.userId, userId)
+        )
+      )
+      .where(and(...whereConditions))
+      .orderBy(desc(artSessions.createdAt))
+      .limit(limit);
+    
+    return results;
   }
 }
 
