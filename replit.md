@@ -71,10 +71,12 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 - **ArtSessions**: Globally shared generated artwork history.
 - **Users**: Auth profile data, subscription tier.
 - **DailyUsage**: Tracks daily generation count.
+- **UserArtImpressions**: Per-user artwork view tracking for freshness pipeline (unique constraint on userId + artworkId).
 
 ### Key Features
 - **Art Display**: Real-time AI-generated artwork with clean Ken Burns morphing, style/artist selection, voting system, WebSocket for multi-device sync, and timed generation.
 - **Global Artwork Pool**: All generated artworks are shared across users for instant discovery.
+- **Freshness Pipeline** (November 2025): Guarantees users NEVER see the same artwork frames twice via per-user impression tracking. Features: `/api/artworks/next` endpoint filtering unseen artworks, automatic impression recording on frame load, React Query cache invalidation after each view, HTTP no-cache headers to prevent stale responses, auto-generation trigger when unseen pool < 5 artworks. Implementation uses `user_art_impressions` table with unique(userId, artworkId) constraint and ON CONFLICT DO NOTHING for thread-safe deduplication.
 - **User Gallery Page**: Protected route for managing user artworks.
 - **Subscription Page**: Stripe payment integration with a 7-day free trial and tier comparison.
 - **Style Selector**: Visual grid of 71 artistic styles across 8 master groups, with dynamic AI mode.
