@@ -708,25 +708,18 @@ export class PostgresStorage implements IStorage {
   }
 
   async getFreshArtworks(sessionId: string, userId: string, limit: number = 20): Promise<ArtSession[]> {
-    // Fresh artwork: created in this session within last 15 minutes, not yet viewed by user
-    // This is the PRIORITY QUEUE - these frames should be shown FIRST before storage pool
+    // Fresh artwork: created in this session within last 15 minutes
+    // CRITICAL FIX: NO impression filtering - fresh frames bypass "never repeat" logic
+    // This ensures just-generated artwork appears immediately, even if impression was recorded
     const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
     
     const results = await this.db
-      .select(getTableColumns(artSessions))
+      .select()
       .from(artSessions)
-      .leftJoin(
-        userArtImpressions,
-        and(
-          eq(artSessions.id, userArtImpressions.artworkId),
-          eq(userArtImpressions.userId, userId)
-        )
-      )
       .where(
         and(
           eq(artSessions.sessionId, sessionId),  // Session-scoped fresh queue
-          gte(artSessions.createdAt, fifteenMinutesAgo), // Last 15 min
-          isNull(userArtImpressions.id) // Not yet viewed
+          gte(artSessions.createdAt, fifteenMinutesAgo) // Last 15 min only
         )
       )
       .orderBy(desc(artSessions.createdAt)) // Newest first
