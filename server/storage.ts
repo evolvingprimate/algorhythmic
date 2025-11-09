@@ -29,7 +29,7 @@ import {
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { drizzle } from "drizzle-orm/neon-serverless";
-import { eq, desc, and, or, isNull, lt, gte, sql } from "drizzle-orm";
+import { eq, desc, and, or, isNull, lt, gte, sql, getTableColumns } from "drizzle-orm";
 import { Pool, neonConfig } from "@neondatabase/serverless";
 import ws from "ws";
 
@@ -622,23 +622,7 @@ export class PostgresStorage implements IStorage {
     // LEFT JOIN to filter artworks viewed in last 7 days
     // This allows artworks to reappear after a week
     const results = await this.db
-      .select({
-        id: artSessions.id,
-        sessionId: artSessions.sessionId,
-        userId: artSessions.userId,
-        imageUrl: artSessions.imageUrl,
-        prompt: artSessions.prompt,
-        styles: artSessions.styles,
-        artists: artSessions.artists,
-        generationExplanation: artSessions.generationExplanation,
-        dnaVector: artSessions.dnaVector,
-        audioFeatures: artSessions.audioFeatures,
-        musicTrack: artSessions.musicTrack,
-        musicArtist: artSessions.musicArtist,
-        musicAlbum: artSessions.musicAlbum,
-        isSaved: artSessions.isSaved,
-        createdAt: artSessions.createdAt,
-      })
+      .select(getTableColumns(artSessions))
       .from(artSessions)
       .leftJoin(
         userArtImpressions,
@@ -656,8 +640,7 @@ export class PostgresStorage implements IStorage {
       .orderBy(desc(artSessions.createdAt))
       .limit(limit);
     
-    // Return only artSessions data (unwrap from joined result)
-    return results as ArtSession[];
+    return results;
   }
 
   // Users
