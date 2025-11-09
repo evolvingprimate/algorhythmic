@@ -93,6 +93,9 @@ export class MaestroControlStore {
   constructor() {
     console.log("[MaestroControlStore] Initializing...");
     
+    // FORCE RESET: Clear cached preferences for testing
+    localStorage.removeItem(this.STORAGE_KEY_PREFS);
+    
     // Load or initialize effect preferences
     this.effectPrefs = this.loadEffectPreferences();
     
