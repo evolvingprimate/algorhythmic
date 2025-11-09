@@ -209,6 +209,14 @@ export default function Display() {
     needsGeneration: boolean;
   }>({
     queryKey: ["/api/artworks/next", impressionVersion],
+    queryFn: async () => {
+      // Custom queryFn to only use the URL part, not the impression version
+      const response = await fetch("/api/artworks/next", {
+        credentials: 'include'
+      });
+      if (!response.ok) throw new Error('Failed to fetch artworks');
+      return response.json();
+    },
     enabled: isAuthenticated && setupComplete, // Block until wizard complete
     refetchOnWindowFocus: false,
     refetchOnMount: true,
