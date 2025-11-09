@@ -58,6 +58,7 @@ export class MorphEngine {
   private phaseStartTime: number = 0;
   private isRunning: boolean = false;
   private animationFrameId: number | null = null;
+  private pendingJumpIndex: number | null = null; // Request frame jump via state machine
   
   // Per-frame Ken Burns progress trackers (keyed by imageUrl for stability)
   private frameTrackers: Map<string, FrameTracker> = new Map();
@@ -143,12 +144,11 @@ export class MorphEngine {
     const insertIndex = this.currentIndex + 1;
     this.frames.splice(insertIndex, 0, frame);
     
-    // CRITICAL: Skip current cycle to show fresh artwork immediately
-    // This prevents users from waiting up to 5 minutes for current cycle to finish
+    // CRITICAL: Request immediate jump via state machine to show fresh artwork
+    // This prevents users from waiting up to 1 minute for current cycle to finish
     if (this.isRunning) {
-      this.currentIndex = insertIndex; // Jump to new frame
-      this.phaseStartTime = Date.now(); // Reset timing
-      console.log(`[MorphEngine] 🚀 Jumped to fresh frame immediately (skipped wait)`);
+      this.pendingJumpIndex = insertIndex; // Request jump through state machine
+      console.log(`[MorphEngine] 🚀 Requested immediate jump to fresh frame at index ${insertIndex}`);
     }
     
     console.log(`[MorphEngine] 🎨 Inserted fresh frame after position ${insertIndex - 1}. Total frames: ${this.frames.length}`);
@@ -299,6 +299,36 @@ export class MorphEngine {
 
   getMorphState(audioAnalysis?: AudioAnalysis): MorphState {
     const defaultDNA = Array(50).fill(0.5);
+    
+    // Service pending jump request before computing state
+    if (this.pendingJumpIndex !== null && this.frames.length > 0) {
+      const targetIndex = Math.max(0, Math.min(this.pendingJumpIndex, this.frames.length - 1));
+      console.log(`[MorphEngine] 🎬 Servicing jump request: ${this.currentIndex} → ${targetIndex}`);
+      
+      this.currentIndex = targetIndex;
+      this.phaseStartTime = Date.now();
+      
+      // Reset Ken Burns trackers for clean transition
+      const currentFrame = this.frames[this.currentIndex];
+      const nextFrame = this.frames[(this.currentIndex + 1) % this.frames.length];
+      
+      if (currentFrame && this.frameTrackers.has(currentFrame.imageUrl)) {
+        const tracker = this.frameTrackers.get(currentFrame.imageUrl)!;
+        tracker.cycleStart = Date.now();
+        tracker.progress = 0;
+        tracker.zoomDirection = 'out'; // Frame A starts zooming out
+      }
+      
+      if (nextFrame && this.frameTrackers.has(nextFrame.imageUrl)) {
+        const tracker = this.frameTrackers.get(nextFrame.imageUrl)!;
+        tracker.cycleStart = Date.now();
+        tracker.progress = 0;
+        tracker.zoomDirection = 'in'; // Frame B starts zooming in
+      }
+      
+      this.pendingJumpIndex = null; // Clear request
+      console.log(`[MorphEngine] ✅ Jump complete, Ken Burns reset, renderer will detect new frameIds`);
+    }
     
     if (this.frames.length === 0) {
       return {
