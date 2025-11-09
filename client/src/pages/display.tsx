@@ -154,6 +154,7 @@ export default function Display() {
   const effectLoggerRef = useRef<EffectLogger>(new EffectLogger());
   const showDebugOverlayRef = useRef<boolean>(false);
   const effectsConfigRef = useRef<EffectsConfig>(effectsConfig);
+  const recordedImpressions = useRef<Set<string>>(new Set()); // Track which artworks have had impressions recorded
   
   // Sync refs with state
   useEffect(() => {
@@ -473,8 +474,15 @@ export default function Display() {
             audioAnalysis: audioFeatures,
           });
           
-          // CRITICAL: Record impression for freshness pipeline
-          recordImpressionMutation.mutate(artwork.id);
+          // CRITICAL: Record impression for freshness pipeline (deduplicated with retry on failure)
+          if (!recordedImpressions.current.has(artwork.id)) {
+            recordedImpressions.current.add(artwork.id);
+            recordImpressionMutation.mutateAsync(artwork.id).catch((error) => {
+              // Remove from Set on failure to allow retry
+              recordedImpressions.current.delete(artwork.id);
+              console.error(`[Freshness] Failed to record impression for ${artwork.id}:`, error);
+            });
+          }
           
           console.log(`[Display] ✅ Loaded frame ${validatedArtworks.length}: ${artwork.prompt?.substring(0, 50)}...`);
         }
@@ -623,6 +631,16 @@ export default function Display() {
         audioAnalysis: audioFeatures,
       });
       
+      // PEER-REVIEWED FIX #3: Record impression when fresh frame is inserted (deduplicated with retry on failure)
+      if (!recordedImpressions.current.has(artwork.id)) {
+        recordedImpressions.current.add(artwork.id);
+        recordImpressionMutation.mutateAsync(artwork.id).catch((error) => {
+          // Remove from Set on failure to allow retry
+          recordedImpressions.current.delete(artwork.id);
+          console.error(`[Freshness] Failed to record impression for ${artwork.id}:`, error);
+        });
+      }
+      
       console.log(`[Display] ✅ Inserted fresh frame with immediate jump (safe - pruning already done): ${artwork.prompt?.substring(0, 50)}...`);
     });
     
@@ -766,13 +784,35 @@ export default function Display() {
       // Refetch usage stats after successful generation
       refetchUsageStats();
       
-      // CRITICAL: Invalidate unseen artworks query to refresh pool for next reload
-      queryClient.invalidateQueries({ queryKey: ["/api/artworks/next"] });
-      
-      // Record impression for freshness pipeline
-      if (data.session?.id) {
-        recordImpressionMutation.mutate(data.session.id);
+      // PEER-REVIEWED FIX #1: Optimistic Update - Show fresh artwork immediately
+      if (data.session) {
+        queryClient.setQueryData(
+          ["/api/artworks/next", sessionId.current],
+          (old: any) => ({
+            artworks: [
+              {
+                ...data.session,
+                imageUrl: data.imageUrl,
+                prompt: data.prompt,
+                explanation: data.explanation,
+                createdAt: new Date().toISOString(),
+              },
+              ...(old?.artworks || []).filter((a: any) => a.id !== data.session.id)
+            ],
+            poolSize: (old?.poolSize || 0) + 1,
+            freshCount: 1,
+            storageCount: old?.storageCount || 0,
+            needsGeneration: false,
+          })
+        );
       }
+      
+      // PEER-REVIEWED FIX #2: Invalidate with refetchType: "active" (React Query v5)
+      // React Query v5 requires refetchType: "active" to refetch mounted queries
+      queryClient.invalidateQueries({ 
+        queryKey: ["/api/artworks/next", sessionId.current],
+        refetchType: "active",
+      });
     },
     onError: (error: any) => {
       toast({
