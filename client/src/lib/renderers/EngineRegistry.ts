@@ -44,8 +44,8 @@ export class EngineRegistry {
   }
   
   getDefaultEngine(): string {
-    // Morpheus 0.1: Simple crossfade renderer
-    // Clean opacity blend between images with no zoom or effects
-    return 'morpheus_0.1';
+    // Morpheus 0.6: Smart anchor zoom with AI vision detection
+    // Finds visually interesting regions and smoothly zooms toward them
+    return 'morpheus_0.6';
   }
 }
