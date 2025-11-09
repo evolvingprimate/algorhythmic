@@ -21,13 +21,22 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 - **Database**: PostgreSQL with Drizzle ORM
 - **Authentication**: Replit Auth with OpenID Connect (Passport.js)
 - **Real-time**: WebSocket Server (ws package)
+- **Hybrid Gen+Retrieve**: POST /api/artworks/next endpoint with warm-start pool selection and async DALL-E generation
 
 ### AI Art Generation & Morphing
 - **Audio Capture & Analysis**: Extracts frequency, amplitude, tempo, mood.
-- **Music Identification**: ACRCloud identifies playing songs.
-- **Prompt Generation**: GPT-4o Vision or GPT-5 generates DALL-E prompts based on user preferences, audio mood, music identity, and voting history, including a 50-point "DNA vector".
+- **Music Identification**: ACRCloud identifies playing songs and threads track/artist/album into prompt generation.
+- **Prompt Generation**: GPT-4o Vision generates DALL-E prompts based on user preferences, audio mood, ACRCloud music context, and voting history, including a 50-point "DNA vector".
 - **Image Generation**: DALL-E 3 creates 1024x1024 artwork.
 - **Permanent Storage**: Images are downloaded and stored in Replit Object Storage with a robust verification and retry pipeline.
+- **Hybrid Gen+Retrieve Pipeline** (November 2025):
+  - **Warm-Start Selection**: ImagePoolService finds best DNA/motif match from pool (0.6·cosine + 0.2·Jaccard + 0.2·quality)
+  - **Instant Visual**: Returns pool candidate immediately (no wait for DALL-E)
+  - **Async Generation**: processGenerationJob worker generates fresh artwork in parallel based on ACRCloud + audio features
+  - **WebSocket Swap**: Emits artwork.swap event when generation completes for seamless hot-swap
+  - **Pool Enrichment**: Stores generated artwork with motifs, quality score (75 default), poolStatus='active'
+  - **Daily Limit Accounting**: Charges immediately on job creation (optimistic, no refunds on failure for MVP)
+  - **Generation Jobs Table**: Tracks jobId, userId, audioContext, warmStartId, generatedId, status, timestamps
 - **DNA Morphing System**: Each artwork's 50-point DNA vector enables smooth, procedural morphing between frames over 1-minute cycles, with audio-reactive modulation.
 - **Frame Pool Management**: Ensures continuous morphing, smart synchronization of new frames, stable deduplication, hard cap enforcement (max 20 frames), and active frame protection. Features **priority insertion** via `insertFrameAfterCurrent()` - freshly generated artwork appears immediately instead of waiting ~20 minutes in FIFO queue. Provides a first-run experience with placeholder frames.
 - **Rendering Engines (Morpheus)**:
