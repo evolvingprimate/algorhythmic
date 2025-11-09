@@ -35,7 +35,7 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
     - **Morpheus 0.2**: Bidirectional Ken Burns system ("ships passing in the night") with mirrored-progress handoff and inverted pan for seamless motion.
     - **Morpheus 0.3**: Single-direction zoom toward camera with an opacity curve and subtle DNA-based, beat-reactive pan for cinematic slideshows.
     - **Morpheus 0.4**: Feature-based intelligent morphing using computer vision (OpenCV.js) for multi-stage transitions (currently falls back to crossfade as core implementation details for control point extraction and GL buffer creation are pending).
-    - **Morpheus 0.5** (Default): Fully Maestro-controlled renderer with all visual parameters driven by Maestro commands. Features modular rendering pipeline (Ken Burns, Particles, Warp, Mixer) with audio-reactive effects. Parameters include mixer controls (saturation, brightness, contrast), warp distortion (elasticity, radius), and particle system integration. Standalone compatible with fallback defaults when Maestro inactive.
+    - **Morpheus 0.5** (Default): Pure Ken Burns morphing renderer with all Maestro visual effects disabled per user request. Features clean image-to-image transitions with DNA-driven zoom and pan. All audio-reactive enhancements (particles, warp distortion, color mixer, motion blur) are currently neutralized to 0/identity values, preserving only smooth morphing animations.
 - **Visual Effects System**: Includes trace extraction, soft bloom/glow, chromatic drift, displacement & flow (curl noise), enhanced Ken Burns, and beat-triggered particle systems.
 - **Audio-Reactive Control System**: Real-time audio analysis (FFT, RMS, spectral centroid, beat detection, BPM estimation) intelligently maps parameters to visual effects with safety caps and provides a public API for engine integration.
 - **Tiered Rendering**: Adaptive rendering based on device capabilities for optimal performance.
@@ -72,15 +72,16 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 - **DailyUsage**: Tracks daily generation count.
 
 ### Key Features
-- **Art Display**: Real-time audio-reactive visualizations, style/artist selection, voting system, WebSocket for multi-device sync, and timed generation.
+- **Art Display**: Real-time AI-generated artwork with clean Ken Burns morphing, style/artist selection, voting system, WebSocket for multi-device sync, and timed generation.
 - **Global Artwork Pool**: All generated artworks are shared across users for instant discovery.
 - **User Gallery Page**: Protected route for managing user artworks.
 - **Subscription Page**: Stripe payment integration with a 7-day free trial and tier comparison.
 - **Style Selector**: Visual grid of 71 artistic styles across 8 master groups, with dynamic AI mode.
 - **Debug Overlay**: Toggle-able verbose mode showing active effects, frame opacities, zoom levels, shader status, and FPS.
-- **Effects Control Menu**: Slide-out menu with checkboxes and sliders to adjust visual effects.
+- **Effects Control Menu**: Slide-out menu with checkboxes and sliders to adjust visual effects (currently disabled for pure morphing mode).
 - **Effect History Logging**: Per-frame JSON logs for debugging and analysis.
 - **Design System**: Purple primary color, Inter font, Shadcn UI components, subtle animations, mobile-first and TV-optimized responsive design.
+- **Landing Page**: Hero video background using "Surreal_flowing_abstract_art_video_2_1762650434281.mp4" with 50% playback speed for smooth motion.
 
 ## External Dependencies
 - **OpenAI API**: GPT-5, DALL-E 3, GPT-4o Vision for AI art generation and analysis.

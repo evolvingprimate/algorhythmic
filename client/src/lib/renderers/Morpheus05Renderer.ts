@@ -239,16 +239,17 @@ export class Morpheus05Renderer implements IMorphRenderer {
       this.parameterSampler.sample(parameters);
     }
     
-    // Read Maestro-controlled parameters
-    const saturation = this.parameterSampler.getScalar('mixer.saturation');
-    const brightness = this.parameterSampler.getScalar('mixer.brightness');
-    const contrast = this.parameterSampler.getScalar('mixer.contrast');
-    const warpElasticity = this.parameterSampler.getScalar('warp.elasticity');
-    const warpRadius = this.parameterSampler.getScalar('warp.radius');
+    // MAESTRO EFFECTS DISABLED - Force neutral values for pure Ken Burns morphing
+    // Override Maestro parameters to disable all visual effects
+    const saturation = 1.0;  // Neutral (was: mixer.saturation)
+    const brightness = 1.0;  // Neutral (was: mixer.brightness)
+    const contrast = 1.0;    // Neutral (was: mixer.contrast)
+    const warpElasticity = 0.0;  // Disabled (was: warp.elasticity)
+    const warpRadius = 0.0;      // Disabled (was: warp.radius)
     const zoomSpeed = this.parameterSampler.getScalar('particles.main.velocity'); // Reuse for Ken Burns speed
     
-    // Audio features
-    const bassLevel = audioAnalysis?.bassLevel ?? 0;
+    // Audio features - disabled for pure morphing
+    const bassLevel = 0.0;  // Disabled (was: audioAnalysis?.bassLevel ?? 0)
     
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, canvas.width, canvas.height);
@@ -383,16 +384,16 @@ export class Morpheus05Renderer implements IMorphRenderer {
     width /= scale;
     height /= scale;
     
-    // DNA-based pan with audio modulation
+    // DNA-based pan only (audio modulation disabled for pure morphing)
     const panX = ((dna[0] / 255) - 0.5) * 0.2 * progress;
     const panY = ((dna[1] / 255) - 0.5) * 0.2 * progress;
     
-    // Audio-reactive pan (subtle)
-    const audioPanX = audioAnalysis ? (audioAnalysis.amplitude * 0.05) : 0;
-    const audioPanY = audioAnalysis ? (audioAnalysis.trebleLevel * 0.05) : 0;
+    // Audio-reactive pan DISABLED (was causing smear effect)
+    // const audioPanX = audioAnalysis ? (audioAnalysis.amplitude * 0.05) : 0;
+    // const audioPanY = audioAnalysis ? (audioAnalysis.trebleLevel * 0.05) : 0;
     
-    const x = (1.0 - width) / 2 + panX + audioPanX;
-    const y = (1.0 - height) / 2 + panY + audioPanY;
+    const x = (1.0 - width) / 2 + panX;
+    const y = (1.0 - height) / 2 + panY;
     
     return { x, y, w: width, h: height };
   }
