@@ -31,7 +31,7 @@ export class AnchorDetector {
   /**
    * Analyze image and find the most interesting anchor point
    */
-  async detectAnchor(image: HTMLImageElement): Promise<AnchorPoint> {
+  detectAnchor(image: HTMLImageElement): AnchorPoint {
     // Downscale image to analysis size
     this.ctx.clearRect(0, 0, ANALYSIS_SIZE, ANALYSIS_SIZE);
     this.ctx.drawImage(image, 0, 0, ANALYSIS_SIZE, ANALYSIS_SIZE);
