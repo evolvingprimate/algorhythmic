@@ -44,8 +44,8 @@ export class EngineRegistry {
   }
   
   getDefaultEngine(): string {
-    // Morpheus 0.5: Fully Maestro-controlled renderer with audio-reactive effects
-    // All visual parameters driven by Maestro commands (mixer, warp, particles)
-    return 'morpheus_0.5';
+    // Morpheus 0.1: Simple crossfade renderer
+    // Clean opacity blend between images with no zoom or effects
+    return 'morpheus_0.1';
   }
 }

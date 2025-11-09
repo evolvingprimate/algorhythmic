@@ -849,6 +849,23 @@ export default function Display() {
   }, []);
   
   // Handle engine selection changes
+  // Auto-migrate from old default (morpheus_0.5) to new default (morpheus_0.1) on initial mount only
+  const hasMigratedRef = useRef(false);
+  useEffect(() => {
+    if (hasMigratedRef.current) return; // Only run once
+    
+    const registry = EngineRegistry.getInstance();
+    const currentDefault = registry.getDefaultEngine();
+    
+    // If user still has old default, migrate to new default (only on first mount)
+    if (selectedEngine === 'morpheus_0.5' && currentDefault !== 'morpheus_0.5') {
+      console.log(`[Display] Auto-migrating from morpheus_0.5 to new default: ${currentDefault}`);
+      setSelectedEngine(currentDefault);
+    }
+    
+    hasMigratedRef.current = true;
+  }, []); // Empty dependency array - runs only on mount
+
   useEffect(() => {
     if (rendererRef.current) {
       rendererRef.current.requestEngineSwitch(selectedEngine);
