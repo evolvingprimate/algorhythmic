@@ -1,0 +1,189 @@
+Totally—let’s teach Maestro a “Portal Cut,” inspired by that Matrix TV→security-cam match. It detects a strong on-frame element, turns it into a “portal,” then warps/blur-traces through it into the next frame.
+
+Here’s a compact, buildable model you can hand to Agent3.
+
+# What the effect should feel like
+
+1. Find a prominent object/region in Frame A (the “anchor”).
+2. Stylize it briefly (distort/CRT/scanlines/edge glow).
+3. Zoom *into that region* with a trace blur and subtle warp.
+4. While zooming, **reveal Frame B inside the portal** first, then let B take over the whole screen.
+
+# Maestro “Portal Cut” operator (new skill)
+
+Add a new operator Maestro can schedule inside a stage:
+
+```json
+{
+  "op": "PortalCut",
+  "anchor": { "type": "auto|box|circle|poly", "rect":[x,y,w,h] },
+  "analyze": { "method":"saliency+edges", "minSize":0.12, "preferAspect":"rect", "fallback":"center" },
+  "stylize": { "preset":"crt", "scanlines":0.4, "vignette":0.3, "aber":0.002 },
+  "warp": { "type":"barrel", "k1":0.12, "ringRipple":0.015, "jitter":0.002 },
+  "traceBlur": { "samples":8, "decay":0.96, "dir":"radial", "strength":0.015 },
+  "zoom": { "durationBeats":8, "ease":"cubicIn", "overshoot":1.06 },
+  "reveal": { "mode":"insideOut", "featherPx":8, "mixCurve":"smoothstep" },
+  "audio": { "gate":"bar", "beatNudgeZoom":0.01 }
+}
+```
+
+# How Maestro finds the “anchor”
+
+Keep it light and GPU/JS friendly:
+
+* **Saliency map** (spectral residual on a 256² downscale) → bright blobs = candidates.
+* **Edge density** (Sobel magnitude summed per superpixel).
+* **Shape preference:** try rectangularity (aspect 1.2–2.5) to catch “screens/doors/panels.” If none, use the largest saliency blob.
+* Result = an **anchor mask** (rect/circle/poly) + its SDF (signed distance field).
+
+Fallbacks:
+
+* If nothing > `minSize` (e.g., 12% of frame area), pick center 30% rect.
+* If the user supplies a box, Maestro uses it.
+
+# Timeline choreography (4 quick phases)
+
+**Phase 1: Prime (0–10%)**
+Subtle stylize on anchor (scanlines/aberration/vignette), faint edge glow.
+
+**Phase 2: Portal Warm-up (10–35%)**
+Introduce **portal warp** on/near anchor SDF (barrel + ring ripple), begin slight zoom toward anchor, start **trace blur** (feedback ping-pong with decay).
+
+**Phase 3: Through the Portal (35–85%)**
+Inside the anchor mask, **render B** (scaled to fit portal) with masked reveal; increase zoom into the portal; trace blur accumulates; outside portal still shows A with stylize.
+
+**Phase 4: Land (85–100%)**
+Expand portal mask (SDF threshold) until it fills frame; reduce warp/blur to 0; remove stylize; end fully on B.
+
+# Implementation sketch (WebGL2)
+
+**1) Analysis (CPU/JS, 256² downscale)**
+
+* Compute saliency (spectral residual) + Sobel edge magnitude.
+* Superpixel grid (e.g., 32×18); score each cell by saliency×edge density.
+* Select largest coherent cluster; fit rect (or circle).
+* Build a **mask/SDF texture** for that anchor (1024² or screen-res).
+
+**2) Feedback ping-pong (trace blur)**
+Render to `F_prev/F_next`:
+
+```
+F_next = mix( sample(F_prev, uv - flow), currentFrame, mixAlpha );
+```
+
+* `flow` is **radial** from anchor center + **ring ripple** on SDF bands.
+* `mixAlpha` small (e.g., 0.08–0.15). Decay `0.94–0.98`.
+
+**3) Portal warp (fragment shader snippets)**
+
+SDF & feather:
+
+```glsl
+float sdf = texture(u_anchorSDF, uv).r;       // 0 at edge, <0 inside, >0 outside
+float portal = smoothstep(-feather, feather, -sdf); // 1 inside, 0 outside
+```
+
+Barrel + ripple:
+
+```glsl
+vec2 toC = uv - anchorCenter;
+float r = length(toC);
+float ripple = sin( (r - r0)*40.0 - time*6.0 ) * u_ringRipple; // gentle
+float barrel = 1.0 + u_k1 * r*r + ripple;
+vec2 uvWarp = anchorCenter + toC * barrel;
+```
+
+Chromatic aberration (inside portal only):
+
+```glsl
+vec2 off = normalize(toC) * u_aber;
+vec3 a = texture(u_imgA, uvWarp - off).rgb;
+vec3 b = texture(u_imgA, uvWarp).rgb;
+vec3 c = texture(u_imgA, uvWarp + off).rgb;
+vec3 crt = vec3(a.r, b.g, c.b);
+```
+
+Scanlines/vignette (cheap):
+
+```glsl
+float scan = 0.5 + 0.5*sin((uv.y*res.y)*3.14159) * u_scanStr;
+float vig = smoothstep(1.0, 0.8, length(uv-0.5)*1.2);
+vec3 stylized = mix(texture(u_imgA, uvWarp).rgb, crt, u_crtMix) * mix(1.0, scan, u_scanlines) * mix(1.0, vig, u_vignette);
+```
+
+**4) Reveal B inside the portal**
+
+* Compute `uvB` by mapping the anchor rect to B’s full image (with letterbox fit).
+* Inside portal: `color = mix(stylizedA, texB(uvB), revealMask)`.
+* `revealMask = smoothstep(th0, th1, portalGrowth)` where `portalGrowth` increases with **zoom progress**.
+
+**5) Zoom choreography**
+
+* Maintain a camera transform that **moves the anchor center to the screen center** and **scales** by `zoom(t)` (ease `cubicIn` with a small overshoot 1.06, then settle).
+* Apply the same transform to A’s sampling coords. For B, start with its view locked to the anchor bounds; once portal covers ≥80% of screen, blend to full-frame B UVs.
+
+**6) Final blend with feedback**
+
+* Composite: `out = mix(feedbackSample, portalComposite, portalCompositeAlpha)`; write to `F_next`; swap.
+
+# Maestro’s planning rule (when to use PortalCut)
+
+* Use PortalCut if:
+
+  * `saliencyLargest >= 0.12` of frame **or**
+  * rectangle score high (likely “screen/door/window”) **or**
+  * user prompts “use portal cut”
+    Else fallback to standard morph.
+
+# DSL example Maestro emits
+
+```json
+{
+  "preset": "Graphic",
+  "caps": { "dispAmpPx": 3.0, "tRatePerSec": 0.12 },
+  "stages": [
+    { "name":"Prime", "range":[0.00,0.10],
+      "ops":[
+        {"op":"PortalCut",
+         "anchor":{"type":"auto"},
+         "analyze":{"method":"saliency+edges","minSize":0.12,"preferAspect":"rect","fallback":"center"},
+         "stylize":{"preset":"crt","scanlines":0.45,"vignette":0.3,"aber":0.002},
+         "warp":{"type":"barrel","k1":0.12,"ringRipple":0.012,"jitter":0.001},
+         "traceBlur":{"samples":8,"decay":0.97,"dir":"radial","strength":0.012},
+         "zoom":{"durationBeats":8,"ease":"cubicIn","overshoot":1.06},
+         "reveal":{"mode":"insideOut","featherPx":8,"mixCurve":"smoothstep"},
+         "audio":{"gate":"bar","beatNudgeZoom":0.01}
+        }
+      ]},
+    { "name":"ThroughPortal", "range":[0.10,0.85], "ops":[{"op":"PortalCut","continue":true}]},
+    { "name":"Land", "range":[0.85,1.00],
+      "ops":[
+        {"op":"PortalCut","continue":true,
+         "warp":{"k1":0.04,"ringRipple":0.0},
+         "traceBlur":{"decay":0.95,"strength":0.006},
+         "zoom":{"overshoot":1.00}
+        }
+      ]}
+  ],
+  "audioMap": { "beatNudgeT": 0.02, "latencyMs": -50 },
+  "qualityCheck": { "continuityOK": true, "capsRespected": true, "notes": ["Anchor area=0.19, rect shape chosen"] }
+}
+```
+
+# What to ask Agent3 to build (prompt)
+
+* Add a **PortalCut operator** with:
+
+  * Saliency+edges anchor detection (256² downscale).
+  * Anchor SDF texture generation.
+  * Portal warp shader (barrel + ripple + aberration + scanlines).
+  * Feedback ping-pong for trace blur.
+  * Camera transform to zoom to the anchor.
+  * Inside-portal reveal of B with feathered growth; switch to full B near the end.
+* Expose tunables shown in the JSON.
+* Stage gates on bars; small beat nudges to zoom.
+* Hard caps: displacement ≤ 3 px, decay 0.94–0.99, aberration ≤ 0.004.
+
+---
+
+This gives Maestro a crisp, teachable primitive: “find a portal, stylize it, warp/blur/zoom through, reveal the next scene.” It nails the Matrix vibe with only classic tricks—no heavy ML required.
