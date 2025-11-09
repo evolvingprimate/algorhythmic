@@ -619,8 +619,8 @@ export class PostgresStorage implements IStorage {
   }
 
   async getUnseenArtworks(userId: string, limit: number = 20): Promise<ArtSession[]> {
-    // LEFT JOIN to filter artworks viewed in last 7 days
-    // This allows artworks to reappear after a week
+    // LEFT JOIN to exclude ALL artworks this user has ever viewed
+    // Simple: if they've seen it, don't show it again
     const results = await this.db
       .select(getTableColumns(artSessions))
       .from(artSessions)
@@ -631,12 +631,7 @@ export class PostgresStorage implements IStorage {
           eq(userArtImpressions.userId, userId)
         )
       )
-      .where(
-        or(
-          isNull(userArtImpressions.viewedAt),
-          lt(userArtImpressions.viewedAt, sql`NOW() - INTERVAL '7 days'`)
-        )
-      )
+      .where(isNull(userArtImpressions.id))
       .orderBy(desc(artSessions.createdAt))
       .limit(limit);
     
