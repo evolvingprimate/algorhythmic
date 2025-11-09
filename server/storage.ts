@@ -69,6 +69,7 @@ export interface IStorage {
   
   // User Art Impressions (Freshness Pipeline)
   recordImpression(userId: string, artworkId: string): Promise<void>;
+  recordBatchImpressions(userId: string, artworkIds: string[]): Promise<number>;
   getUnseenArtworks(userId: string, limit?: number): Promise<ArtSession[]>;
   getFreshArtworks(sessionId: string, userId: string, limit?: number): Promise<ArtSession[]>; // Fresh AI-generated artwork (priority queue)
   
@@ -235,6 +236,11 @@ export class MemStorage implements IStorage {
   async recordImpression(userId: string, artworkId: string): Promise<void> {
     // Stub implementation (not used, DbStorage handles this)
     return;
+  }
+
+  async recordBatchImpressions(userId: string, artworkIds: string[]): Promise<number> {
+    // Stub implementation (not used, DbStorage handles this)
+    return artworkIds.length;
   }
 
   async getUnseenArtworks(userId: string, limit: number = 20): Promise<ArtSession[]> {
@@ -685,6 +691,28 @@ export class PostgresStorage implements IStorage {
         target: [userArtImpressions.userId, userArtImpressions.artworkId],
         set: { viewedAt: sql`NOW()` } // Update timestamp on conflict
       });
+  }
+
+  async recordBatchImpressions(userId: string, artworkIds: string[]): Promise<number> {
+    if (!artworkIds.length) return 0;
+    
+    // CRITICAL: UPSERT to update viewedAt timestamp on repeat views (same as recordImpression)
+    // This resets the 7-day cooldown each time artwork is seen
+    const rows = artworkIds.map(artworkId => ({
+      userId,
+      artworkId,
+      viewedAt: sql`NOW()` as any,
+    }));
+    
+    await this.db
+      .insert(userArtImpressions)
+      .values(rows)
+      .onConflictDoUpdate({
+        target: [userArtImpressions.userId, userArtImpressions.artworkId],
+        set: { viewedAt: sql`NOW()` } // Update timestamp on conflict (maintains cooldown logic)
+      });
+    
+    return artworkIds.length;
   }
 
   async getUnseenArtworks(userId: string, limit: number = 20): Promise<ArtSession[]> {

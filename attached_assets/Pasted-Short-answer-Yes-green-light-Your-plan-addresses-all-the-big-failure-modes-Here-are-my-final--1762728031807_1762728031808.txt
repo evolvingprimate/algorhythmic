@@ -1,0 +1,183 @@
+Short answer: **Yes—green light.** Your plan addresses all the big failure modes. Here are my final tweaks to make it bulletproof, plus copy-paste snippets.
+
+---
+
+## ✅ Fix #1: Batched impressions (server)
+
+**Route (Express + Drizzle example):**
+
+```ts
+// server/routes.ts
+app.post("/api/artworks/batch-impressions", isAuthenticated, async (req, res) => {
+  const userId = req.user.claims.sub;
+  const { artworkIds } = req.body as { artworkIds?: string[] };
+
+  // Validate input
+  if (!Array.isArray(artworkIds) || artworkIds.length === 0) {
+    return res.status(400).json({ error: "artworkIds[] required" });
+  }
+  // Guardrails
+  const MAX_BATCH = 200;
+  if (artworkIds.length > MAX_BATCH) {
+    return res.status(413).json({ error: `Limit ${MAX_BATCH} ids per call` });
+  }
+
+  // De-dupe and sanitize
+  const ids = Array.from(new Set(artworkIds.map(String))).filter(Boolean);
+
+  // Optional: verify IDs exist (prevents junk rows)
+  // const existing = await db.select({ id: artSessions.id })
+  //   .from(artSessions).where(inArray(artSessions.id, ids));
+  // const existingIds = new Set(existing.map(r => r.id));
+
+  // Bulk upsert
+  const rows = ids.map(id => ({
+    userId,
+    artworkId: id,
+    viewedAt: sql`NOW()`,
+  }));
+
+  try {
+    await db.insert(userArtImpressions)
+      .values(rows)
+      .onConflictDoNothing(); // unique (userId, artworkId)
+
+    return res.json({ recorded: rows.length });
+  } catch (e) {
+    // Prefer partial success semantics if your driver supports it
+    return res.status(500).json({ error: "Batch insert failed" });
+  }
+});
+```
+
+**DB invariants (ensure these exist):**
+
+```sql
+-- Speeds joins and enforces idempotency
+CREATE UNIQUE INDEX IF NOT EXISTS ux_impressions_user_art
+  ON user_art_impressions (userId, artworkId);
+CREATE INDEX IF NOT EXISTS ix_impressions_user ON user_art_impressions (userId);
+```
+
+---
+
+## ✅ Fix #1 (frontend)
+
+**Mutation hook:**
+
+```ts
+const batchRecordImpressionsMutation = useMutation({
+  mutationFn: async (artworkIds: string[]) =>
+    apiRequest("POST", "/api/artworks/batch-impressions", { artworkIds }),
+  onSuccess: (_, ids) => {
+    // mark client-side so we don’t re-send
+    ids.forEach(id => recordedImpressions.current.add(id));
+  },
+});
+```
+
+**Initial-load effect (single call):**
+
+```ts
+useEffect(() => {
+  const serverArtworks = unseenResponse?.artworks ?? [];
+  const idsToRecord = serverArtworks
+    .map(a => a.id)
+    .filter(id => id && !recordedImpressions.current.has(id));
+
+  if (idsToRecord.length) {
+    batchRecordImpressionsMutation.mutate(idsToRecord);
+  }
+}, [unseenResponse?.artworks]);
+```
+
+> If you only want to backfill **legacy** (pre-impressions) items, you can gate this once per user (e.g., a `localStorage` flag or a server field `impressionsBackfilledAt`).
+
+**Optionally expose an admin one-shot endpoint** (safer, faster for many users) to backfill everything once; then remove/disable it.
+
+---
+
+## ✅ Fix #2: Cache busting without Vite config changes
+
+**Best practice:**
+
+* **No-cache for HTML** (so a reload pulls the latest index.html which in turn points to latest assets).
+* **Cache static assets** aggressively (they’re hashed).
+* You can do this entirely in Express.
+
+```ts
+// server/index.ts
+app.use((req, res, next) => {
+  if (req.path === "/" || req.path.endsWith(".html")) {
+    res.setHeader("Cache-Control", "no-cache");
+  }
+  next();
+});
+
+app.use(express.static("dist", {
+  // Leave JS/CSS/images with default (hashed) caching headers, or:
+  // setHeaders: (res, path) => {
+  //   if (path.endsWith(".html")) res.setHeader("Cache-Control", "no-cache");
+  // }
+}));
+```
+
+**If you want a belt-and-suspenders option:** add a **query param in `index.html`** to hard-bust the bundle src:
+
+```html
+<script type="module" src="/assets/main.js?v=BUILD_20251109"></script>
+```
+
+(You can update this with your build script.)
+
+Short-term: tell users to **hard refresh** (Cmd/Ctrl+Shift+R) once.
+
+---
+
+## Fresh artwork flow (keep as-is)
+
+* Pin (3s) ✅
+* Priority insert (`insertFrameAfterCurrent`) ✅
+* Triple guards (pinned/hasFrameById/impression) ✅
+* Debounced refetch (250ms) with `refetchType: "active"` + exact key ✅
+
+---
+
+## Answers to your questions
+
+**Batching Strategy?**
+✅ Single endpoint is the right call. Lower latency, fewer failure points, transactional, idempotent with unique index.
+
+**Cache Busting: Query param vs headers?**
+
+* **Do both** for reliability: *headers for HTML no-cache* + a **build-version query param** on your main module. Since Vite config is frozen, Express headers + query param in `index.html` are perfect.
+
+**Error Handling for batch endpoint?**
+
+* Return `{ recorded }` on success.
+* On failure, respond 500. If you need partial success semantics, you can:
+
+  * wrap in a transaction and fail all (simpler), or
+  * attempt per-row and return `{ recorded, failedIds }` (more complex, usually unnecessary).
+
+**Rate limiting?**
+
+* Not strictly needed with averages of 6 and caps of ~50.
+* Add a simple per-user limiter if you expect untrusted traffic (e.g., 10 batch calls/min). The unique constraint already prevents spam duplicates.
+
+---
+
+## Final checklist to ship
+
+* [ ] Add `/api/artworks/batch-impressions` + unique DB index.
+* [ ] Switch initial load to **one** batch mutation.
+* [ ] Add **no-cache** headers for HTML; optionally add `?v=BUILD_ID` to your bundle tag.
+* [ ] Keep pinning/debounce/guards as implemented.
+* [ ] QA: hard refresh → generate → confirm:
+
+  * `[FlickerFix]` logs appear,
+  * **no** old 6 items recur,
+  * fresh artwork shows instantly, **no flicker**,
+  * impressions are recorded once per artwork.
+
+This plan covers all concerns. You’re good to proceed. 🚀

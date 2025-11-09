@@ -582,6 +582,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Batch impression recording (for legacy artwork backfill + performance)
+  app.post("/api/artworks/batch-impressions", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { artworkIds } = req.body as { artworkIds?: string[] };
+      
+      // Validation: check array exists
+      if (!Array.isArray(artworkIds) || artworkIds.length === 0) {
+        return res.status(400).json({ error: "artworkIds[] required" });
+      }
+      
+      // Guardrails: max batch size
+      const MAX_BATCH = 200;
+      if (artworkIds.length > MAX_BATCH) {
+        return res.status(413).json({ error: `Limit ${MAX_BATCH} ids per call` });
+      }
+      
+      // Deduplication and sanitization
+      const ids = Array.from(new Set(artworkIds.map(String))).filter(Boolean);
+      
+      // Batch insert
+      const recorded = await storage.recordBatchImpressions(userId, ids);
+      
+      console.log(`[Freshness] Batch recorded ${recorded} impressions - User: ${userId}`);
+      res.json({ recorded });
+    } catch (error: any) {
+      console.error('[Freshness] Error batch recording impressions:', error);
+      res.status(500).json({ error: "Batch insert failed" });
+    }
+  });
+
   // Recent artworks endpoint (for display page morphing)
   // GLOBAL POOL: Returns artworks from all users for discovery and instant display
   app.get("/api/recent-artworks", isAuthenticated, async (req: any, res) => {

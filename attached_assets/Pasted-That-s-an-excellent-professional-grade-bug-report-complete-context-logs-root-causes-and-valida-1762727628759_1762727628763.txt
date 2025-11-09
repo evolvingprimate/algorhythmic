@@ -1,0 +1,162 @@
+That’s an excellent, professional-grade bug report — complete context, logs, root causes, and validation flow. Here’s my peer-review from a systems and data-integrity standpoint, focusing on your **backfill strategy**, **performance implications**, and **edge-case handling**.
+
+---
+
+## 🧩 Peer-Review Summary
+
+The diagnoses are spot-on:
+
+* **Old artwork recycling** is a direct result of missing `user_art_impressions` entries.
+* **Stale bundle** explains missing `[FlickerFix]` logs (and should be resolved by cache busting).
+* **Flicker fix** and **pinning** are solid, no regression paths detected.
+
+The remaining concern is **data hygiene** (legacy artwork without impressions) and how to remediate it efficiently.
+
+---
+
+## 🩹 Issue #1: Old Artwork Recycling — Recommended Fix Approach
+
+### ✅ Preferred Strategy: One-time server-side backfill endpoint
+
+A one-time endpoint is cleaner, faster, and guarantees completeness.
+Relying on the client to backfill during page load introduces race risk (user drops session mid-loop, impressions recorded inconsistently).
+
+**Implementation sketch:**
+
+```ts
+// POST /api/artworks/backfill-impressions
+app.post("/api/artworks/backfill-impressions", isAuthenticated, async (req, res) => {
+  const userId = req.user.claims.sub;
+
+  // Find artworks with no impressions for this user
+  const unrecorded = await db
+    .select({ id: artSessions.id })
+    .from(artSessions)
+    .leftJoin(userArtImpressions,
+      and(eq(artSessions.id, userArtImpressions.artworkId),
+          eq(userArtImpressions.userId, userId))
+    )
+    .where(isNull(userArtImpressions.id));
+
+  if (!unrecorded.length) return res.json({ updated: 0 });
+
+  // Bulk insert impressions with conflict handling
+  await db.insert(userArtImpressions).values(
+    unrecorded.map(a => ({
+      userId,
+      artworkId: a.id,
+      viewedAt: sql`NOW()`
+    }))
+  ).onConflictDoNothing();
+
+  res.json({ updated: unrecorded.length });
+});
+```
+
+**Pros**
+
+* Single query per user instead of N mutations from the client.
+* Can be triggered once via admin script or user dashboard action.
+* Leaves a clean, auditable log (`updated: n`).
+
+**After one-time run:** remove the endpoint or protect it behind an admin flag.
+
+---
+
+### ⚙️ Alternative: Client-side incremental backfill
+
+Your proposed in-app loop works, but add a simple throttle:
+
+```ts
+for (const artwork of validatedArtworks) {
+  if (!recordedImpressions.current.has(artwork.id)) {
+    recordedImpressions.current.add(artwork.id);
+    // small delay every 5 inserts to avoid burst
+    await recordImpressionMutation.mutateAsync(artwork.id);
+    await new Promise(r => setTimeout(r, 50));
+  }
+}
+```
+
+Use this only if you expect < 20 missing rows per user; otherwise, prefer server-side.
+
+---
+
+## ⚡ Performance Review
+
+* **Bulk backfill:** O(n) inserts, easily handled (< 1 ms per row with Postgres upsert).
+* **Client loop:** fine up to ~50 artworks, but use batching if more.
+* **Future prevention:** ensure that every artwork inserted triggers `recordImpression` once displayed (you already do this).
+
+---
+
+## 🧠 Edge-Case Recommendations
+
+| Case                                | Recommended Action                                                                                       |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| **Hundreds of legacy artworks**     | Do one-time server-side migration (script or endpoint). Don’t run on every load.                         |
+| **Users with 0 impressions at all** | Run migration automatically on next login; set a flag `impressions_backfilled = true` to skip next time. |
+| **High concurrency**                | Use `ON CONFLICT DO NOTHING` to avoid unique-constraint errors.                                          |
+| **Partial replication lag**         | Not relevant here—backfill acts on persisted rows only.                                                  |
+
+---
+
+## 🧹 Optional Enhancements
+
+### 1. Add a 7-day freshness cutoff (defensive)
+
+To prevent ancient artworks from resurfacing if impressions ever fail again:
+
+```ts
+.where(gte(artSessions.createdAt, sql`NOW() - interval '7 days'`))
+```
+
+This keeps your unseen pool current even if impressions desync.
+
+### 2. Add DB index
+
+Ensure the impressions join is efficient:
+
+```sql
+CREATE INDEX ON user_art_impressions (userId, artworkId);
+```
+
+### 3. Safety metric
+
+Expose `/api/artworks/stats` returning counts:
+
+```json
+{
+  "fresh": 1,
+  "storage": 0,
+  "legacy_untracked": 0
+}
+```
+
+That gives quick observability for QA.
+
+---
+
+## ✅ Peer-Review Verdict
+
+| Area                  | Verdict                             | Notes                                           |
+| --------------------- | ----------------------------------- | ----------------------------------------------- |
+| Root cause analysis   | ✅ Accurate                          | Replication + legacy data confirmed             |
+| Pinning & flicker fix | ✅ Stable                            | No regressions expected                         |
+| Backfill plan         | ✅ Recommended via one-time endpoint | Cleaner than client loop                        |
+| Performance impact    | ✅ Negligible                        | O(n) bulk insert                                |
+| Edge-case coverage    | ✅ Complete                          | Add 7-day cutoff if you want tighter UX control |
+
+---
+
+### 🧭 Final Recommendation
+
+1. **Implement the one-time backfill endpoint.**
+   Run it once for all users with missing impressions (or allow self-service trigger).
+
+2. **Hard refresh browsers** to pick up the new bundle (and add cache-busting hash to your Vite build).
+
+3. **Keep the 3-second pinning and debounce**—those are production-grade fixes now.
+
+Once the backfill runs, you’ll have a **fully self-healing freshness pipeline**:
+No stale recycles, no flicker, no race conditions—stable, deterministic artwork flow.
