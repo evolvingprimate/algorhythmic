@@ -370,20 +370,20 @@ export default function Display() {
       const loadValidatedFrames = async () => {
         try {
           setIsValidatingImages(true); // Show loading spinner
-          console.log(`[Display] 🔍 Starting smart validation (max 3 attempts)...`);
+          console.log(`[Display] 🔍 Loading artworks in FIFO order (max 20)...`);
         
-        // RANDOMIZE: Shuffle artworks for variety
-        const shuffled = [...recentArtworks].sort(() => Math.random() - 0.5);
+        // FIFO ORDER: Load artworks sequentially (no shuffle) for true freshness
+        const orderedArtworks = [...recentArtworks];
         
         // Track validated artworks for UI selection
         const validatedArtworks: typeof recentArtworks = [];
         
-        // SMART BAILOUT: Try only 3 random images (don't exhaust entire library)
-        const MAX_VALIDATION_ATTEMPTS = 3;
+        // FRESHNESS: Load up to 20 artworks to fill MorphEngine pool
+        const MAX_VALIDATION_ATTEMPTS = 20;
         let attemptCount = 0;
         
-        for (let i = 0; i < shuffled.length && attemptCount < MAX_VALIDATION_ATTEMPTS; i++) {
-          const artwork = shuffled[i];
+        for (let i = 0; i < orderedArtworks.length && attemptCount < MAX_VALIDATION_ATTEMPTS; i++) {
+          const artwork = orderedArtworks[i];
           attemptCount++;
           
           console.log(`[Display] Attempt ${attemptCount}/${MAX_VALIDATION_ATTEMPTS}: Validating ${artwork.imageUrl.substring(0, 60)}...`);
@@ -435,10 +435,10 @@ export default function Display() {
           console.log(`[Display] ✅ Loaded frame ${validatedArtworks.length}: ${artwork.prompt?.substring(0, 50)}...`);
         }
         
-        // QUICK BAILOUT: If all 3 attempts failed, trigger seamless auto-generation
+        // QUICK BAILOUT: If all attempts failed, trigger seamless auto-generation
         if (validatedArtworks.length === 0) {
           console.error(`[Display] 🚨 BAILOUT: All ${MAX_VALIDATION_ATTEMPTS} validation attempts failed.`);
-          console.error('[Display] Gallery validation failed after 3 attempts, generating fresh artwork');
+          console.error(`[Display] Gallery validation failed after ${MAX_VALIDATION_ATTEMPTS} attempts, generating fresh artwork`);
           
           // SEAMLESS FALLBACK: Auto-generate 2 fresh images (no error message to user!)
           toast({

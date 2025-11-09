@@ -1015,3 +1015,5 @@ export class PostgresStorage implements IStorage {
 export const storage = process.env.DATABASE_URL 
   ? new PostgresStorage() 
   : new MemStorage();
+
+console.log(`[Storage] Initialized: ${storage instanceof PostgresStorage ? 'PostgresStorage' : 'MemStorage'} (DATABASE_URL=${!!process.env.DATABASE_URL})`);
