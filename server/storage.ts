@@ -12,12 +12,18 @@ import {
   type InsertDailyUsage,
   type StorageMetric,
   type InsertStorageMetric,
+  type RaiSession,
+  type InsertRaiSession,
+  type TelemetryEvent,
+  type InsertTelemetryEvent,
   artPreferences,
   artVotes,
   artSessions,
   users,
   dailyUsage,
   storageMetrics,
+  raiSessions,
+  telemetryEvents,
   SUBSCRIPTION_TIERS,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
@@ -81,6 +87,11 @@ export interface IStorage {
     avgVerificationTime: number;
     recentFailures: StorageMetric[];
   }>;
+
+  // RAI Telemetry (Phase 2)
+  createRaiSession(userId: string | null, artworkId?: string, genomeId?: string): Promise<RaiSession>;
+  endRaiSession(sessionId: string): Promise<void>;
+  createTelemetryEvents(events: InsertTelemetryEvent[]): Promise<void>;
 }
 
 export class MemStorage implements IStorage {
@@ -396,6 +407,30 @@ export class MemStorage implements IStorage {
       avgVerificationTime: 0,
       recentFailures: [],
     };
+  }
+
+  // RAI Telemetry Methods (Phase 2) - Stubs for MemStorage
+  async createRaiSession(userId: string | null, artworkId?: string, genomeId?: string): Promise<RaiSession> {
+    const session: RaiSession = {
+      id: randomUUID(),
+      userId,
+      artworkId: artworkId || null,
+      genomeId: genomeId || null,
+      audioContext: null,
+      visualContext: null,
+      startedAt: new Date(),
+      endedAt: null,
+      durationSeconds: null,
+    };
+    return session;
+  }
+
+  async endRaiSession(sessionId: string): Promise<void> {
+    // MemStorage doesn't persist sessions
+  }
+
+  async createTelemetryEvents(events: InsertTelemetryEvent[]): Promise<void> {
+    // MemStorage doesn't persist telemetry
   }
 }
 
@@ -734,6 +769,61 @@ export class PostgresStorage implements IStorage {
       avgVerificationTime,
       recentFailures,
     };
+  }
+
+  // ============================================================================
+  // RAI Telemetry Methods (Phase 2)
+  // ============================================================================
+
+  async createRaiSession(userId: string | null, artworkId?: string, genomeId?: string): Promise<RaiSession> {
+    const sessionData: InsertRaiSession = {
+      userId,
+      artworkId: artworkId || null,
+      genomeId: genomeId || null,
+      audioContext: null,
+      visualContext: null,
+      endedAt: null,
+      durationSeconds: null,
+    };
+
+    const [session] = await this.db
+      .insert(raiSessions)
+      .values(sessionData)
+      .returning();
+
+    return session;
+  }
+
+  async endRaiSession(sessionId: string): Promise<void> {
+    const session = await this.db
+      .select()
+      .from(raiSessions)
+      .where(eq(raiSessions.id, sessionId))
+      .limit(1);
+
+    if (session.length === 0) {
+      throw new Error(`Session ${sessionId} not found`);
+    }
+
+    const startedAt = session[0].startedAt;
+    const endedAt = new Date();
+    const durationSeconds = Math.floor((endedAt.getTime() - startedAt.getTime()) / 1000);
+
+    await this.db
+      .update(raiSessions)
+      .set({
+        endedAt,
+        durationSeconds,
+      })
+      .where(eq(raiSessions.id, sessionId));
+  }
+
+  async createTelemetryEvents(events: InsertTelemetryEvent[]): Promise<void> {
+    if (events.length === 0) {
+      return;
+    }
+
+    await this.db.insert(telemetryEvents).values(events);
   }
 }
 

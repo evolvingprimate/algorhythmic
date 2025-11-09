@@ -130,6 +130,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ============================================================================
+  // PHASE 2: RAI Telemetry API Routes
+  // ============================================================================
+
+  // Start a new RAI session
+  app.post('/api/telemetry/session/start', async (req, res) => {
+    try {
+      const { userId, artworkId, genomeId } = req.body;
+      const session = await storage.createRaiSession(userId, artworkId, genomeId);
+      res.json({ sessionId: session.id });
+    } catch (error: any) {
+      console.error("Error starting RAI session:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // End a RAI session
+  app.post('/api/telemetry/session/end', async (req, res) => {
+    try {
+      const { sessionId } = req.body;
+      await storage.endRaiSession(sessionId);
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("Error ending RAI session:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Batch insert telemetry events
+  app.post('/api/telemetry/events', async (req, res) => {
+    try {
+      const { events } = req.body;
+      if (!Array.isArray(events) || events.length === 0) {
+        return res.status(400).json({ message: "Events array is required" });
+      }
+      
+      await storage.createTelemetryEvents(events);
+      res.json({ success: true, count: events.length });
+    } catch (error: any) {
+      console.error("Error inserting telemetry events:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // Generate art based on audio analysis - REQUIRES AUTHENTICATION
   app.post("/api/generate-art", isAuthenticated, async (req: any, res) => {
     try {
