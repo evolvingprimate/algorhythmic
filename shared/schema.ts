@@ -118,6 +118,123 @@ export const storageMetrics = pgTable("storage_metrics", {
   userIdIdx: index("storage_metrics_user_id_idx").on(table.userId),
 }));
 
+// ============================================================================
+// PHASE 2: RAI (Real-time Aesthetic Intelligence) Tables
+// ============================================================================
+
+// RAI Sessions - Maestro playback sessions for telemetry grouping
+export const raiSessions = pgTable("rai_sessions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").references(() => users.id, { onDelete: "cascade" }),
+  artworkId: varchar("artwork_id").references(() => artSessions.id, { onDelete: "set null" }),
+  genomeId: varchar("genome_id"), // Reference to dna_genomes.id (nullable for initial sessions)
+  audioContext: text("audio_context"), // JSON: {bpm, energy, mood, musicTrack}
+  visualContext: text("visual_context"), // JSON: {style, palette, effectsActive}
+  startedAt: timestamp("started_at").notNull().defaultNow(),
+  endedAt: timestamp("ended_at"),
+  durationSeconds: integer("duration_seconds"),
+}, (table) => ({
+  userIdIdx: index("rai_sessions_user_id_idx").on(table.userId),
+  artworkIdIdx: index("rai_sessions_artwork_id_idx").on(table.artworkId),
+  genomeIdIdx: index("rai_sessions_genome_id_idx").on(table.genomeId),
+  startedAtIdx: index("rai_sessions_started_at_idx").on(table.startedAt),
+}));
+
+// Telemetry Events - Append-only log of all user/system events
+export const telemetryEvents = pgTable("telemetry_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sessionId: varchar("session_id").notNull().references(() => raiSessions.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").references(() => users.id, { onDelete: "cascade" }),
+  eventType: text("event_type").notNull(), // session_start, session_end, artwork_impression, user_action, control_adjustment, climax_detected, vision_analyzed
+  eventData: text("event_data").notNull(), // JSON: type-specific payload
+  audioFeatures: text("audio_features"), // JSON snapshot: {rms, onsetStrength, beatConfidence, bpm}
+  visualState: text("visual_state"), // JSON snapshot: {currentFrame, effectsActive, parameterValues}
+  timestamp: timestamp("timestamp").notNull().defaultNow(),
+}, (table) => ({
+  sessionIdIdx: index("telemetry_events_session_id_idx").on(table.sessionId),
+  eventTypeIdx: index("telemetry_events_event_type_idx").on(table.eventType),
+  timestampIdx: index("telemetry_events_timestamp_idx").on(table.timestamp),
+  userIdIdx: index("telemetry_events_user_id_idx").on(table.userId),
+}));
+
+// DNA Genomes - Baseline and evolved genome definitions
+export const dnaGenomes = pgTable("dna_genomes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  artworkId: varchar("artwork_id").references(() => artSessions.id, { onDelete: "cascade" }),
+  parentGenomeIds: text("parent_genome_ids").array(), // For crossover tracking
+  generation: integer("generation").notNull().default(0), // 0 = baseline, >0 = evolved
+  dnaVector: text("dna_vector").notNull(), // JSON: 50-point genome
+  visualTraits: text("visual_traits").notNull(), // JSON: {palette, motion, complexity, energy}
+  audioReactivity: text("audio_reactivity"), // JSON: parameter response curves
+  fitnessScore: integer("fitness_score"), // Engagement-based fitness (0-1000)
+  impressionCount: integer("impression_count").notNull().default(0),
+  likeCount: integer("like_count").notNull().default(0),
+  skipCount: integer("skip_count").notNull().default(0),
+  avgViewDuration: integer("avg_view_duration"), // Seconds
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  lastEvaluated: timestamp("last_evaluated"), // Last fitness calculation
+}, (table) => ({
+  artworkIdIdx: index("dna_genomes_artwork_id_idx").on(table.artworkId),
+  generationIdx: index("dna_genomes_generation_idx").on(table.generation),
+  fitnessScoreIdx: index("dna_genomes_fitness_score_idx").on(table.fitnessScore),
+  createdAtIdx: index("dna_genomes_created_at_idx").on(table.createdAt),
+}));
+
+// Trend Weights - Time-bucketed parameter preference matrices
+export const trendWeights = pgTable("trend_weights", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  timeBucket: text("time_bucket").notNull(), // hourly, daily, weekly
+  bucketStart: timestamp("bucket_start").notNull(),
+  bucketEnd: timestamp("bucket_end").notNull(),
+  moodCategory: text("mood_category"), // energetic, calm, dramatic, playful, melancholic
+  parameterWeights: text("parameter_weights").notNull(), // JSON: {particles.spawnRate: {mean, stddev, trend}, ...}
+  genomePreferences: text("genome_preferences"), // JSON: ranked genome IDs by popularity
+  sampleSize: integer("sample_size").notNull(), // Number of events used
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => ({
+  timeBucketIdx: index("trend_weights_time_bucket_idx").on(table.timeBucket, table.bucketStart),
+  moodCategoryIdx: index("trend_weights_mood_category_idx").on(table.moodCategory),
+  createdAtIdx: index("trend_weights_created_at_idx").on(table.createdAt),
+}));
+
+// Engagement Rollups - Nightly aggregated metrics
+export const engagementRollups = pgTable("engagement_rollups", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  date: varchar("date").notNull(), // YYYY-MM-DD
+  genomeId: varchar("genome_id").references(() => dnaGenomes.id, { onDelete: "cascade" }),
+  artworkId: varchar("artwork_id").references(() => artSessions.id, { onDelete: "cascade" }),
+  impressions: integer("impressions").notNull().default(0),
+  likes: integer("likes").notNull().default(0),
+  skips: integer("skips").notNull().default(0),
+  totalViewDuration: integer("total_view_duration").notNull().default(0), // Seconds
+  avgViewDuration: integer("avg_view_duration"), // Seconds
+  controlAdjustments: integer("control_adjustments").notNull().default(0),
+  engagementScore: integer("engagement_score"), // Weighted composite (0-100)
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => ({
+  dateIdx: index("engagement_rollups_date_idx").on(table.date),
+  genomeIdIdx: index("engagement_rollups_genome_id_idx").on(table.genomeId),
+  artworkIdIdx: index("engagement_rollups_artwork_id_idx").on(table.artworkId),
+  engagementScoreIdx: index("engagement_rollups_engagement_score_idx").on(table.engagementScore),
+}));
+
+// User DNA Profiles - Personal preference evolution per user
+export const userDnaProfiles = pgTable("user_dna_profiles", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  preferredMoods: text("preferred_moods").array(), // [energetic, calm, ...]
+  preferredStyles: text("preferred_styles").array(), // Style IDs
+  preferredGenomes: text("preferred_genomes").array(), // Genome IDs
+  parameterBias: text("parameter_bias"), // JSON: {particles.spawnRate: +20%, warp.elasticity: -10%}
+  likedTraits: text("liked_traits"), // JSON: {palette: [warm, vibrant], motion: [smooth, fast]}
+  sessionCount: integer("session_count").notNull().default(0),
+  lastUpdated: timestamp("last_updated").notNull().defaultNow(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => ({
+  userIdIdx: uniqueIndex("user_dna_profiles_user_id_unique").on(table.userId),
+  lastUpdatedIdx: index("user_dna_profiles_last_updated_idx").on(table.lastUpdated),
+}));
+
 // Insert schemas
 export const insertArtPreferenceSchema = createInsertSchema(artPreferences).omit({
   id: true,
@@ -156,6 +273,38 @@ export const insertArtFavoriteSchema = createInsertSchema(artFavorites).omit({
   createdAt: true,
 });
 
+// RAI insert schemas
+export const insertRaiSessionSchema = createInsertSchema(raiSessions).omit({
+  id: true,
+  startedAt: true,
+});
+
+export const insertTelemetryEventSchema = createInsertSchema(telemetryEvents).omit({
+  id: true,
+  timestamp: true,
+});
+
+export const insertDnaGenomeSchema = createInsertSchema(dnaGenomes).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertTrendWeightSchema = createInsertSchema(trendWeights).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertEngagementRollupSchema = createInsertSchema(engagementRollups).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertUserDnaProfileSchema = createInsertSchema(userDnaProfiles).omit({
+  id: true,
+  createdAt: true,
+  lastUpdated: true,
+});
+
 // Types
 export type ArtPreference = typeof artPreferences.$inferSelect;
 export type InsertArtPreference = z.infer<typeof insertArtPreferenceSchema>;
@@ -177,6 +326,25 @@ export type InsertStorageMetric = z.infer<typeof insertStorageMetricSchema>;
 
 export type ArtFavorite = typeof artFavorites.$inferSelect;
 export type InsertArtFavorite = z.infer<typeof insertArtFavoriteSchema>;
+
+// RAI types
+export type RaiSession = typeof raiSessions.$inferSelect;
+export type InsertRaiSession = z.infer<typeof insertRaiSessionSchema>;
+
+export type TelemetryEvent = typeof telemetryEvents.$inferSelect;
+export type InsertTelemetryEvent = z.infer<typeof insertTelemetryEventSchema>;
+
+export type DnaGenome = typeof dnaGenomes.$inferSelect;
+export type InsertDnaGenome = z.infer<typeof insertDnaGenomeSchema>;
+
+export type TrendWeight = typeof trendWeights.$inferSelect;
+export type InsertTrendWeight = z.infer<typeof insertTrendWeightSchema>;
+
+export type EngagementRollup = typeof engagementRollups.$inferSelect;
+export type InsertEngagementRollup = z.infer<typeof insertEngagementRollupSchema>;
+
+export type UserDnaProfile = typeof userDnaProfiles.$inferSelect;
+export type InsertUserDnaProfile = z.infer<typeof insertUserDnaProfileSchema>;
 
 // Replit Auth specific type
 export type UpsertUser = typeof users.$inferInsert;
