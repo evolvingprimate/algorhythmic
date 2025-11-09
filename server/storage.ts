@@ -174,14 +174,15 @@ export class MemStorage implements IStorage {
     const session: ArtSession = {
       id,
       ...insertSession,
-      userId: insertSession.userId || null,
-      audioFeatures: insertSession.audioFeatures || null,
-      musicTrack: insertSession.musicTrack || null,
-      musicArtist: insertSession.musicArtist || null,
-      musicGenre: insertSession.musicGenre || null,
-      musicAlbum: insertSession.musicAlbum || null,
-      generationExplanation: insertSession.generationExplanation || null,
-      isSaved: insertSession.isSaved || false,
+      userId: insertSession.userId ?? null,
+      dnaVector: insertSession.dnaVector ?? null,
+      audioFeatures: insertSession.audioFeatures ?? null,
+      musicTrack: insertSession.musicTrack ?? null,
+      musicArtist: insertSession.musicArtist ?? null,
+      musicGenre: insertSession.musicGenre ?? null,
+      musicAlbum: insertSession.musicAlbum ?? null,
+      generationExplanation: insertSession.generationExplanation ?? null,
+      isSaved: insertSession.isSaved ?? false,
       createdAt: new Date(),
     };
     this.sessions.set(id, session);
@@ -397,6 +398,13 @@ export class MemStorage implements IStorage {
     return {
       id,
       ...metric,
+      userId: metric.userId ?? null,
+      fileSize: metric.fileSize ?? null,
+      dalleUrl: metric.dalleUrl ?? null,
+      storageUrl: metric.storageUrl ?? null,
+      attemptCount: metric.attemptCount ?? 1,
+      verificationTimeMs: metric.verificationTimeMs ?? null,
+      errorMessage: metric.errorMessage ?? null,
       createdAt: new Date(),
     };
   }
