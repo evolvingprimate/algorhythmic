@@ -33,9 +33,11 @@ const fragmentShader = `
     vec4 colorA = texture2D(u_imageA, v_texCoord);
     vec4 colorB = texture2D(u_imageB, v_texCoord);
     
-    // Aggressive ease-in-cubic: makes new image pop in sooner with more contrast
+    // Balanced ease-in-out-quad: smoother than cubic but still pops with contrast
     float t = u_morphProgress;
-    float easedBlend = t * t * t; // cubic-in curve - accelerates quickly
+    float easedBlend = t < 0.5 
+      ? 2.0 * t * t  // ease-in for first half
+      : 1.0 - pow(-2.0 * t + 2.0, 2.0) / 2.0; // ease-out for second half
     
     gl_FragColor = mix(colorA, colorB, easedBlend);
   }
