@@ -202,21 +202,13 @@ export default function Display() {
 
   // Fetch UNSEEN artwork only - Freshness Pipeline ensures never seeing repeats
   // GATED: Only load artworks after first-time setup is complete
-  // CRITICAL: Query key includes impressionVersion to force fresh fetch after impressions
+  // NOTE: Simple query key without version - cache invalidation happens on explicit triggers only
   const { data: unseenResponse } = useQuery<{
     artworks: any[];
     poolSize: number;
     needsGeneration: boolean;
   }>({
-    queryKey: ["/api/artworks/next", impressionVersion],
-    queryFn: async () => {
-      // Custom queryFn to only use the URL part, not the impression version
-      const response = await fetch("/api/artworks/next", {
-        credentials: 'include'
-      });
-      if (!response.ok) throw new Error('Failed to fetch artworks');
-      return response.json();
-    },
+    queryKey: ["/api/artworks/next"],
     enabled: isAuthenticated && setupComplete, // Block until wizard complete
     refetchOnWindowFocus: false,
     refetchOnMount: true,
@@ -658,14 +650,11 @@ export default function Display() {
   });
 
   // Record impression mutation (Freshness Pipeline)
+  // NOTE: Does NOT increment impressionVersion to avoid infinite refetch loop
+  // Cache invalidation happens only on explicit triggers (manual refresh, pool exhaustion)
   const recordImpressionMutation = useMutation({
     mutationFn: async (artworkId: string) => {
       await apiRequest("POST", `/api/artworks/${artworkId}/viewed`, {});
-    },
-    onSuccess: () => {
-      // CRITICAL: Increment impressionVersion to force fresh artwork query
-      // This changes the query key, guaranteeing React Query fetches new data
-      setImpressionVersion(prev => prev + 1);
     },
   });
 
