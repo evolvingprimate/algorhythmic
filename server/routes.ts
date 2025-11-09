@@ -390,14 +390,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Hybrid gen+retrieve endpoint - Real-time DALL-E generation based on audio context
   // NEW: Accepts optional audio context (music ID, features, DNA) for personalized generation
   // FALLBACK: Returns pool warm-start if no context provided (backward compatible)
-  app.get("/api/artworks/next", isAuthenticated, async (req: any, res) => {
+  app.post("/api/artworks/next", isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
-      const limit = req.query.limit ? parseInt(req.query.limit as string) : 20;
-      
-      // NEW: Parse optional audio context for real-time generation
-      const audioContext = req.query.audioContext ? JSON.parse(req.query.audioContext as string) : null;
-      const generateRealTime = req.query.generateRealTime === 'true';
+      const { audioContext, generateRealTime = false, limit = 20 } = req.body;
       
       // BACKWARD COMPATIBLE: Legacy behavior if no audio context
       if (!audioContext || !generateRealTime) {
@@ -414,30 +410,108 @@ export async function registerRoutes(app: Express): Promise<Server> {
           artworks: unseenArtworks,
           poolSize: unseenArtworks.length,
           needsGeneration,
-          mode: 'pool-only', // Indicator for client
+          mode: 'pool-only',
         });
       }
       
       // NEW: Hybrid gen+retrieve flow
-      console.log(`[Hybrid Gen] User ${userId} - Real-time generation requested with audio context`);
+      console.log(`[Hybrid Gen] User ${userId} - Real-time generation with audio:`, 
+        audioContext.musicId ? `Track: ${audioContext.musicId.title}` : 'No ID');
       
-      // TODO: Implement warm-start pool retrieval using ImagePool service
-      // TODO: Trigger async DALL-E generation with ACRCloud music context
-      // TODO: Emit WebSocket event when generation complete
+      // Step 1: Check daily limits before creating job
+      const usageCheck = await storage.checkDailyLimit(userId);
+      if (!usageCheck.canGenerate) {
+        console.log(`[Hybrid Gen] User ${userId} hit daily limit - falling back to pool only`);
+        const poolArtworks = await storage.getUnseenArtworks(userId, 1);
+        
+        return res.json({
+          warmStart: poolArtworks[0] || null,
+          jobId: null,
+          mode: 'pool-only-limit-reached',
+          limitReached: true,
+          poolSize: poolArtworks.length,
+        });
+      }
       
-      // For now, return pool warm-start as placeholder
-      const unseenArtworks = await storage.getUnseenArtworks(userId, 1);
+      // Step 2: Get user preferences for pool matching
+      const sessionId = `session_${userId}_${Date.now()}`;
+      const preferences = await storage.getPreferencesBySession(sessionId) || {
+        styles: [],
+        artists: [],
+        dynamicMode: false,
+      };
       
+      // Step 3: Find warm-start candidate from pool using ImagePool service
+      const { ImagePoolService } = await import('./services/imagePool');
+      const poolService = new ImagePoolService();
+      
+      // Extract target DNA from audio context (if available)
+      const targetDNA = audioContext.targetDNA || Array(50).fill(0.5);
+      const targetMotifs = [...(preferences.styles || []), ...(preferences.artists || [])];
+      
+      const poolCandidates = await storage.getPoolCandidates(userId, 20, 35);
+      
+      // Convert ArtSession to PoolCandidate format (parse dnaVector from JSON string)
+      const poolCandidatesFormatted = poolCandidates.map(art => ({
+        id: art.id,
+        imageUrl: art.imageUrl,
+        prompt: art.prompt || '',
+        dna: typeof art.dnaVector === 'string' 
+          ? JSON.parse(art.dnaVector) 
+          : (art.dnaVector || Array(50).fill(0.5)),
+        motifs: art.motifs || [],
+        qualityScore: art.qualityScore || 50,
+        sessionId: art.sessionId,
+        userId: art.userId,
+        createdAt: art.createdAt,
+        lastUsedAt: art.lastUsedAt,
+      }));
+      
+      const bestMatch = await poolService.findBest(
+        poolCandidatesFormatted,
+        targetDNA,
+        targetMotifs,
+        { requireQuality: true, minQuality: 35 }
+      );
+      
+      const warmStartMatch = bestMatch ? poolCandidates.find(a => a.id === bestMatch.artwork.id) : null;
+      
+      // Step 4: Create generation job (charges daily limit immediately)
+      const generationJob = await storage.createGenerationJob({
+        userId,
+        audioContext: JSON.stringify(audioContext),
+        warmStartArtworkId: warmStartMatch?.id || null,
+        generatedArtworkId: null,
+        status: 'pending',
+        attemptCount: 0,
+        errorMessage: null,
+        startedAt: null,
+        completedAt: null,
+      });
+      
+      // Increment daily usage immediately (optimistic accounting with date)
+      const today = new Date().toISOString().split('T')[0];
+      await storage.incrementDailyUsage(userId, today);
+      
+      console.log(`[Hybrid Gen] Created job ${generationJob.id} - Warm-start: ${warmStartMatch?.id || 'none'}`);
+      
+      // Step 5: Return warm-start immediately (instant visual)
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
       res.setHeader('Pragma', 'no-cache');
       res.setHeader('Expires', '0');
       
       res.json({
-        warmStart: unseenArtworks[0] || null,
-        jobId: null, // Will be generation job ID for async swap
+        warmStart: warmStartMatch || null,
+        jobId: generationJob.id,
         mode: 'hybrid-gen+retrieve',
-        poolSize: unseenArtworks.length,
+        poolSize: poolCandidates.length,
       });
+      
+      // Step 6: Trigger async DALL-E generation (non-blocking)
+      processGenerationJob(generationJob.id, userId, audioContext, preferences, wss).catch(err => {
+        console.error(`[Hybrid Gen] Async worker failed for job ${generationJob.id}:`, err);
+      });
+      
     } catch (error: any) {
       console.error('[Hybrid Gen] Error in next artwork endpoint:', error);
       res.status(500).json({ message: error.message });
@@ -587,6 +661,153 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // WebSocket server for real-time audio coordination
   const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+
+  /**
+   * Helper: Extract motifs (keywords) from DALL-E prompt
+   * Simple keyword extraction based on art terminology
+   */
+  function extractMotifsFromPrompt(prompt: string): string[] {
+    const motifKeywords = [
+      // Art styles
+      'abstract', 'surreal', 'impressionist', 'expressionist', 'cubist', 'minimalist',
+      'baroque', 'renaissance', 'modern', 'contemporary', 'pop art', 'street art',
+      // Subjects
+      'landscape', 'portrait', 'still life', 'figure', 'nature', 'urban', 'cosmic',
+      'geometric', 'organic', 'floral', 'animal', 'human', 'architectural',
+      // Moods/themes
+      'vibrant', 'dark', 'moody', 'ethereal', 'dreamlike', 'energetic', 'calm',
+      'chaotic', 'harmonious', 'melancholic', 'joyful', 'mysterious',
+      // Techniques
+      'watercolor', 'oil painting', 'digital', 'mixed media', 'collage', 'photographic',
+    ];
+
+    const lowerPrompt = prompt.toLowerCase();
+    return motifKeywords.filter(keyword => lowerPrompt.includes(keyword));
+  }
+
+  /**
+   * Async worker: Process generation job in background
+   * 1. Generate GPT-4 prompt (with ACRCloud music context)
+   * 2. Generate DALL-E 3 image
+   * 3. Download and store image
+   * 4. Update job status
+   * 5. Emit WebSocket event
+   */
+  async function processGenerationJob(
+    jobId: string,
+    userId: string,
+    audioContext: any,
+    preferences: any,
+    wss: WebSocketServer
+  ): Promise<void> {
+    console.log(`[Async Worker] Starting job ${jobId}`);
+    
+    try {
+      // Update job status to processing
+      await storage.updateGenerationJob(jobId, {
+        status: 'processing',
+        startedAt: new Date(),
+        attemptCount: 1,
+      });
+      
+      // Extract music context from ACRCloud (if available)
+      const musicInfo = audioContext.musicId || null;
+      const audioAnalysis = audioContext.features || {
+        amplitude: 0.5,
+        tempo: 120,
+        bassEnergy: 0.5,
+        spectralCentroid: 0.5,
+        mood: 'neutral',
+      };
+      
+      // Step 1: Generate prompt using GPT-4o Vision (correct signature)
+      const promptResult = await generateArtPrompt({
+        audioAnalysis,
+        musicInfo,
+        styles: preferences.styles || [],
+        artists: preferences.artists || [],
+        dynamicMode: preferences.dynamicMode || false,
+        previousVotes: [], // Not needed for first-time generation
+      });
+      
+      console.log(`[Async Worker] Generated prompt for job ${jobId}:`, promptResult.prompt.substring(0, 100));
+      
+      // Step 2: Generate DALL-E 3 image (returns string URL)
+      const imageUrl = await generateArtImage(promptResult.prompt);
+      
+      console.log(`[Async Worker] DALL-E generated image for job ${jobId}`);
+      
+      // Step 3: Extract motifs from prompt (simple keyword extraction)
+      const motifs = extractMotifsFromPrompt(promptResult.prompt);
+      
+      // Step 4: Store artwork in database (stringify dnaVector for storage)
+      const artwork = await storage.createArtSession({
+        sessionId: `job_${jobId}`,
+        imageUrl,
+        prompt: promptResult.prompt,
+        dnaVector: JSON.stringify(promptResult.dnaVector),
+        userId,
+        motifs,
+        qualityScore: 75, // Default quality for fresh generation
+        perceptualHash: null, // Will be computed in future
+        poolStatus: 'active',
+        lastUsedAt: new Date(),
+      });
+      
+      console.log(`[Async Worker] Stored artwork ${artwork.id} for job ${jobId}`);
+      
+      // Step 5: Update generation job with success
+      await storage.updateGenerationJob(jobId, {
+        status: 'completed',
+        generatedArtworkId: artwork.id,
+        completedAt: new Date(),
+      });
+      
+      // Step 5: Emit WebSocket event to notify clients
+      wss.clients.forEach((client) => {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(JSON.stringify({
+            type: 'artwork.swap',
+            data: {
+              jobId,
+              status: 'completed',
+              artwork,
+            },
+          }));
+        }
+      });
+      
+      console.log(`[Async Worker] Job ${jobId} completed successfully - emitted artwork.swap event`);
+      
+    } catch (error: any) {
+      console.error(`[Async Worker] Job ${jobId} failed:`, error);
+      
+      // Update job with error status
+      await storage.updateGenerationJob(jobId, {
+        status: 'failed',
+        errorMessage: error.message,
+        completedAt: new Date(),
+      });
+      
+      // NOTE: Daily usage was charged optimistically on job creation
+      // For now, we don't refund on failure to keep accounting simple
+      // Future: Implement compensating transaction or retry logic
+      
+      // Emit failure event
+      wss.clients.forEach((client) => {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(JSON.stringify({
+            type: 'artwork.swap',
+            data: {
+              jobId,
+              status: 'failed',
+              error: error.message,
+            },
+          }));
+        }
+      });
+    }
+  }
 
   wss.on('connection', (ws: WebSocket) => {
     console.log('Client connected to WebSocket');
