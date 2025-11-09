@@ -333,24 +333,24 @@ export class MaestroControlStore {
   private getDefaultPreferences(): EffectPreferences {
     return {
       particles: {
-        enabled: true,
-        spawnRateMultiplier: 0.3,  // Lower default - was too aggressive
-        velocityMultiplier: 1.0,
-        sizeMultiplier: 1.0,
+        enabled: false,  // TEST: All effects disabled
+        spawnRateMultiplier: 0.0,
+        velocityMultiplier: 0.0,
+        sizeMultiplier: 0.0,
       },
       warp: {
-        enabled: true,
-        elasticityMultiplier: 0.5,  // Lower default
-        radiusMultiplier: 1.0,
+        enabled: false,  // TEST: All effects disabled
+        elasticityMultiplier: 0.0,
+        radiusMultiplier: 0.0,
       },
       mixer: {
-        saturationMultiplier: 1.0,
+        saturationMultiplier: 1.0,  // Keep default
         brightnessMultiplier: 1.0,
         contrastMultiplier: 1.0,
       },
       trace: {
-        enabled: true,
-        strengthMultiplier: 0.7,
+        enabled: false,  // TEST: All effects disabled
+        strengthMultiplier: 0.0,
       },
     };
   }
