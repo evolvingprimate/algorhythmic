@@ -1,0 +1,161 @@
+Love it—that “image pool” turns Maestro into a hybrid **gen+retrieve** system. Here’s a tight way to wire it in so you (a) hide generator hiccups, (b) slash latency/cost, and (c) get *better* visuals via smart reuse.
+
+# Storage-Pool Strategy (Gen + Retrieve)
+
+## 1) What the pool is for
+
+* **Warm start / zero wait:** seed a new hero frame instantly while the generator works in the background.
+* **Hard fallback:** if all models fail, pull a best-match from the pool.
+* **Cost control:** reuse great frames when the target DNA is “close enough.”
+
+## 2) Minimal metadata schema (store per image)
+
+```ts
+type PoolItem = {
+  id: string;                         // uuid
+  imageUrl: string;                   // blob/cdn url
+  w: number; h: number;
+  dna: Uint8Array;                    // 50-D (0..255)
+  embedding?: Float32Array;           // CLIP or similar (optional)
+  artistStatement: string;            // short text
+  motifs: string[];                   // e.g., ["bell","storm","silhouette"]
+  paletteHint?: string;               // "bronze", "icy-cyan"
+  quality: number;                    // 0..1 (aesthetic score)
+  createdAt: number;
+  lastUsedAt?: number;
+  model: "dalle"|"flux"|"sdxl"|"procedural";
+  promptUsed: string; attempts: number; refusalReason?: string;
+  hash: string;                       // perceptual hash for dedupe
+  rights: {                           // provenance for safety
+    likenessAllowed: boolean;
+    source: "generated"|"uploaded";
+    licenseRef?: string;
+  };
+};
+```
+
+## 3) Indexes to maintain
+
+* **Primary:** `byId`
+* **Similarity (fast):** `byDna` (cosine over 50-D, quantized to 0..255)
+* **Motif filter:** inverted index `motif → [itemId]`
+* **Quality/recency:** heaps `topQuality`, `mostRecent`
+* **Dedupe:** perceptual hash (pHash/dHash) map `hash → id`
+
+In-browser: small pools (≤2–5k) → simple cosine scan is fine.
+Server/edge (growing pool): add HNSW/Annoy/FAISS for DNA & CLIP embeddings.
+
+## 4) Retrieval policy (router integrates pool)
+
+**Target context:** `{targetDNA, motifs, latencyBudgetMs, needHeroNow}`
+
+Priority ladder:
+
+1. **Warm start:** if `needHeroNow`, fetch **nearest by DNA** with **motif overlap ≥1** and `quality ≥ Qmin` (e.g., 0.35). Display immediately.
+2. **During gen:** keep rendering the pool frame while the generator runs; swap when a better match arrives (higher `quality` or closer DNA).
+3. **Hard fallback:** if all models fail, pick best from pool:
+
+   * Score = `0.6·cosineDNA + 0.2·motifJaccard + 0.2·quality`
+   * Break ties by recency (less reused → more variety).
+4. **Budget mode:** if cost tight or audio scene stable (DNA change < ε), reuse pool even if gen succeeded recently.
+
+## 5) Scoring details
+
+* **DNA similarity:** cosine over normalized floats (convert 0..255 → 0..1 first).
+* **Motif Jaccard:** `|A∩B| / |A∪B|`
+* **Quality:** aesthetic score or handcrafted heuristic (contrast, composition balance).
+* Optional: **Audio fit** bonus (e.g., high arousal song → prefer high-contrast items).
+
+## 6) Eviction & retention (keep the pool healthy)
+
+* **LRU with pinning:** never evict top-voted/high-quality items.
+* **Dedupe:** before insert, compute perceptual hash; if close to existing → update recency instead of storing a near-duplicate.
+* **Cap:** start ~2k items, grow cautiously; shard by motif (“metal”, “bell”, “stage”, “abstract”).
+
+## 7) Safety & rights (Maestro is the only “user”)
+
+* Only store **policy-safe** outputs (no real-person likeness unless `likenessAllowed:true` + `licenseRef`).
+* On retrieval, enforce `rights.likenessAllowed || abstraction/silhouette only`.
+* Keep `model` & `promptUsed` for auditability.
+
+## 8) Warm-start integration with MorphEngine v2
+
+When a pool image is selected:
+
+* **Instantly** update resource hub textures (hero/background).
+* Send v2 commands to match look/feel to the image:
+
+  * `SET_PALETTE` from `paletteHint`
+  * `SET mixer.bloomThreshold` based on `quality/contrast`
+  * `ATTACH_EMITTER dot-keypoints` from the selected frame’s detected keypoints (precompute & cache these per PoolItem if you can).
+* MorphEngine begins rendering while Maestro continues to search/gen for an even better fit.
+
+## 9) Where it plugs into the router (pseudo)
+
+```ts
+async function getImageForScene(ctx) {
+  const needHeroNow = ctx.latencyBudgetMs < 1000;
+  const poolBest = pool.findBest(ctx.targetDNA, ctx.motifs);
+
+  if (needHeroNow && poolBest) return { perf: poolBest, source: "pool" };
+
+  // Start generation in parallel; keep pool as provisional
+  const gen = generateWithRouter(ctx.promptReq, ctx);
+  const provisional = poolBest ? { perf: poolBest, source:"pool" } : null;
+
+  const result = await Promise.race([
+    gen, delay(ctx.latencyBudgetMs).then(() => null)
+  ]);
+
+  if (result) {
+    // Insert into pool (dedupe + score)
+    pool.upsert(result);
+    return { perf: result, source: "gen" };
+  }
+  if (provisional) return provisional;
+
+  // Last resort: pool-only fallback
+  const hard = pool.findBest(ctx.targetDNA, ctx.motifs, { requireQuality:true });
+  return hard ?? ProceduralFallback.fromMotifs(ctx.motifs, ctx);
+}
+```
+
+## 10) Pool API (simple and enough)
+
+```ts
+interface ImagePool {
+  upsert(item: PoolItem): void;                     // dedupe by hash
+  findBest(
+    dna: Uint8Array, motifs: string[],
+    opts?: { requireQuality?: boolean; k?: number }
+  ): PoolItem | null;
+  warmset(items: PoolItem[]): void;                 // bulk seed at boot
+  markUsed(id: string): void;                       // update lastUsedAt
+}
+```
+
+## 11) Precompute to make reuse snappy
+
+When you insert into the pool:
+
+* Compute & store: **perceptual hash**, **edge density**, **DoG keypoints**, **saliency map**, **palette**.
+* Then MorphEngine can attach emitters instantly without re-analyzing the image.
+
+## 12) Operational tips
+
+* **Shadow learn:** every time the generator succeeds, also score “would the pool’s top-1 have been good enough?” to tune your reuse threshold.
+* **Diversify:** avoid back-to-back reuse of the same `id` unless DNA similarity > 0.98 (prevents visual stagnation).
+* **A/B knob:** add a flag `POOL_REUSE_THRESHOLD` (initial 0.90 cosine) to tune live.
+
+---
+
+### TL;DR
+
+Treat the storage pool as a first-class **retrieval engine**:
+
+* Near-instant visuals via warm start
+* Robust **hard fallback** when models refuse
+* Lower cost by reusing high-quality, DNA-close frames
+* Safe by design with provenance & policy flags
+
+If you want, I can sketch a small **`ImagePool.ts`** with cosine search + pHash dedupe and the `findBest` scoring function you can paste into Replit right now.
