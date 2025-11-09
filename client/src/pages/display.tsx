@@ -620,6 +620,10 @@ export default function Display() {
     mutationFn: async (artworkId: string) => {
       await apiRequest("POST", `/api/artworks/${artworkId}/viewed`, {});
     },
+    onSuccess: () => {
+      // CRITICAL: Invalidate unseen artworks query so next fetch gets fresh list
+      queryClient.invalidateQueries({ queryKey: ["/api/artworks/next"] });
+    },
   });
 
   // Generate art mutation

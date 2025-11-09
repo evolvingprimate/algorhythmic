@@ -401,6 +401,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       console.log(`[Freshness] User ${userId} - Unseen pool: ${unseenArtworks.length} artworks, Generation needed: ${needsGeneration}`);
       
+      // CRITICAL: Prevent browser caching - always fetch fresh unseen list
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      
       res.json({
         artworks: unseenArtworks,
         poolSize: unseenArtworks.length,
