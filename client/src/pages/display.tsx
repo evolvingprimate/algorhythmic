@@ -46,6 +46,7 @@ import { AudioSourceSelector } from "@/components/audio-source-selector";
 import { DebugOverlay, type DebugStats } from "@/components/debug-overlay";
 import { EffectsControlMenu, type EffectsConfig } from "@/components/effects-control-menu";
 import { useToast } from "@/hooks/use-toast";
+import { useImpressionRecorder } from "@/hooks/useImpressionRecorder";
 import { AudioAnalyzer } from "@/lib/audio-analyzer";
 import { WebSocketClient } from "@/lib/websocket-client";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -158,7 +159,6 @@ export default function Display() {
   const effectLoggerRef = useRef<EffectLogger>(new EffectLogger());
   const showDebugOverlayRef = useRef<boolean>(false);
   const effectsConfigRef = useRef<EffectsConfig>(effectsConfig);
-  const recordedImpressions = useRef<Set<string>>(new Set()); // Track which artworks have had impressions recorded
   
   // Sync refs with state
   useEffect(() => {
@@ -511,16 +511,6 @@ export default function Display() {
             audioAnalysis: audioFeatures,
           });
           
-          // CRITICAL: Record impression for freshness pipeline (deduplicated with retry on failure)
-          if (!recordedImpressions.current.has(artwork.id)) {
-            recordedImpressions.current.add(artwork.id);
-            recordImpressionMutation.mutateAsync(artwork.id).catch((error) => {
-              // Remove from Set on failure to allow retry
-              recordedImpressions.current.delete(artwork.id);
-              console.error(`[Freshness] Failed to record impression for ${artwork.id}:`, error);
-            });
-          }
-          
           console.log(`[Display] ✅ Loaded frame ${validatedArtworks.length}: ${artwork.prompt?.substring(0, 50)}...`);
         }
         
@@ -550,6 +540,13 @@ export default function Display() {
         }
         
         console.log(`[Display] ✅ Total valid frames loaded: ${validatedArtworks.length}`);
+        
+        // CRITICAL: Queue ALL impressions for batch recording (with retry + lifecycle flush)
+        const idsToRecord = validatedArtworks.map(a => a.id);
+        if (idsToRecord.length > 0) {
+          impressionRecorder.queueImpressions(idsToRecord);
+          console.log(`[Display] 📦 Queued ${idsToRecord.length} impressions for batch recording`);
+        }
         
         // CRITICAL: Use FIRST VALIDATED artwork for UI (not just first with URL)
         const firstValidArtwork = validatedArtworks[0];
@@ -653,12 +650,6 @@ export default function Display() {
         return;
       }
       
-      // Guard #3: Skip if impression already recorded (already processed)
-      if (recordedImpressions.current.has(artwork.id)) {
-        console.log(`[FlickerFix] Skipping already-recorded artwork: ${artwork.id}`);
-        return;
-      }
-      
       let dnaVector = parseDNAFromSession(artwork);
       
       if (!dnaVector) {
@@ -688,12 +679,7 @@ export default function Display() {
       });
       
       // PEER-REVIEWED FIX #3: Record impression when fresh frame is inserted (deduplicated with retry on failure)
-      recordedImpressions.current.add(artwork.id);
-      recordImpressionMutation.mutateAsync(artwork.id).catch((error) => {
-        // Remove from Set on failure to allow retry
-        recordedImpressions.current.delete(artwork.id);
-        console.error(`[Freshness] Failed to record impression for ${artwork.id}:`, error);
-      });
+      impressionRecorder.queueImpressions(artwork.id);
       
       console.log(`[Display] ✅ Inserted fresh frame with immediate jump (safe - pruning already done): ${artwork.prompt?.substring(0, 50)}...`);
     });
@@ -734,13 +720,10 @@ export default function Display() {
     mood: 'energetic',
   });
 
-  // Record impression mutation (Freshness Pipeline)
-  // NOTE: Does NOT invalidate cache on every impression to avoid refetch loops
-  // Cache invalidation happens: (1) on mount via staleTime:0, (2) after generation completes
-  const recordImpressionMutation = useMutation({
-    mutationFn: async (artworkId: string) => {
-      await apiRequest("POST", `/api/artworks/${artworkId}/viewed`, {});
-    },
+  // Production-grade impression recorder (batching, retry, lifecycle flush)
+  const impressionRecorder = useImpressionRecorder({
+    maxBatchSize: 200,
+    flushDelayMs: 2000,
   });
 
   // Generate art mutation
