@@ -1,21 +1,10 @@
-import { useRef } from "react";
 import heroVideo from "@assets/Surreal_flowing_abstract_art_video_2_1762650434281.mp4";
 import heroImage from "@assets/generated_images/Surreal_flowing_abstract_art_0d26abec.png";
 
 export function AnimatedBackground() {
-  const videoRef = useRef<HTMLVideoElement>(null);
-
-  const handleLoadedMetadata = () => {
-    if (videoRef.current) {
-      // Set playback rate to 50% speed for smooth, browser-optimized slow motion
-      videoRef.current.playbackRate = 0.5;
-    }
-  };
-
   return (
     <div className="fixed inset-0 -z-10 overflow-hidden">
       <video
-        ref={videoRef}
         autoPlay
         loop
         muted
@@ -25,7 +14,6 @@ export function AnimatedBackground() {
         disableRemotePlayback
         poster={heroImage}
         aria-hidden="true"
-        onLoadedMetadata={handleLoadedMetadata}
         className="absolute inset-0 w-full h-full object-cover"
         style={{
           willChange: 'transform',
