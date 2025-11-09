@@ -72,6 +72,8 @@ export const userArtImpressions = pgTable("user_art_impressions", {
   artworkIdIdx: index("user_art_impressions_artwork_id_idx").on(table.artworkId),
   uniqueUserArtwork: uniqueIndex("user_art_impressions_unique_user_artwork").on(table.userId, table.artworkId),
   viewedAtIdx: index("user_art_impressions_viewed_at_idx").on(table.viewedAt),
+  // Composite index for efficient 7-day freshness queries (LEFT JOIN + range filter)
+  userViewedCompositeIdx: index("user_art_impressions_user_viewed_idx").on(table.userId, table.viewedAt),
 }));
 
 // Session storage table (required for Replit Auth)

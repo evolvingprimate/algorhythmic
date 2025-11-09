@@ -29,7 +29,7 @@ import {
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { drizzle } from "drizzle-orm/neon-serverless";
-import { eq, desc, and, gte, sql } from "drizzle-orm";
+import { eq, desc, and, or, isNull, lt, gte, sql } from "drizzle-orm";
 import { Pool, neonConfig } from "@neondatabase/serverless";
 import ws from "ws";
 
@@ -607,36 +607,57 @@ export class PostgresStorage implements IStorage {
 
   // User Art Impressions (Freshness Pipeline)
   async recordImpression(userId: string, artworkId: string): Promise<void> {
+    // CRITICAL: UPSERT to update viewedAt timestamp on repeat views
+    // This resets the 7-day cooldown each time artwork is seen
     await this.db
       .insert(userArtImpressions)
-      .values({ userId, artworkId })
-      .onConflictDoNothing(); // Prevent duplicate impressions
+      .values({ userId, artworkId, viewedAt: sql`NOW()` })
+      .onConflictDoUpdate({
+        target: [userArtImpressions.userId, userArtImpressions.artworkId],
+        set: { viewedAt: sql`NOW()` } // Update timestamp on conflict
+      });
   }
 
   async getUnseenArtworks(userId: string, limit: number = 20): Promise<ArtSession[]> {
-    // Get IDs of artworks this user has already seen
-    const seenArtworkIds = await this.db
-      .select({ artworkId: userArtImpressions.artworkId })
-      .from(userArtImpressions)
-      .where(eq(userArtImpressions.userId, userId));
-    
-    const seenIds = seenArtworkIds.map(row => row.artworkId);
-    
-    // Return artworks NOT in the seen list
-    if (seenIds.length === 0) {
-      // User hasn't seen anything yet, return recent art
-      return await this.getRecentArt(limit);
-    }
-    
-    // Filter out seen artworks using NOT IN
-    const unseenArtworks = await this.db
-      .select()
+    // LEFT JOIN to filter artworks viewed in last 7 days
+    // This allows artworks to reappear after a week
+    const results = await this.db
+      .select({
+        id: artSessions.id,
+        sessionId: artSessions.sessionId,
+        userId: artSessions.userId,
+        imageUrl: artSessions.imageUrl,
+        prompt: artSessions.prompt,
+        styles: artSessions.styles,
+        artists: artSessions.artists,
+        generationExplanation: artSessions.generationExplanation,
+        dnaVector: artSessions.dnaVector,
+        audioFeatures: artSessions.audioFeatures,
+        musicTrack: artSessions.musicTrack,
+        musicArtist: artSessions.musicArtist,
+        musicAlbum: artSessions.musicAlbum,
+        isSaved: artSessions.isSaved,
+        createdAt: artSessions.createdAt,
+      })
       .from(artSessions)
-      .where(sql`${artSessions.id} NOT IN ${seenIds}`)
+      .leftJoin(
+        userArtImpressions,
+        and(
+          eq(artSessions.id, userArtImpressions.artworkId),
+          eq(userArtImpressions.userId, userId)
+        )
+      )
+      .where(
+        or(
+          isNull(userArtImpressions.viewedAt),
+          lt(userArtImpressions.viewedAt, sql`NOW() - INTERVAL '7 days'`)
+        )
+      )
       .orderBy(desc(artSessions.createdAt))
       .limit(limit);
     
-    return unseenArtworks;
+    // Return only artSessions data (unwrap from joined result)
+    return results as ArtSession[];
   }
 
   // Users
