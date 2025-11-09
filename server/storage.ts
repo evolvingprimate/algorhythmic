@@ -183,6 +183,12 @@ export class MemStorage implements IStorage {
       musicAlbum: insertSession.musicAlbum ?? null,
       generationExplanation: insertSession.generationExplanation ?? null,
       isSaved: insertSession.isSaved ?? false,
+      // ImagePool metadata fields
+      motifs: insertSession.motifs ?? null,
+      qualityScore: insertSession.qualityScore ?? null,
+      perceptualHash: insertSession.perceptualHash ?? null,
+      poolStatus: insertSession.poolStatus ?? null,
+      lastUsedAt: insertSession.lastUsedAt ?? null,
       createdAt: new Date(),
     };
     this.sessions.set(id, session);

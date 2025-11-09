@@ -27,7 +27,7 @@ export const artVotes = pgTable("art_votes", {
   sessionIdIdx: index("art_votes_session_id_idx").on(table.sessionId),
 }));
 
-// Generated art sessions
+// Generated art sessions (extended with ImagePool metadata for hybrid gen+retrieve)
 export const artSessions = pgTable("art_sessions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   sessionId: varchar("session_id").notNull(),
@@ -42,10 +42,18 @@ export const artSessions = pgTable("art_sessions", {
   musicAlbum: text("music_album"), // Album name
   generationExplanation: text("generation_explanation"), // Why this image was created
   isSaved: boolean("is_saved").notNull().default(false),
+  // ImagePool metadata (optional fields for hybrid gen+retrieve system)
+  motifs: text("motifs").array().default(sql`'{}'::text[]`), // Extracted visual themes: ["bell", "storm", "silhouette"]
+  qualityScore: integer("quality_score").default(50), // 0-100 aesthetic score (default 50)
+  perceptualHash: varchar("perceptual_hash"), // pHash/dHash for deduplication
+  poolStatus: varchar("pool_status").default("active"), // active, archived, pending
+  lastUsedAt: timestamp("last_used_at"), // For LRU eviction
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => ({
   sessionIdIdx: index("art_sessions_session_id_idx").on(table.sessionId),
   userIdIdx: index("art_sessions_user_id_idx").on(table.userId),
+  qualityScoreIdx: index("art_sessions_quality_score_idx").on(table.qualityScore),
+  poolStatusIdx: index("art_sessions_pool_status_idx").on(table.poolStatus),
 }));
 
 // User favorites for weighted rotation (future feature)
