@@ -71,6 +71,7 @@ export default function Display() {
   const [showStyleSelector, setShowStyleSelector] = useState(false);
   const [showAudioSourceSelector, setShowAudioSourceSelector] = useState(false);
   const [setupComplete, setSetupComplete] = useState(false); // Track if first-time setup is done
+  const [impressionVersion, setImpressionVersion] = useState(0); // Increment to force fresh artwork fetch
   const [currentPrompt, setCurrentPrompt] = useState("");
   const [currentAudioAnalysis, setCurrentAudioAnalysis] = useState<AudioAnalysis | null>(null);
   const [currentArtworkId, setCurrentArtworkId] = useState<string | null>(null);
@@ -201,12 +202,13 @@ export default function Display() {
 
   // Fetch UNSEEN artwork only - Freshness Pipeline ensures never seeing repeats
   // GATED: Only load artworks after first-time setup is complete
+  // CRITICAL: Query key includes impressionVersion to force fresh fetch after impressions
   const { data: unseenResponse } = useQuery<{
     artworks: any[];
     poolSize: number;
     needsGeneration: boolean;
   }>({
-    queryKey: ["/api/artworks/next"],
+    queryKey: ["/api/artworks/next", impressionVersion],
     enabled: isAuthenticated && setupComplete, // Block until wizard complete
     refetchOnWindowFocus: false,
     refetchOnMount: true,
@@ -653,8 +655,9 @@ export default function Display() {
       await apiRequest("POST", `/api/artworks/${artworkId}/viewed`, {});
     },
     onSuccess: () => {
-      // CRITICAL: Invalidate unseen artworks query so next fetch gets fresh list
-      queryClient.invalidateQueries({ queryKey: ["/api/artworks/next"] });
+      // CRITICAL: Increment impressionVersion to force fresh artwork query
+      // This changes the query key, guaranteeing React Query fetches new data
+      setImpressionVersion(prev => prev + 1);
     },
   });
 
