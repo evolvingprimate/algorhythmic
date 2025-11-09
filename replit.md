@@ -42,6 +42,7 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 
 ### Maestro - Intelligent Audio-Reactive Orchestration System
 **Phase 1 Complete (November 2025)** - AI-Powered Particle Control System operational at /maestro route:
+**Phase 2 Complete (November 2025)** - Telemetry & Learning Infrastructure deployed:
 - **AudioProbe**: Advanced audio analysis with onset detection (energy flux + adaptive threshold), tempo estimation (90s autocorrelation), and phase tracking (PLL + Kalman filter)
 - **FeatureBus**: Event-driven pub/sub system for decoupled audio feature distribution
 - **MaestroLoop**: Central control orchestrator connecting audio analysis to command generation
@@ -57,6 +58,11 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 - **Intelligent Particle Commands**: PARTICLE_SPAWN_FIELD (loads anchor arrays into GPU uniforms), PARTICLE_BURST (triggers intense emission with duration/multiplier)
 - **Smart Spawn Logic**: Weighted random anchor selection with jitter radius, graceful fallback to random when no anchors, 0.5s lerp transitions between anchor sets
 - **End-to-End Flow**: Audio climax → ClimaxDetector → Vision API → Anchor cache → CommandBus → RendererManager → ParticlesNode GPU shader → Intelligent emission at AI-detected visual focal points
+- **TelemetryService**: Ring buffer (1000 events), 5s debounce, batch POST to /api/telemetry/events, event types (session_start, session_end, artwork_impression, user_action, control_adjustment, climax_detected, vision_analyzed)
+- **Database Schema**: 6 RAI tables (raiSessions, telemetryEvents, dnaGenomes, trendWeights, engagementRollups, userDnaProfiles) with proper indexes and foreign keys
+- **Telemetry Integration**: MaestroLoop tracks climax/vision events, EffectsControlMenu tracks all parameter adjustments (9 controls: particles, warp, mixer, trace)
+- **Trend Engine Backend**: /api/trends/analyze endpoint for aggregating user behavior patterns (Phase 2 MVP returns baseline, Phase 3 implements full ML analysis)
+- **MaestroBrain Service**: Polls trend API every 2 minutes, generates parameter recommendations based on aggregate user preferences, respects manual overrides
 
 ### Data Models
 - **ArtPreferences**: User-selected styles and artists.

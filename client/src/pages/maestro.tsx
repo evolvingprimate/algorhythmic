@@ -21,6 +21,7 @@ import { CommandBus } from "@/lib/maestro/control/CommandBus";
 import { Scheduler } from "@/lib/maestro/control/Scheduler";
 import { ParameterRegistry } from "@/lib/maestro/control/ParameterRegistry";
 import { MaestroControlStore } from "@/lib/maestro/control/MaestroControlStore";
+import { MaestroBrain } from "@/lib/maestro/brain/MaestroBrain";
 import { RendererManager } from "@/lib/RendererManager";
 import { EffectsControlMenu } from "@/components/effects-control-menu";
 import type { ClockState, AudioFeatures, Command } from "@shared/maestroTypes";
@@ -37,6 +38,7 @@ export default function Maestro() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const audioProbeRef = useRef<AudioProbe | null>(null);
   const maestroLoopRef = useRef<MaestroLoop | null>(null);
+  const maestroBrainRef = useRef<MaestroBrain | null>(null);
   const featureBusRef = useRef<FeatureBus | null>(null);
   const commandBusRef = useRef<CommandBus | null>(null);
   const schedulerRef = useRef<Scheduler | null>(null);
@@ -99,6 +101,11 @@ export default function Maestro() {
     
     // Wire dependencies to MaestroLoop
     maestroLoop.setDependencies(controlStore, commandBus);
+
+    // PHASE 2: Create MaestroBrain for intelligent learning
+    const maestroBrain = new MaestroBrain(undefined, 60); // No userId, 60min lookback
+    maestroBrainRef.current = maestroBrain;
+    maestroLoop.setMaestroBrain(maestroBrain); // Wire brain into loop
     
     // Subscribe MaestroLoop to FeatureBus and generate commands
     featureBus.onClock((clock: ClockState) => {
@@ -183,6 +190,7 @@ export default function Maestro() {
       try {
         await audioProbeRef.current?.initialize();
         maestroLoopRef.current?.start();
+        maestroBrainRef.current?.start(); // PHASE 2: Start learning
         // Start scheduler with callback to RendererManager
         schedulerRef.current?.start((commands: Command[]) => {
           rendererManagerRef.current?.dispatchCommands(commands);
@@ -190,7 +198,7 @@ export default function Maestro() {
         setIsPlaying(true);
         toast({
           title: "Maestro Started",
-          description: "Audio-reactive particles activated!",
+          description: "Audio-reactive particles + AI learning activated!",
         });
       } catch (error) {
         console.error("[Maestro] Failed to start:", error);
@@ -204,6 +212,7 @@ export default function Maestro() {
       // Stop
       audioProbeRef.current?.stop();
       maestroLoopRef.current?.stop();
+      maestroBrainRef.current?.stop(); // PHASE 2: Stop learning
       schedulerRef.current?.stop();
       setIsPlaying(false);
       toast({

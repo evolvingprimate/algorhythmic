@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
+import { telemetryService } from "@/lib/maestro/telemetry/TelemetryService";
 import type { EffectPreferences } from "@/lib/maestro/control/MaestroControlStore";
 import type { Command } from "@shared/maestroTypes";
 
@@ -43,6 +44,88 @@ export function EffectsControlMenu({
     
     // Send SET commands to CommandBus for immediate effect
     sendUpdateCommands(updates);
+
+    // PHASE 2: Record control adjustment telemetry
+    recordControlAdjustments(updates, prefs);
+  };
+
+  const recordControlAdjustments = (updates: Partial<EffectPreferences>, oldPrefs: EffectPreferences) => {
+    // Particles adjustments
+    if (updates.particles) {
+      if (updates.particles.spawnRateMultiplier !== undefined) {
+        telemetryService.recordControlAdjustment(
+          'particles.spawnRate',
+          oldPrefs.particles.spawnRateMultiplier,
+          updates.particles.spawnRateMultiplier
+        );
+      }
+      if (updates.particles.velocityMultiplier !== undefined) {
+        telemetryService.recordControlAdjustment(
+          'particles.velocity',
+          oldPrefs.particles.velocityMultiplier,
+          updates.particles.velocityMultiplier
+        );
+      }
+      if (updates.particles.sizeMultiplier !== undefined) {
+        telemetryService.recordControlAdjustment(
+          'particles.size',
+          oldPrefs.particles.sizeMultiplier,
+          updates.particles.sizeMultiplier
+        );
+      }
+    }
+
+    // Warp adjustments
+    if (updates.warp) {
+      if (updates.warp.elasticityMultiplier !== undefined) {
+        telemetryService.recordControlAdjustment(
+          'warp.elasticity',
+          oldPrefs.warp.elasticityMultiplier,
+          updates.warp.elasticityMultiplier
+        );
+      }
+      if (updates.warp.radiusMultiplier !== undefined) {
+        telemetryService.recordControlAdjustment(
+          'warp.radius',
+          oldPrefs.warp.radiusMultiplier,
+          updates.warp.radiusMultiplier
+        );
+      }
+    }
+
+    // Mixer adjustments
+    if (updates.mixer) {
+      if (updates.mixer.saturationMultiplier !== undefined) {
+        telemetryService.recordControlAdjustment(
+          'mixer.saturation',
+          oldPrefs.mixer.saturationMultiplier,
+          updates.mixer.saturationMultiplier
+        );
+      }
+      if (updates.mixer.brightnessMultiplier !== undefined) {
+        telemetryService.recordControlAdjustment(
+          'mixer.brightness',
+          oldPrefs.mixer.brightnessMultiplier,
+          updates.mixer.brightnessMultiplier
+        );
+      }
+      if (updates.mixer.contrastMultiplier !== undefined) {
+        telemetryService.recordControlAdjustment(
+          'mixer.contrast',
+          oldPrefs.mixer.contrastMultiplier,
+          updates.mixer.contrastMultiplier
+        );
+      }
+    }
+
+    // Trace adjustments
+    if (updates.trace?.strengthMultiplier !== undefined) {
+      telemetryService.recordControlAdjustment(
+        'trace.strength',
+        oldPrefs.trace.strengthMultiplier,
+        updates.trace.strengthMultiplier
+      );
+    }
   };
 
   const sendUpdateCommands = (updates: Partial<EffectPreferences>) => {

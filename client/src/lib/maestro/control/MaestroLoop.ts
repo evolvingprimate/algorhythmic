@@ -4,6 +4,7 @@ import type { MaestroControlStore } from "./MaestroControlStore";
 import type { CommandBus } from "./CommandBus";
 import { ClimaxDetector } from "../climax/ClimaxDetector";
 import { VisionFeatureService } from "../vision/VisionFeatureService";
+import { telemetryService } from "../telemetry/TelemetryService";
 import type { SpawnAnchor } from "./MaestroControlStore";
 
 /**
@@ -28,6 +29,7 @@ export class MaestroLoop extends EventEmitter {
   // Component references
   private controlStore: MaestroControlStore | null = null;
   private commandBus: CommandBus | null = null;
+  private maestroBrain: any | null = null; // MaestroBrain for trend-informed recommendations
   private climaxDetector: ClimaxDetector;
   private visionService: VisionFeatureService;
 
@@ -56,6 +58,14 @@ export class MaestroLoop extends EventEmitter {
     this.controlStore = controlStore;
     this.commandBus = commandBus;
     console.log("[MaestroLoop] Dependencies wired");
+  }
+
+  /**
+   * PHASE 2: Wire MaestroBrain for trend-informed recommendations
+   */
+  setMaestroBrain(maestroBrain: any): void {
+    this.maestroBrain = maestroBrain;
+    console.log('[MaestroLoop] MaestroBrain wired for intelligent learning');
   }
 
   /**
@@ -115,6 +125,16 @@ export class MaestroLoop extends EventEmitter {
     const deltaMs = now - this.lastFrameTime;
     this.lastFrameTime = now;
 
+    // PHASE 2: Query MaestroBrain recommendations (if available)
+    if (this.maestroBrain && this.maestroBrain.hasFreshData()) {
+      const recommendations = this.maestroBrain.getRecommendations();
+      if (recommendations && recommendations.length > 0) {
+        // Log recommendations for Phase 2 verification
+        // Phase 3: Blend recommendations into command generation
+        console.log(`[MaestroLoop] MaestroBrain recommendations:`, recommendations);
+      }
+    }
+
     // Run climax detection if we have audio data
     if (this.currentAudio && this.currentClock && this.controlStore && this.commandBus) {
       const climaxResult = this.climaxDetector.analyze(
@@ -145,6 +165,14 @@ export class MaestroLoop extends EventEmitter {
           path: "particles.main.burst",
           durationBeats: 4, // 2 seconds at 120 BPM
           intensityMultiplier: 3.0, // 3x spawn rate during burst
+        });
+
+        // PHASE 2: Record climax telemetry
+        telemetryService.recordClimaxDetected({
+          rms: this.currentAudio?.rms || 0,
+          onsetDensity: climaxResult.onsetDensity,
+          beatConfidence: 0.8, // Inferred from climax detection
+          duration: climaxResult.sustainedEnergyDuration,
         });
       }
       
@@ -199,8 +227,10 @@ export class MaestroLoop extends EventEmitter {
     this.visionAnalysisPending = true;
     this.lastVisionRequestTime = performance.now();
     
+    const startTime = performance.now();
     try {
       const anchors = await this.visionService.analyzeFrame(canvas, this.currentArtworkId);
+      const processingTime = performance.now() - startTime;
       
       if (anchors && anchors.length > 0) {
         console.log(`[MaestroLoop] Vision analysis complete: ${anchors.length} anchors`);
@@ -210,8 +240,22 @@ export class MaestroLoop extends EventEmitter {
         
         // Load anchors into particle system
         this.loadSpawnAnchors(anchors);
+
+        // PHASE 2: Record vision telemetry
+        telemetryService.recordVisionAnalyzed({
+          anchorCount: anchors.length,
+          cached: false, // Fresh analysis
+          processingTime,
+        });
       } else {
         console.log("[MaestroLoop] Vision analysis returned no anchors (throttled or failed)");
+        
+        // Record telemetry for throttled/cached response
+        telemetryService.recordVisionAnalyzed({
+          anchorCount: 0,
+          cached: true,
+          processingTime: performance.now() - startTime,
+        });
       }
     } catch (error) {
       console.error("[MaestroLoop] Vision analysis error:", error);

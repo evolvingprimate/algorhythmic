@@ -28,7 +28,7 @@ import {
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { drizzle } from "drizzle-orm/neon-serverless";
-import { eq, desc, and, gte } from "drizzle-orm";
+import { eq, desc, and, gte, sql } from "drizzle-orm";
 import { Pool, neonConfig } from "@neondatabase/serverless";
 import ws from "ws";
 
@@ -92,6 +92,7 @@ export interface IStorage {
   createRaiSession(userId: string | null, artworkId?: string, genomeId?: string): Promise<RaiSession>;
   endRaiSession(sessionId: string): Promise<void>;
   createTelemetryEvents(events: InsertTelemetryEvent[]): Promise<void>;
+  getTelemetryEventsSince(cutoffTime: Date): Promise<TelemetryEvent[]>;
 }
 
 export class MemStorage implements IStorage {
@@ -431,6 +432,11 @@ export class MemStorage implements IStorage {
 
   async createTelemetryEvents(events: InsertTelemetryEvent[]): Promise<void> {
     // MemStorage doesn't persist telemetry
+  }
+
+  async getTelemetryEventsSince(cutoffTime: Date): Promise<TelemetryEvent[]> {
+    // MemStorage doesn't persist telemetry
+    return [];
   }
 }
 
@@ -824,6 +830,20 @@ export class PostgresStorage implements IStorage {
     }
 
     await this.db.insert(telemetryEvents).values(events);
+  }
+
+  async getTelemetryEventsSince(cutoffTime: Date): Promise<TelemetryEvent[]> {
+    try {
+      const results = await this.db
+        .select()
+        .from(telemetryEvents)
+        .where(sql`${telemetryEvents.timestamp} >= ${cutoffTime.toISOString()}`)
+        .orderBy(telemetryEvents.timestamp);
+      return results;
+    } catch (error: any) {
+      console.error('[PostgresStorage] Failed to query telemetry events:', error);
+      return [];
+    }
   }
 }
 

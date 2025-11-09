@@ -174,6 +174,63 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // PHASE 2: Trend Engine - Analyze telemetry and return trend weights
+  app.get('/api/trends/analyze', async (req, res) => {
+    try {
+      const userId = req.query.userId as string | undefined;
+      const lookbackMinutes = parseInt(req.query.lookbackMinutes as string || '60');
+      
+      // Query telemetry events from database (Phase 2: simple counts, Phase 3: ML analysis)
+      let climaxCount = 0;
+      let visionCount = 0;
+      let controlAdjustmentCount = 0;
+      
+      try {
+        // Count events by type in lookback window (basic aggregation)
+        const cutoffTime = new Date(Date.now() - lookbackMinutes * 60 * 1000);
+        const events = await storage.getTelemetryEventsSince(cutoffTime);
+        
+        climaxCount = events.filter((e: any) => e.eventType === 'climax_detected').length;
+        visionCount = events.filter((e: any) => e.eventType === 'vision_analyzed').length;
+        controlAdjustmentCount = events.filter((e: any) => e.eventType === 'control_adjustment').length;
+      } catch (dbError) {
+        console.warn('[TrendEngine] Database query failed, using defaults:', dbError);
+      }
+      
+      // Aggregate telemetry into trend weights
+      const trends = {
+        particles: {
+          spawnRate: { mean: 1.0, variance: 0.1, adjustmentCount: controlAdjustmentCount },
+          velocity: { mean: 1.0, variance: 0.1, adjustmentCount: 0 },
+          size: { mean: 1.0, variance: 0.1, adjustmentCount: 0 },
+        },
+        warp: {
+          elasticity: { mean: 1.0, variance: 0.1, adjustmentCount: 0 },
+          radius: { mean: 1.0, variance: 0.1, adjustmentCount: 0 },
+        },
+        mixer: {
+          saturation: { mean: 1.0, variance: 0.1, adjustmentCount: 0 },
+          brightness: { mean: 1.0, variance: 0.1, adjustmentCount: 0 },
+          contrast: { mean: 1.0, variance: 0.1, adjustmentCount: 0 },
+        },
+        climaxFrequency: climaxCount,
+        visionSuccessRate: visionCount > 0 ? 1.0 : 0.0,
+      };
+
+      // Return aggregated trends (Phase 2: basic counts, Phase 3: ML predictions)
+      res.json({ 
+        success: true, 
+        trends,
+        timestamp: new Date().toISOString(),
+        lookbackMinutes,
+        eventCounts: { climaxCount, visionCount, controlAdjustmentCount },
+      });
+    } catch (error) {
+      console.error('Error analyzing trends:', error);
+      res.status(500).json({ error: 'Failed to analyze trends' });
+    }
+  });
+
   // Generate art based on audio analysis - REQUIRES AUTHENTICATION
   app.post("/api/generate-art", isAuthenticated, async (req: any, res) => {
     try {
