@@ -33,9 +33,9 @@ const fragmentShader = `
     vec4 colorA = texture2D(u_imageA, v_texCoord);
     vec4 colorB = texture2D(u_imageB, v_texCoord);
     
-    // Smooth cubic easing for crossfade (matches zoom animation)
+    // Aggressive ease-in-cubic: makes new image pop in sooner with more contrast
     float t = u_morphProgress;
-    float easedBlend = t * t * (3.0 - 2.0 * t); // smoothstep curve
+    float easedBlend = t * t * t; // cubic-in curve - accelerates quickly
     
     gl_FragColor = mix(colorA, colorB, easedBlend);
   }
@@ -193,7 +193,7 @@ export class Morpheus06Renderer implements IMorphRenderer {
   ): { cameraZoom: number; cameraTranslate: { x: number; y: number } } {
     // Sine wave: peaks at 50%, returns to baseline at 100%
     // This eliminates the jump when cycle resets from 100% → 0%
-    const maxZoom = 1.06;
+    const maxZoom = 1.10; // Increased from 1.06 for more dramatic pop
     const zoomAmount = Math.sin(progress * Math.PI); // 0 → 1 → 0
     const cameraZoom = 1.0 + zoomAmount * (maxZoom - 1.0);
     
@@ -204,8 +204,8 @@ export class Morpheus06Renderer implements IMorphRenderer {
     
     // Smooth movement toward anchor (same sine wave pattern)
     const cameraTranslate = {
-      x: -targetX * zoomAmount * 0.3, // 30% movement
-      y: -targetY * zoomAmount * 0.3,
+      x: -targetX * zoomAmount * 0.4, // Increased from 0.3 (40% movement for more contrast)
+      y: -targetY * zoomAmount * 0.4,
     };
     
     return { cameraZoom, cameraTranslate };
