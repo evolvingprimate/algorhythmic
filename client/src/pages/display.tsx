@@ -202,7 +202,7 @@ export default function Display() {
 
   // Fetch UNSEEN artwork only - Freshness Pipeline ensures never seeing repeats
   // GATED: Only load artworks after first-time setup is complete
-  // NOTE: Simple query key without version - cache invalidation happens on explicit triggers only
+  // CRITICAL: staleTime=0 forces fresh fetch on mount, cache invalidation on impressions
   const { data: unseenResponse } = useQuery<{
     artworks: any[];
     poolSize: number;
@@ -210,6 +210,7 @@ export default function Display() {
   }>({
     queryKey: ["/api/artworks/next"],
     enabled: isAuthenticated && setupComplete, // Block until wizard complete
+    staleTime: 0, // Always consider data stale - refetch on mount
     refetchOnWindowFocus: false,
     refetchOnMount: true,
   });
@@ -650,8 +651,8 @@ export default function Display() {
   });
 
   // Record impression mutation (Freshness Pipeline)
-  // NOTE: Does NOT increment impressionVersion to avoid infinite refetch loop
-  // Cache invalidation happens only on explicit triggers (manual refresh, pool exhaustion)
+  // NOTE: Does NOT invalidate cache on every impression to avoid refetch loops
+  // Cache invalidation happens: (1) on mount via staleTime:0, (2) after generation completes
   const recordImpressionMutation = useMutation({
     mutationFn: async (artworkId: string) => {
       await apiRequest("POST", `/api/artworks/${artworkId}/viewed`, {});
