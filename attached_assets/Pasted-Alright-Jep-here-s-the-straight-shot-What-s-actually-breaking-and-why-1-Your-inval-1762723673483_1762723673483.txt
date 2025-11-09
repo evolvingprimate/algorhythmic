@@ -1,0 +1,213 @@
+Alright Jep—here’s the straight shot.
+
+## What’s actually breaking (and why)
+
+### 1) Your `invalidateQueries` isn’t refetching (TanStack Query v5 nuance)
+
+In v5, **invalidating marks queries stale, but does not necessarily refetch active ones unless you tell it to**. By default it only refetches *inactive* queries. That’s why your server never sees a GET after generation.
+
+You’re calling:
+
+```ts
+queryClient.invalidateQueries({ queryKey: ["/api/artworks/next"] });
+```
+
+…but your running query is `["/api/artworks/next", sessionId.current]`. Even though partial matching is allowed, **the refetch behavior is the real culprit**.
+
+**Fix (pick one):**
+
+```ts
+// A) Invalidate + refetch active queries
+queryClient.invalidateQueries({
+  queryKey: ["/api/artworks/next", sessionId.current],
+  refetchType: "active",            // <- v5: refetch mounted queries too
+});
+
+// B) Explicitly refetch (bypasses invalidation ambiguity)
+queryClient.refetchQueries({
+  queryKey: ["/api/artworks/next", sessionId.current],
+  type: "active",
+});
+
+// C) Call the specific query's refetch function
+unseenResponse.refetch();
+```
+
+I’d do **A + exact key** to be precise and future-proof:
+
+```ts
+onSuccess: (data) => {
+  refetchUsageStats();
+  queryClient.invalidateQueries({
+    queryKey: ["/api/artworks/next", sessionId.current],
+    refetchType: "active",
+  });
+  if (data.session?.id) recordImpressionMutation.mutate(data.session.id);
+}
+```
+
+> Bonus: keep `staleTime: 0`—that’s fine. The key is `refetchType: "active"` (or use `refetchQueries`).
+
+### 2) You’re recording an impression **before** you ever render the image
+
+Even though you removed the impression filter for “fresh,” **recording the impression on `onSuccess` is semantically wrong**. It should record *when the artwork is actually displayed*. Move that call to the moment the morphing engine begins showing the frame (or right after the `<img>`/texture load event).
+
+---
+
+## Low-friction improvements you can ship now
+
+### Show the new artwork immediately (no waiting on a fetch)
+
+Even with the refetch fixed, you can make the UX snap by **injecting the new item into the query cache right away**:
+
+```ts
+onSuccess: (data) => {
+  const newItem = data.session; // includes id, imageUrl, prompt, etc.
+
+  // Optimistically add to the top of the list the UI is reading from
+  queryClient.setQueryData(
+    ["/api/artworks/next", sessionId.current],
+    (old: { artworks: any[] } | undefined) => {
+      const prev = old?.artworks ?? [];
+      // avoid dupes if refetch comes back fast
+      const withoutDupes = prev.filter(a => a.id !== newItem.id);
+      return { artworks: [newItem, ...withoutDupes] };
+    }
+  );
+
+  // Then still refetch to sync server-side ordering/state
+  queryClient.invalidateQueries({
+    queryKey: ["/api/artworks/next", sessionId.current],
+    refetchType: "active",
+  });
+};
+```
+
+### Guard against double-recording impressions
+
+Fire `POST /api/artworks/:id/viewed` **only** when the image actually hits the screen. If you have a morph queue, hook it at “frame acquired” or “texture ready”:
+
+```ts
+useEffect(() => {
+  const first = data?.artworks?.[0];
+  if (first && !first._impressionRecorded) {
+    recordImpressionMutation.mutate(first.id);
+    // you can also mark it locally to avoid repeat posts
+  }
+}, [data?.artworks]);
+```
+
+---
+
+## Answers to your specific questions
+
+### Q1: Partial vs exact key on invalidation
+
+* Use the **exact key** (`["/api/artworks/next", sessionId.current]`) to avoid surprises.
+* In v5, add `refetchType: "active"` (or call `refetchQueries`) so the mounted query actually fires.
+
+### Q2: Alternative approaches
+
+* **Option A (Fix invalidation)** — yes, do this regardless.
+* **Option B (Bypass queue & display immediately)** — also do this via `setQueryData` so users see it *now*, not on network latency.
+* **Option C (Simplify queue)** — I’d simplify, see below.
+* **Best combo today:** **A + B**. Fix the refetch, and optimistically inject.
+
+### Q3: Session management
+
+The per-tab `sessionId` creates fragility (reloads/new tabs “lose” fresh frames).
+
+Better options:
+
+* **Use `userId` + a short “freshness” TTL** (e.g., last 10–15 minutes). Your “fresh queue” then becomes “latest art I just made” per user, not per tab.
+* If you truly need tab scoping (e.g., multi-room displays), persist a **stable tabId** in `localStorage` and reuse it instead of a new `crypto.randomUUID()` per mount.
+* Server sessions (Express) add complexity and don’t help if you open multiple tabs intentionally. I’d stick with **`userId` (or `userId+tabId`)**.
+
+### Q4: Architecture red flags & redesign suggestions
+
+**Red flags**
+
+1. **“Fresh” tied to `sessionId`** → brittle across reloads/tabs; users expect “I just made this—show it now,” not “only this tab within 15min.”
+2. **Impression recorded pre-render** → can exclude items before they’re eligible to display (you fixed SQL, but timing is still wrong).
+3. **Polling model** for “fresh” → racey UX. You’re dependent on invalidation semantics and network timing.
+
+**Suggested simplifications**
+
+1. **Collapse fresh/storage logic from two lanes to one lane with tags:**
+
+   * Keep a single `art_sessions` table.
+   * Add columns: `fresh_until`, `created_by_user_id`, and maybe `origin` (`"generated" | "pool"`).
+   * Server returns: **(a)** “fresh & mine first” (where `created_by_user_id = me AND now() < fresh_until`), then **(b)** fill with unseen pool (`LEFT JOIN impressions IS NULL`).
+   * This lets you **scope by user** not tab, and still get the same behavior—without special session plumbing.
+
+2. **Use push instead of hoping invalidation hits at the right time:**
+
+   * Add **Server-Sent Events (SSE)** or **WebSocket** channel. When generation completes, push `{type: "art-ready", sessionId, artwork}` to the client. Client injects into cache via `setQueryData` and displays instantly. Your fetch becomes a safety net and for pagination.
+
+3. **Record impressions only on display** (not on mutation success).
+
+4. **Add a tiny “now-playing” FIFO** in the DB:
+
+   * `art_sessions_now_playing (user_id, artwork_id, inserted_at)`
+   * GET reads from this FIFO first for each user; generator POST inserts into it. This is simpler to reason about than “fresh since 15 minutes with a session key”.
+
+5. **Idempotency & dedupe**:
+
+   * POST `/api/generate-art` should be idempotent per (**userId**, **prompt hash**, maybe **music fingerprint**, **time bucket**). Prevents accidental spam on double-clicks.
+
+---
+
+## A minimal patch set to un-break today
+
+1. **Make refetch actually happen**
+
+```ts
+queryClient.invalidateQueries({
+  queryKey: ["/api/artworks/next", sessionId.current],
+  refetchType: "active",
+});
+```
+
+2. **Also refetch explicitly (belt & suspenders)**
+
+```ts
+queryClient.refetchQueries({
+  queryKey: ["/api/artworks/next", sessionId.current],
+  type: "active",
+});
+```
+
+3. **Show immediately**
+
+```ts
+queryClient.setQueryData(
+  ["/api/artworks/next", sessionId.current],
+  (old: { artworks: any[] } | undefined) => {
+    const prev = old?.artworks ?? [];
+    const newItem = data.session;
+    const withoutDupes = prev.filter(a => a.id !== newItem.id);
+    return { artworks: [newItem, ...withoutDupes] };
+  }
+);
+```
+
+4. **Move impression recording to display time**, not mutation success.
+
+---
+
+## Nice-to-haves (soon)
+
+* **SSE push** from `/api/generate-art` completion → client `setQueryData` → buttery UI.
+* **Swap `sessionId` → `userId` freshness** (plus optional `tabId` persisted in `localStorage` if you truly need per-tab).
+* **One query key** for simplicity:
+
+  ```ts
+  const unseenResponse = useQuery({
+    queryKey: ["/api/artworks/next", userId], // or userId+tabId
+    queryFn: () => fetch(`/api/artworks/next?userId=${userId}`).then(r => r.json()),
+    enabled: isAuthenticated && setupComplete,
+    staleTime: 0,
+  });
+  ```
+
+If you want, paste me the exact versions of `@tanstack/react-query` and I’ll tailor the call signatures precisely to that minor version. But the fix above (using `refetchType: "active"` or `refetchQueries`) will get you unstuck.

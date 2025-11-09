@@ -1,0 +1,423 @@
+## Root Cause Analysis
+
+### Primary Issue: React Query Key Mismatch
+**Root Cause**: The `invalidateQueries` call uses a **partial query key** `["/api/artworks/next"]`, but the actual query key is **exact** `["/api/artworks/next", sessionId.current]`. React Query v5 requires **exact key matching** for invalidation to trigger refetch.
+
+**Why This Happens**:
+```typescript
+// Query definition (exact key)
+const unseenResponse = useQuery({
+  queryKey: ["/api/artworks/next", sessionId.current], // ["api/artworks/next", "7c56e44f-..."]
+  // ...
+});
+
+// Invalidation (partial key)
+queryClient.invalidateQueries({ queryKey: ["/api/artworks/next"] }); // ❌ Won't match
+```
+
+React Query's invalidation algorithm requires the keys to match exactly or use a prefix match with `exact: false`. The partial key `["/api/artworks/next"]` doesn't trigger the specific query.
+
+**Evidence**: Server logs confirm no GET request after invalidation, proving the refetch never fires.
+
+---
+
+## Recommended Fix
+
+### Fix #1: Use Exact Query Key for Invalidation
+```typescript
+// In generateArtMutation.onSuccess
+onSuccess: (data) => {
+  refetchUsageStats();
+  
+  // ✅ Use exact query key with sessionId
+  queryClient.invalidateQueries({ 
+    queryKey: ["/api/artworks/next", sessionId.current] 
+  });
+  
+  if (data.session?.id) {
+    recordImpressionMutation.mutate(data.session.id);
+  }
+},
+```
+
+### Fix #2: Use Predicate-Based Invalidation (More Robust)
+```typescript
+onSuccess: (data) => {
+  refetchUsageStats();
+  
+  // ✅ Invalidate ANY query starting with "/api/artworks/next"
+  queryClient.invalidateQueries({ 
+    predicate: (query) => 
+      query.queryKey[0] === "/api/artworks/next"
+  });
+  
+  if (data.session?.id) {
+    recordImpressionMutation.mutate(data.session.id);
+  }
+},
+```
+
+### Fix #3: Immediate Optimistic Update (Best UX)
+```typescript
+const generateArtMutation = useMutation({
+  mutationFn: async ({ audioAnalysis, musicInfo }) => {
+    return await apiRequest("POST", "/api/generate-art", {
+      sessionId: sessionId.current,
+      audioAnalysis,
+      musicInfo,
+      preferences: { styles, artists, dynamicMode },
+      previousVotes,
+    });
+  },
+  onMutate: async ({ audioAnalysis, musicInfo }) => {
+    // Cancel outgoing refetches
+    await queryClient.cancelQueries({ 
+      queryKey: ["/api/artworks/next", sessionId.current] 
+    });
+    
+    // Snapshot previous data
+    const previousArtworks = unseenResponse.data?.artworks || [];
+    
+    // Optimistically add placeholder (prevents flash of old content)
+    queryClient.setQueryData(
+      ["/api/artworks/next", sessionId.current],
+      (old) => ({
+        ...old,
+        artworks: [
+          ...previousArtworks,
+          { 
+            id: `temp-${Date.now()}`, 
+            imageUrl: '/loading-placeholder.gif', 
+            isLoading: true,
+            sessionId: sessionId.current 
+          }
+        ]
+      })
+    );
+    
+    return { previousArtworks };
+  },
+  onSuccess: (data, variables, context) => {
+    refetchUsageStats();
+    
+    // Replace optimistic placeholder with real data
+    queryClient.setQueryData(
+      ["/api/artworks/next", sessionId.current],
+      (old) => ({
+        ...old,
+        artworks: [
+          // Remove placeholder, add real artwork
+          ...old.artworks.filter(a => !a.isLoading),
+          {
+            ...data.session,
+            imageUrl: data.imageUrl,
+            createdAt: new Date().toISOString()
+          }
+        ]
+      })
+    );
+    
+    // Optional: Invalidate for background sync
+    queryClient.invalidateQueries({ 
+      queryKey: ["/api/artworks/next", sessionId.current],
+      refetchType: 'none' // Don't refetch immediately
+    });
+    
+    if (data.session?.id) {
+      recordImpressionMutation.mutate(data.session.id);
+    }
+  },
+  onError: (err, variables, context) => {
+    // Rollback on error
+    if (context?.previousArtworks) {
+      queryClient.setQueryData(
+        ["/api/artworks/next", sessionId.current],
+        { artworks: context.previousArtworks }
+      );
+    }
+  },
+  onSettled: () => {
+    // Background refetch after 2 seconds (for consistency)
+    setTimeout(() => {
+      queryClient.refetchQueries({ 
+        queryKey: ["/api/artworks/next", sessionId.current] 
+      });
+    }, 2000);
+  },
+});
+```
+
+---
+
+## Architectural Improvements
+
+### Session Management: Server-Side Persistence
+**Problem**: Client-side `useRef(crypto.randomUUID())` breaks on page reload/multi-tab.
+
+**Solution**: Hybrid approach - client generates, server persists:
+
+```typescript
+// Backend: Create or reuse session
+app.post("/api/generate-art", isAuthenticated, async (req, res) => {
+  const { sessionId: clientSessionId, ...rest } = req.body;
+  const userId = req.user.claims.sub;
+  
+  // Server creates/validates session
+  let sessionId = clientSessionId;
+  if (!sessionId || !await storage.sessionExists(clientSessionId, userId)) {
+    sessionId = crypto.randomUUID();
+    await storage.createSession({ 
+      id: sessionId, 
+      userId, 
+      createdAt: new Date(),
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) // 24h
+    });
+  }
+  
+  // Rest of generation logic...
+  const session = await storage.createArtSession({
+    sessionId,
+    userId,
+    // ...
+  });
+  
+  res.json({ 
+    imageUrl, 
+    session: { id: session.id, sessionId } // Return canonical sessionId
+  });
+});
+
+// Client: Use server-provided sessionId
+const [canonicalSessionId, setCanonicalSessionId] = useState<string | null>(null);
+const sessionId = useRef(canonicalSessionId || crypto.randomUUID());
+
+// Update query key to use canonical session
+const unseenResponse = useQuery({
+  queryKey: ["/api/artworks/next", canonicalSessionId || sessionId.current],
+  // ...
+});
+
+// In mutation onSuccess
+onSuccess: (data) => {
+  // Update canonical session ID from server
+  if (data.session?.sessionId) {
+    setCanonicalSessionId(data.session.sessionId);
+  }
+  // ... rest of logic
+},
+```
+
+### Simplified Architecture: Unified Queue
+**Current Complexity**: Fresh queue + storage pool + impression filtering = many failure points.
+
+**Recommended**: Single priority queue with scoring:
+
+```typescript
+// Backend: Single unified query
+async getNextArtworks(userId: string, sessionId: string, limit: number = 20) {
+  const now = new Date();
+  const fifteenMinutesAgo = new Date(now.getTime() - 15 * 60 * 1000);
+  
+  const results = await this.db
+    .select()
+    .from(artSessions)
+    .leftJoin(userArtImpressions, and(
+      eq(artSessions.id, userArtImpressions.artworkId),
+      eq(userArtImpressions.userId, userId)
+    ))
+    .where(
+      and(
+        // User owns or session matches
+        or(
+          and(eq(artSessions.userId, userId)),
+          eq(artSessions.sessionId, sessionId)
+        ),
+        // Not expired
+        gte(artSessions.createdAt, fifteenMinutesAgo),
+        // Not viewed (except fresh session frames)
+        or(
+          // Fresh session frames (allow repeats within session)
+          and(
+            eq(artSessions.sessionId, sessionId),
+            gte(artSessions.createdAt, fifteenMinutesAgo)
+          ),
+          // Storage pool (never repeat)
+          isNull(userArtImpressions.id)
+        )
+      )
+    )
+    .orderBy(
+      // Priority: fresh session first, then recency
+      sql`CASE 
+        WHEN ${artSessions.sessionId} = ${sessionId} AND ${artSessions.createdAt} >= ${fifteenMinutesAgo} 
+        THEN 1 
+        ELSE 2 
+      END`,
+      desc(artSessions.createdAt)
+    )
+    .limit(limit);
+  
+  return results;
+}
+```
+
+### Real-time Updates with Server-Sent Events
+For immediate feedback without polling:
+
+```typescript
+// Backend: SSE endpoint
+app.get("/api/artworks/stream", isAuthenticated, (req, res) => {
+  const userId = req.user.claims.sub;
+  
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*',
+  });
+  
+  const heartbeat = setInterval(() => {
+    res.write('data: {"type": "heartbeat"}\n\n');
+  }, 30000);
+  
+  // Send fresh artworks when created
+  const sendFreshArtworks = async (newSessionId: string) => {
+    const fresh = await storage.getFreshArtworks(newSessionId, userId, 1);
+    if (fresh.length > 0) {
+      res.write(`data: ${JSON.stringify({
+        type: 'fresh_artwork',
+        artworks: fresh,
+        sessionId: newSessionId
+      })}\n\n`);
+    }
+  };
+  
+  // Listen for new artworks (you'd implement this with PostgreSQL LISTEN/NOTIFY)
+  // For now, just send on connection
+  // In production: use pg-listen or Redis pub/sub
+  
+  req.on('close', () => {
+    clearInterval(heartbeat);
+  });
+});
+
+// Client: SSE integration
+useEffect(() => {
+  if (!isAuthenticated || !canonicalSessionId) return;
+  
+  const eventSource = new EventSource(`/api/artworks/stream?sessionId=${canonicalSessionId}`);
+  
+  eventSource.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    if (data.type === 'fresh_artwork') {
+      // Optimistically update cache
+      queryClient.setQueryData(
+        ["/api/artworks/next", canonicalSessionId],
+        (old) => ({
+          ...old,
+          artworks: [
+            ...data.artworks,
+            ...(old?.artworks || []).filter(a => 
+              !data.artworks.some(fresh => fresh.id === a.id)
+            )
+          ]
+        })
+      );
+    }
+  };
+  
+  return () => eventSource.close();
+}, [isAuthenticated, canonicalSessionId]);
+```
+
+---
+
+## Architectural Red Flags & Recommendations
+
+### 🚨 Critical Issues
+
+1. **Session Fragility** (HIGH PRIORITY)
+   - **Problem**: Page reload loses fresh queue context
+   - **Fix**: Server-persisted session IDs with 24h TTL
+
+2. **Query Key Complexity** (MEDIUM)
+   - **Problem**: Dynamic sessionId creates cache fragmentation
+   - **Fix**: Canonical session ID + predicate invalidation
+
+3. **Race Conditions** (MEDIUM)
+   - **Problem**: Impression recording before fresh fetch excludes new content
+   - **Fix**: Session-scoped impression deferral (already partially fixed)
+
+### 🔄 Recommended Architecture Evolution
+
+**Phase 1: Immediate Fix (1-2 days)**
+```typescript
+// Just fix the query key and add optimistic updates
+onSuccess: (data) => {
+  // Canonical session ID
+  setCanonicalSessionId(data.session.sessionId);
+  
+  // Optimistic update
+  queryClient.setQueryData(["/api/artworks/next", data.session.sessionId], {
+    artworks: [{ ...data.session, imageUrl: data.imageUrl }]
+  });
+  
+  // Background sync
+  queryClient.invalidateQueries({
+    predicate: (query) => query.queryKey[0] === "/api/artworks/next"
+  });
+}
+```
+
+**Phase 2: Session Persistence (2-3 days)**
+- Server-side session management
+- LocalStorage fallback for offline resilience
+
+**Phase 3: Real-time (1 week)**
+- SSE or WebSocket for instant updates
+- Remove React Query polling for fresh content
+
+**Phase 4: Simplify (2 weeks)**
+- Unified priority queue (one SQL query)
+- Remove fresh/storage complexity
+
+### 🎯 Quick Win Implementation
+
+Replace your current mutation with this:
+
+```typescript
+const generateArtMutation = useMutation({
+  mutationFn: async ({ audioAnalysis, musicInfo }) => {
+    return await apiRequest("POST", "/api/generate-art", {
+      sessionId: canonicalSessionId || sessionId.current,
+      audioAnalysis, musicInfo,
+      preferences: { styles, artists, dynamicMode },
+      previousVotes,
+    });
+  },
+  onSuccess: (data) => {
+    // Update canonical session
+    setCanonicalSessionId(data.session.sessionId);
+    
+    // Immediately show the new artwork
+    queryClient.setQueryData(
+      ["/api/artworks/next", data.session.sessionId],
+      { artworks: [{ ...data.session, imageUrl: data.imageUrl }] }
+    );
+    
+    refetchUsageStats();
+    recordImpressionMutation.mutate(data.session.id);
+    
+    // Background sync other queries
+    queryClient.invalidateQueries({
+      predicate: (query) => 
+        query.queryKey[0] === "/api/artworks/next" && 
+        query.queryKey[1] !== data.session.sessionId
+    });
+  },
+});
+```
+
+This will **immediately fix your core issue** - users will see fresh artwork right after generation. The background sync ensures other tabs/sessions stay consistent.
+
+The root cause was a simple React Query key mismatch, but you've uncovered much deeper architectural issues that are worth addressing systematically. Start with the quick fix above, then tackle session persistence next.
