@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -88,6 +88,10 @@ export default function Display() {
     return registry.getDefaultEngine();
   });
   const [isValidatingImages, setIsValidatingImages] = useState(false); // show spinner during validation/auto-generation
+  
+  // FLICKERING FIX: Pin fresh artwork for 3 seconds to survive DB replication lag
+  const [pinnedArtwork, setPinnedArtwork] = useState<any | null>(null);
+  const pinnedTimerRef = useRef<number | null>(null); // Browser timer uses number, not NodeJS.Timeout
   
   // Debug and Effects Control
   const [showDebugOverlay, setShowDebugOverlay] = useState(false);
@@ -227,6 +231,39 @@ export default function Display() {
 
   // Extract artworks from response
   const recentArtworks = unseenResponse?.artworks;
+
+  // FLICKERING FIX: Merge pinned artwork ahead of server results (single source of truth)
+  const mergedArtworks = useMemo(() => {
+    const serverArtworks = unseenResponse?.artworks || [];
+    if (pinnedArtwork) {
+      // Pin always appears first, remove duplicate from server results
+      return [pinnedArtwork, ...serverArtworks.filter(a => a.id !== pinnedArtwork.id)];
+    }
+    return serverArtworks;
+  }, [unseenResponse?.artworks, pinnedArtwork]);
+
+  // FLICKERING FIX: Cleanup timer on unmount to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      if (pinnedTimerRef.current) {
+        clearTimeout(pinnedTimerRef.current);
+      }
+    };
+  }, []);
+
+  // FLICKERING FIX: Early unpin when server returns same artwork ID (smooth handoff)
+  useEffect(() => {
+    if (!pinnedArtwork) return;
+    const serverArtworks = unseenResponse?.artworks || [];
+    if (serverArtworks.some(a => a.id === pinnedArtwork.id)) {
+      console.log('[FlickerFix] Server now has pinned artwork - dropping pin early');
+      setPinnedArtwork(null);
+      if (pinnedTimerRef.current) {
+        clearTimeout(pinnedTimerRef.current);
+        pinnedTimerRef.current = null;
+      }
+    }
+  }, [unseenResponse?.artworks, pinnedArtwork]);
 
   // First-Time Setup Wizard: Check if user has preferences
   useEffect(() => {
@@ -410,7 +447,7 @@ export default function Display() {
       return;
     }
     
-    if (recentArtworks && recentArtworks.length > 0 && morphEngineRef.current.getFrameCount() === 0) {
+    if (mergedArtworks && mergedArtworks.length > 0 && morphEngineRef.current.getFrameCount() === 0) {
       // Load and VALIDATE frames asynchronously
       const loadValidatedFrames = async () => {
         try {
@@ -418,7 +455,7 @@ export default function Display() {
           console.log(`[Display] 🔍 Loading artworks in FIFO order (max 20)...`);
         
         // FIFO ORDER: Load artworks sequentially (no shuffle) for true freshness
-        const orderedArtworks = [...recentArtworks];
+        const orderedArtworks = [...mergedArtworks];
         
         // Track validated artworks for UI selection
         const validatedArtworks: typeof recentArtworks = [];
@@ -563,7 +600,7 @@ export default function Display() {
       // Execute async loading
       loadValidatedFrames();
     }
-  }, [recentArtworks, toast]);
+  }, [mergedArtworks, toast]);
 
   // Smart sync: Add only new frames when recent artworks refreshes (after generation)
   useEffect(() => {
@@ -603,6 +640,25 @@ export default function Display() {
     // Add new frames with immediate jump priority (backend returns fresh → storage order)
     // insertFrameAfterCurrent ensures fresh artwork appears IMMEDIATELY (no 60s wait)
     newArtworks.forEach(artwork => {
+      // FLICKERING FIX: Triple guard to prevent double insertion
+      // Guard #1: Skip if this is the currently pinned artwork
+      if (pinnedArtwork && artwork.id === pinnedArtwork.id) {
+        console.log(`[FlickerFix] Skipping pinned artwork (already visible): ${artwork.id}`);
+        return;
+      }
+      
+      // Guard #2: Skip if already in MorphEngine by ID
+      if (morphEngineRef.current.hasFrameById(artwork.id)) {
+        console.log(`[FlickerFix] Skipping duplicate frame (already in engine): ${artwork.id}`);
+        return;
+      }
+      
+      // Guard #3: Skip if impression already recorded (already processed)
+      if (recordedImpressions.current.has(artwork.id)) {
+        console.log(`[FlickerFix] Skipping already-recorded artwork: ${artwork.id}`);
+        return;
+      }
+      
       let dnaVector = parseDNAFromSession(artwork);
       
       if (!dnaVector) {
@@ -632,14 +688,12 @@ export default function Display() {
       });
       
       // PEER-REVIEWED FIX #3: Record impression when fresh frame is inserted (deduplicated with retry on failure)
-      if (!recordedImpressions.current.has(artwork.id)) {
-        recordedImpressions.current.add(artwork.id);
-        recordImpressionMutation.mutateAsync(artwork.id).catch((error) => {
-          // Remove from Set on failure to allow retry
-          recordedImpressions.current.delete(artwork.id);
-          console.error(`[Freshness] Failed to record impression for ${artwork.id}:`, error);
-        });
-      }
+      recordedImpressions.current.add(artwork.id);
+      recordImpressionMutation.mutateAsync(artwork.id).catch((error) => {
+        // Remove from Set on failure to allow retry
+        recordedImpressions.current.delete(artwork.id);
+        console.error(`[Freshness] Failed to record impression for ${artwork.id}:`, error);
+      });
       
       console.log(`[Display] ✅ Inserted fresh frame with immediate jump (safe - pruning already done): ${artwork.prompt?.substring(0, 50)}...`);
     });
@@ -786,17 +840,19 @@ export default function Display() {
       
       // PEER-REVIEWED FIX #1: Optimistic Update - Show fresh artwork immediately
       if (data.session) {
+        const newArtwork = {
+          ...data.session,
+          imageUrl: data.imageUrl,
+          prompt: data.prompt,
+          explanation: data.explanation,
+          createdAt: new Date().toISOString(),
+        };
+        
         queryClient.setQueryData(
           ["/api/artworks/next", sessionId.current],
           (old: any) => ({
             artworks: [
-              {
-                ...data.session,
-                imageUrl: data.imageUrl,
-                prompt: data.prompt,
-                explanation: data.explanation,
-                createdAt: new Date().toISOString(),
-              },
+              newArtwork,
               ...(old?.artworks || []).filter((a: any) => a.id !== data.session.id)
             ],
             poolSize: (old?.poolSize || 0) + 1,
@@ -805,14 +861,29 @@ export default function Display() {
             needsGeneration: false,
           })
         );
+        
+        // FLICKERING FIX: Pin fresh artwork for 3 seconds (survives DB lag)
+        if (pinnedTimerRef.current) {
+          clearTimeout(pinnedTimerRef.current);
+        }
+        setPinnedArtwork(newArtwork);
+        pinnedTimerRef.current = window.setTimeout(() => {
+          console.log('[FlickerFix] Pin expired after 3 seconds');
+          setPinnedArtwork(null);
+          pinnedTimerRef.current = null;
+        }, 3000);
+        console.log('[FlickerFix] Pinned fresh artwork:', newArtwork.id);
       }
       
-      // PEER-REVIEWED FIX #2: Invalidate with refetchType: "active" (React Query v5)
+      // PEER-REVIEWED FIX #2: Invalidate with refetchType: "active" + 250ms debounce (React Query v5)
       // React Query v5 requires refetchType: "active" to refetch mounted queries
-      queryClient.invalidateQueries({ 
-        queryKey: ["/api/artworks/next", sessionId.current],
-        refetchType: "active",
-      });
+      // 250ms debounce gives DB time to sync before refetch
+      setTimeout(() => {
+        queryClient.invalidateQueries({ 
+          queryKey: ["/api/artworks/next", sessionId.current],
+          refetchType: "active",
+        });
+      }, 250);
     },
     onError: (error: any) => {
       toast({

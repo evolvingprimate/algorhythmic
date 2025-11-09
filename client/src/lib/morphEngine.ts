@@ -167,6 +167,10 @@ export class MorphEngine {
     return this.frames.some(frame => frame.imageUrl === imageUrl);
   }
 
+  hasFrameById(artworkId: string): boolean {
+    return this.frames.some(frame => frame.artworkId === artworkId);
+  }
+
   pruneOldestFrames(count: number): void {
     if (count <= 0 || this.frames.length === 0) return;
     
