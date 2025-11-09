@@ -70,6 +70,7 @@ export default function Display() {
   const [dynamicMode, setDynamicMode] = useState<boolean>(false);
   const [showStyleSelector, setShowStyleSelector] = useState(false);
   const [showAudioSourceSelector, setShowAudioSourceSelector] = useState(false);
+  const [setupComplete, setSetupComplete] = useState(false); // Track if first-time setup is done
   const [currentPrompt, setCurrentPrompt] = useState("");
   const [currentAudioAnalysis, setCurrentAudioAnalysis] = useState<AudioAnalysis | null>(null);
   const [currentArtworkId, setCurrentArtworkId] = useState<string | null>(null);
@@ -194,18 +195,19 @@ export default function Display() {
   });
 
   // Fetch preferences on mount
-  const { data: preferences } = useQuery<ArtPreference>({
+  const { data: preferences, isLoading: isLoadingPreferences, isError: preferencesError } = useQuery<ArtPreference>({
     queryKey: [`/api/preferences/${sessionId.current}`],
   });
 
   // Fetch UNSEEN artwork only - Freshness Pipeline ensures never seeing repeats
+  // GATED: Only load artworks after first-time setup is complete
   const { data: unseenResponse } = useQuery<{
     artworks: any[];
     poolSize: number;
     needsGeneration: boolean;
   }>({
     queryKey: ["/api/artworks/next"],
-    enabled: isAuthenticated,
+    enabled: isAuthenticated && setupComplete, // Block until wizard complete
     refetchOnWindowFocus: false,
     refetchOnMount: true,
   });
@@ -213,14 +215,44 @@ export default function Display() {
   // Extract artworks from response
   const recentArtworks = unseenResponse?.artworks;
 
+  // First-Time Setup Wizard: Check if user has preferences
   useEffect(() => {
-    if (preferences?.styles?.length) {
-      setSelectedStyles(preferences.styles);
+    // CRITICAL: Handle loading and error states to prevent blank screen
+    if (isLoadingPreferences) {
+      // Still loading preferences, wait...
+      return;
     }
-    if (preferences?.dynamicMode !== undefined) {
+    
+    if (preferencesError) {
+      // Preferences query failed - show wizard as fallback and warn user
+      console.error('[Display] Failed to load preferences - showing wizard as fallback');
+      toast({
+        title: "Preferences Unavailable",
+        description: "Couldn't load your saved preferences. You can select new ones now.",
+        variant: "default",
+      });
+      setShowStyleSelector(true);
+      setSetupComplete(false);
+      return;
+    }
+    
+    // Tight type guard: Show wizard if no preferences or empty styles
+    if (!preferences || !preferences.styles?.length) {
+      // No preferences saved - show wizard for first-time user
+      console.log('[Display] First-time user detected - showing style selector wizard');
+      setShowStyleSelector(true);
+      setSetupComplete(false);
+      return;
+    }
+    
+    // Returning user - preferences is guaranteed to exist here with styles
+    console.log('[Display] Returning user - loading saved preferences');
+    setSelectedStyles(preferences.styles);
+    if (preferences.dynamicMode !== undefined) {
       setDynamicMode(preferences.dynamicMode);
     }
-  }, [preferences]);
+    setSetupComplete(true); // Allow artwork loading
+  }, [preferences, isLoadingPreferences, preferencesError]);
 
   // Auto-generate artwork when unseen pool runs low (Freshness Pipeline)
   useEffect(() => {
@@ -1345,6 +1377,12 @@ export default function Display() {
     setSelectedStyles(styles);
     setDynamicMode(isDynamicMode);
     savePreferencesMutation.mutate({ styles, dynamicMode: isDynamicMode });
+    
+    // Mark setup as complete after first-time user saves preferences
+    if (!setupComplete) {
+      console.log('[Display] First-time setup complete - enabling artwork loading');
+      setSetupComplete(true);
+    }
   };
 
   // Navigation functions - only update index
@@ -1461,8 +1499,8 @@ export default function Display() {
         )}
       </div>
 
-      {/* Loading Spinner Overlay - shown during validation/auto-generation */}
-      {isValidatingImages && (
+      {/* Loading Spinner Overlay - shown during validation/auto-generation (hidden during wizard) */}
+      {isValidatingImages && !showStyleSelector && !showAudioSourceSelector && (
         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-background/95 backdrop-blur-sm">
           <div className="flex flex-col items-center gap-6">
             <div className="animate-spin rounded-full h-16 w-16 border-4 border-primary border-t-transparent"></div>
