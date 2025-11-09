@@ -72,9 +72,9 @@ export class MorphEngine {
   
   private readonly HOLD_DURATION = 0; // No hold - start immediately
   private readonly RAMP_DURATION = 8000; // 8 seconds to ramp up effects
-  private readonly MORPH_DURATION = 292000; // 4:52 minutes morph (292s)
-  private readonly TOTAL_CYCLE = 300000; // 5 minutes total (0+8+292=300s)
-  private readonly KEN_BURNS_CYCLE = 300000; // Ken Burns cycle matches morph cycle
+  private readonly MORPH_DURATION = 52000; // 52 seconds morph (0:52)
+  private readonly TOTAL_CYCLE = 60000; // 1 minute total (0+8+52=60s)
+  private readonly KEN_BURNS_CYCLE = 60000; // Ken Burns cycle matches morph cycle
 
   // Audio-reactive controls (Morpheus 0.4)
   public controls: MorphControls = {
