@@ -81,7 +81,7 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 - **Effects Control Menu**: Slide-out menu with checkboxes and sliders to adjust visual effects (currently disabled for pure morphing mode).
 - **Effect History Logging**: Per-frame JSON logs for debugging and analysis.
 - **Design System**: Purple primary color, Inter font, Shadcn UI components, subtle animations, mobile-first and TV-optimized responsive design.
-- **Landing Page**: Hero video background using "Surreal_flowing_abstract_art_video_2_1762650434281.mp4" with 50% playback speed for smooth motion.
+- **Landing Page**: Hero video background using "Surreal_flowing_abstract_art_video_2_1762650434281.mp4" at native playback speed.
 
 ## External Dependencies
 - **OpenAI API**: GPT-5, DALL-E 3, GPT-4o Vision for AI art generation and analysis.
