@@ -387,16 +387,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // GET endpoint for initial page load - returns unseen artworks from pool
+  // GET endpoint with PRIORITY QUEUE: fresh → unseen
+  // Fresh artwork (this session's last 15 min) shown FIRST, storage pool is fallback only
   app.get("/api/artworks/next", isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
+      const sessionId = req.query.sessionId as string;
       const limit = req.query.limit ? parseInt(req.query.limit as string) : 20;
       
-      const unseenArtworks = await storage.getUnseenArtworks(userId, limit);
-      const needsGeneration = unseenArtworks.length < 5;
+      // PRIORITY 1: Fresh AI-generated artwork (this session, last 15 minutes, not yet viewed)
+      const freshArtworks = sessionId 
+        ? await storage.getFreshArtworks(sessionId, userId, limit)
+        : [];
       
-      console.log(`[Artworks GET] User ${userId} - Unseen pool: ${unseenArtworks.length} artworks`);
+      // PRIORITY 2: Unseen storage pool (fallback only when fresh queue empty)
+      let combinedArtworks = [...freshArtworks];
+      if (combinedArtworks.length < limit) {
+        const remainingLimit = limit - combinedArtworks.length;
+        const unseenArtworks = await storage.getUnseenArtworks(userId, remainingLimit);
+        
+        // Deduplicate IDs (fresh queue takes precedence)
+        const existingIds = new Set(combinedArtworks.map(a => a.id));
+        const uniqueUnseen = unseenArtworks.filter(a => !existingIds.has(a.id));
+        
+        combinedArtworks.push(...uniqueUnseen);
+      }
+      
+      const needsGeneration = combinedArtworks.length < 5;
+      
+      console.log(`[Artworks GET] User ${userId} - Fresh: ${freshArtworks.length}, Storage: ${combinedArtworks.length - freshArtworks.length}, Total: ${combinedArtworks.length}`);
       
       // Set no-cache headers to prevent stale data
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
@@ -404,8 +423,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.setHeader('Expires', '0');
       
       res.json({
-        artworks: unseenArtworks,
-        poolSize: unseenArtworks.length,
+        artworks: combinedArtworks,
+        poolSize: combinedArtworks.length,
+        freshCount: freshArtworks.length,
+        storageCount: combinedArtworks.length - freshArtworks.length,
         needsGeneration,
       });
     } catch (error: any) {

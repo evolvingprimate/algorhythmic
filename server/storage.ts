@@ -70,7 +70,7 @@ export interface IStorage {
   // User Art Impressions (Freshness Pipeline)
   recordImpression(userId: string, artworkId: string): Promise<void>;
   getUnseenArtworks(userId: string, limit?: number): Promise<ArtSession[]>;
-  getFreshArtworks(sessionId: string, limit?: number): Promise<ArtSession[]>; // Fresh AI-generated artwork (priority queue)
+  getFreshArtworks(sessionId: string, userId: string, limit?: number): Promise<ArtSession[]>; // Fresh AI-generated artwork (priority queue)
   
   // Users (for subscription management and authentication)
   getUser(id: string): Promise<User | undefined>;
@@ -242,11 +242,14 @@ export class MemStorage implements IStorage {
     return this.getRecentArt(limit);
   }
 
-  async getFreshArtworks(sessionId: string, limit: number = 20): Promise<ArtSession[]> {
+  async getFreshArtworks(sessionId: string, userId: string, limit: number = 20): Promise<ArtSession[]> {
     // Return recently created artworks from this session (in-memory stub)
     const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
     return Array.from(this.sessions.values())
-      .filter((art) => art.sessionId === sessionId && art.createdAt >= fifteenMinutesAgo)
+      .filter((art) => 
+        art.sessionId === sessionId && 
+        art.createdAt >= fifteenMinutesAgo
+      )
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .slice(0, limit);
   }
@@ -704,18 +707,26 @@ export class PostgresStorage implements IStorage {
     return results;
   }
 
-  async getFreshArtworks(sessionId: string, limit: number = 20): Promise<ArtSession[]> {
-    // Fresh artwork: created within last 15 minutes for this session, not yet viewed by user
+  async getFreshArtworks(sessionId: string, userId: string, limit: number = 20): Promise<ArtSession[]> {
+    // Fresh artwork: created in this session within last 15 minutes, not yet viewed by user
     // This is the PRIORITY QUEUE - these frames should be shown FIRST before storage pool
     const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
     
     const results = await this.db
       .select(getTableColumns(artSessions))
       .from(artSessions)
+      .leftJoin(
+        userArtImpressions,
+        and(
+          eq(artSessions.id, userArtImpressions.artworkId),
+          eq(userArtImpressions.userId, userId)
+        )
+      )
       .where(
         and(
-          eq(artSessions.sessionId, sessionId),
-          gte(artSessions.createdAt, fifteenMinutesAgo)
+          eq(artSessions.sessionId, sessionId),  // Session-scoped fresh queue
+          gte(artSessions.createdAt, fifteenMinutesAgo), // Last 15 min
+          isNull(userArtImpressions.id) // Not yet viewed
         )
       )
       .orderBy(desc(artSessions.createdAt)) // Newest first

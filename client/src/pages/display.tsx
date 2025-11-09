@@ -206,9 +206,18 @@ export default function Display() {
   const { data: unseenResponse } = useQuery<{
     artworks: any[];
     poolSize: number;
+    freshCount?: number;
+    storageCount?: number;
     needsGeneration: boolean;
   }>({
-    queryKey: ["/api/artworks/next"],
+    queryKey: ["/api/artworks/next", sessionId.current],
+    queryFn: async () => {
+      const res = await fetch(`/api/artworks/next?sessionId=${sessionId.current}`, {
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+      return await res.json();
+    },
     enabled: isAuthenticated && setupComplete, // Block until wizard complete
     staleTime: 0, // Always consider data stale - refetch on mount
     refetchOnWindowFocus: false,
