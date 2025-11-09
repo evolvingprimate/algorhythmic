@@ -29,7 +29,7 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 - **Image Generation**: DALL-E 3 creates 1024x1024 artwork.
 - **Permanent Storage**: Images are downloaded and stored in Replit Object Storage with a robust verification and retry pipeline.
 - **DNA Morphing System**: Each artwork's 50-point DNA vector enables smooth, procedural morphing between frames over 5-minute cycles, with audio-reactive modulation.
-- **Frame Pool Management**: Ensures continuous morphing, smart synchronization of new frames, stable deduplication, hard cap enforcement (max 20 frames), and active frame protection. Provides a first-run experience with placeholder frames.
+- **Frame Pool Management**: Ensures continuous morphing, smart synchronization of new frames, stable deduplication, hard cap enforcement (max 20 frames), and active frame protection. Features **priority insertion** via `insertFrameAfterCurrent()` - freshly generated artwork appears immediately instead of waiting ~100 minutes in FIFO queue. Provides a first-run experience with placeholder frames.
 - **Rendering Engines (Morpheus)**:
     - **Morpheus 0.1**: Simple crossfade renderer with clean opacity blending between images. No zoom, no pan, no effects - pure image transitions.
     - **Morpheus 0.2**: Bidirectional Ken Burns system ("ships passing in the night") with mirrored-progress handoff and inverted pan for seamless motion.
