@@ -1,0 +1,75 @@
+This is excellent work—clean architecture, solid batching, and good hygiene. You’ve addressed the root problems and future-proofed the pipeline. A few final nits and guardrails to make it truly bulletproof:
+
+### ✅ What looks great
+
+* Batched impressions via a single endpoint with dedupe + size cap.
+* `onConflictDoUpdate` to refresh `viewedAt` (preserves your 7-day cooldown semantics).
+* Production-grade impression recorder hook (debounce, retry, lifecycle flush, beacon).
+* HTML cache-busting via `Accept: text/html` headers.
+* Clean integration: initial load + smart sync both route through the hook.
+
+### 🧩 Small improvements (drop-in)
+
+1. **Invalidate unseen query after batch impressions**
+   Right after a successful batch, kick TanStack to drop the now-seen items from the pool.
+
+```ts
+// inside useImpressionRecorder onSuccess (or where you call mutate)
+queryClient.invalidateQueries({
+  queryKey: ["/api/artworks/next", sessionId.current], // or userId-scoped key if you switched
+  refetchType: "active",
+});
+```
+
+Otherwise, the UI may show one more cycle with the legacy six before the next poll.
+
+2. **Server: input ownership / authorization check**
+   Make sure users can’t mark impressions on artworks that aren’t globally visible or “theirs.” If your model expects per-user visibility, validate IDs belong to the visible set for that user before upsert.
+
+3. **Server: return more useful stats (optional)**
+   Right now you return `{ recorded: artworkIds.length }` regardless of conflicts. Consider returning:
+
+```json
+{ "attempted": 12, "upserted": 12, "ids": ["..."] }
+```
+
+Even if you can’t get `upserted` precisely, echoing `ids` helps the client confirm what it queued.
+
+4. **Indexes sanity (you’re good, but confirm)**
+
+* Unique `(userId, artworkId)` ✅
+* `(userId, viewedAt)` ✅
+* Consider `(artworkId)` on impressions if you ever purge per-artwork.
+
+5. **sendBeacon CORS/headers**
+   Ensure `/api/artworks/batch-impressions` allows beacon POSTs on unload (same origin is fine; if not, set permissive CORS + no credentials on that route).
+
+6. **Service Worker/CDN caveat (if used)**
+   Your HTML no-cache header is perfect. If you ever add a service worker or CDN, make sure it **doesn’t** cache `index.html` aggressively and respects your headers.
+
+7. **Chunking in the hook**
+   You’ve capped server to 200. In the hook, if `queueRef` exceeds 200, split into chunks of 200 per flush to avoid a hard 413.
+
+8. **TypeScript timer type**
+   In the hook file too, use `number | null` for browser timers (you did that in display.tsx; mirror it here).
+
+9. **Telemetry & alerts (quick win)**
+   Add counters and logs:
+
+* `batch_impressions_attempted`, `batch_impressions_failed`, `batch_impressions_latency_ms`.
+* Alert on sustained failures or unusually large batch sizes.
+
+10. **Edge “display vs load” semantics**
+    You’re now recording impressions for initial load (good for legacy cleanup). If you ever distinguish “loaded” vs “actually displayed,” you can tag impressions with a `type: 'loaded'|'displayed'` column later—no action needed now, just future-proof thinking.
+
+### 🧪 Final test checklist
+
+* Generate → **instant** display, no flicker (watch `[FlickerFix]` logs).
+* Hard refresh → legacy 6 **do not** return.
+* Network tab shows **one** batch call on first load (or when new items appear), not N singles.
+* Close tab during playback → beacon fires and impressions persist.
+* Repeat Generate quickly → no duplicate enqueues; impressions refresh `viewedAt`.
+
+### 📣 Verdict
+
+**Approved.** Implement the small “invalidate after batch” step and the ownership check, and you’re in excellent shape. This should fully eliminate recycling, ensure immediate fresh display, and keep the pool clean going forward.

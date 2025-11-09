@@ -1,0 +1,66 @@
+This is a stellar, production-ready plan. 👍
+Here’s my sign-off plus a few high-leverage additions so you don’t get surprised in prod.
+
+# ✅ Additional test cases to include
+
+* **Multi-tab concurrency:** Open 2–3 tabs for the same user. Generate in one tab, verify others don’t resurface legacy items and don’t double-enqueue frames.
+* **Slow/spotty network:** Throttle to “Slow 3G”; verify beacon flush and retry logic still lands impressions (server sees POSTs after tab close).
+* **Replica lag simulation:** Add 250–500ms artificial DB lag (or read from a replica) and confirm pinning prevents regressions; verify early-unpin still engages.
+* **Large batch edges:** Queue 201–400 ids to ensure client chunking + server 200 cap behave (multiple calls, no 413, no drops).
+* **Auth integrity:** Attempt to batch-record impressions for artwork IDs the user shouldn’t see (expect 403/filtered). (Useful if visibility rules tighten later.)
+* **Cache busting under SW/CDN:** If a service worker or CDN is present (now or later), confirm they respect the HTML no-cache headers and don’t cache `index.html`.
+* **Rapid generation spam:** Burst 5–10 “Generate” actions; ensure single visible frame (no flicker), no duplicate impressions, stable CPU/memory.
+* **Time skew:** Change client clock ±2 days and confirm 7-day cooldown logic relies on server timestamps, not client time.
+
+# 🚨 Rollback triggers (tighten thresholds)
+
+* Batch endpoint error rate **>5%** over 15 min (currently 10%/1h).
+* Beacon deliveries missing for **>20%** of tab-close events (measured over 1h).
+* Median fresh-art display (post-generation) **>1s** (should be ~0ms with pinning).
+* Any multi-tab duplication report or “old 6” resurfacing.
+
+# 📈 Success metrics (add a couple)
+
+* **Freshness Hit Rate:** `% of first item in mergedArtworks created ≤15 min ago`. Target: >90% during active sessions.
+* **Duplicate Prevention:** Count of dropped duplicate enqueues (should be low but non-zero); alert if spikes 10× baseline.
+* **Batch Size Distribution:** p50/p95 batch sizes; unexpected growth may indicate upstream failure to record impressions on display.
+
+# 🛡️ Small risk & mitigation notes
+
+* **Ownership check (server):** Before upserting, optionally filter `artworkIds` to those the user is authorized to view. Prevents hostile ID stuffing.
+* **Invalidate after batch (strongly recommended):** Immediately invalidate `["/api/artworks/next", …]` on batch success with `refetchType: "active"` so legacy items disappear without waiting for next poll.
+* **sendBeacon headers:** Same-origin is fine; if you ever cross origins, ensure CORS allows `keepalive`/beacon POSTs.
+* **Chunking guard in hook:** Already noted; keep chunks ≤200 to match server cap.
+* **Service degradation plan:** If DB load spikes, temporarily raise the “fresh” cutoff window or reduce pool size to keep UX snappy.
+
+# 🧪 Handy SQL spot-check (post-deploy)
+
+* **Legacy eradication:**
+
+  ```sql
+  SELECT COUNT(*) AS legacy_untracked
+  FROM art_sessions a
+  LEFT JOIN user_art_impressions i
+    ON i.artwork_id = a.id AND i.user_id = $USER
+  WHERE i.id IS NULL;
+  ```
+
+  Target: `0`.
+
+* **Cooldown refresh working:**
+
+  ```sql
+  SELECT artwork_id, MAX(viewed_at)
+  FROM user_art_impressions
+  WHERE user_id = $USER
+  GROUP BY artwork_id
+  ORDER BY MAX(viewed_at) DESC
+  LIMIT 10;
+  ```
+
+  Confirm `viewed_at` advances on re-view.
+
+# ✅ Overall verdict
+
+**Approved to deploy.**
+Your checklist is excellent; add the **post-batch invalidate**, **multi-tab**, and **replica-lag** tests and you’re covered. This should fully eliminate recycling, ensure instant fresh display, and keep impressions robust under real-world conditions.

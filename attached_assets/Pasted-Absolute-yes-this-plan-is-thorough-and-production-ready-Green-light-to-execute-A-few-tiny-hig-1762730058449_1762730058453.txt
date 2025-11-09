@@ -1,0 +1,61 @@
+Absolute yes—this plan is thorough and production-ready. Green light to execute. 🚀
+A few tiny, high-leverage refinements before you hit “go”:
+
+### 10 quick nits to make it bulletproof
+
+1. **Invalidate the exact query key.**
+   In your hook you used:
+
+```ts
+queryClient.invalidateQueries({ queryKey: ["/api/artworks/next"], refetchType: "active" });
+```
+
+If your live query key includes `sessionId` (or `userId`), invalidate that exact key:
+
+```ts
+queryClient.invalidateQueries({
+  queryKey: ["/api/artworks/next", sessionId.current], // or userId
+  refetchType: "active",
+});
+```
+
+2. **Hook dependency & state guards.**
+   Make sure `queryClient` and any IDs (e.g., `sessionId.current`) used inside `flush` are in the deps array or intentionally captured. Also ensure `isFlushingRef` toggles `true/false` with a `try { ... } finally { isFlushingRef.current = false }` so a thrown error doesn’t “wedge” the hook.
+
+3. **Chunking enforcement in the hook.**
+   You capped the server at 200—ensure the client actually slices the queue into chunks ≤200 per request. (Sounds like you’ve planned it; just confirming it’s coded.)
+
+4. **sendBeacon fallback.**
+   Keep `sendBeacon`; also add a `fetch(..., { keepalive: true })` fallback for UAs that gate beacon or when payload >64KB. Same-origin is ideal; if you ever cross origin, set permissive CORS for that route.
+
+5. **Ownership/visibility check.**
+   Your `validateArtworkVisibility` currently checks existence in `art_sessions`. If you later gate visibility per user, update it to filter by user-visible scope. For Drizzle/Postgres, prefer `inArray(artSessions.id, ids)` over raw `ANY()` unless you’re explicitly using `sql.array(ids, 'text')`.
+
+6. **Enhanced response stats.**
+   Great addition—make sure `recorded` reflects actual upserts (success count), not just `validIds.length`. If your driver can’t return affected rows easily, echo the `validIds` you attempted so the client can reconcile.
+
+7. **Telemetry sampling.**
+   Metrics look good—add lightweight sampling or log throttling to avoid noisy logs on large cohorts (e.g., only log every Nth success, always log failures).
+
+8. **WebSocket / SSE test in multi-tab case.**
+   Your test mentions “wait 5s for WebSocket sync”—if you’re not already pushing, consider emitting a lightweight “artwork-updated” event too. (Optional; your pinning already guarantees UX.)
+
+9. **SSR/Suspense caveat (if applicable).**
+   If you later SSR the display page, ensure the hook’s `window`/`document` references are guarded (`typeof window !== 'undefined'`) to avoid hydration warnings.
+
+10. **SQL: index hygiene.**
+    You’re covered, but if queries on `art_sessions.created_at` are frequent, add a `(created_at DESC)` index to keep the unseen pool fast under load.
+
+---
+
+### Extra tests (nice-to-have)
+
+* **Clock skew:** Set client clock ±2 days; confirm cooldown relies on server `NOW()` (it does).
+* **Beacon stress:** Close tab within 200ms of first paint repeatedly—verify at least one of `sendBeacon`/`keepalive fetch` lands.
+
+---
+
+### Final verdict
+
+**Approved to execute the full enhancement suite.**
+Your phases, timelines, and rollback plan are solid. Implement the exact-key invalidation + the tiny safety/robustness tweaks above, and ship.
