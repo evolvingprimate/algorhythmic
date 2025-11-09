@@ -1,9 +1,10 @@
 import { useRef, useCallback, useEffect } from 'react';
-import { apiRequest } from '@/lib/queryClient';
+import { apiRequest, queryClient } from '@/lib/queryClient';
 
 interface UseImpressionRecorderOptions {
   maxBatchSize?: number;
   flushDelayMs?: number;
+  sessionId?: string; // For cache invalidation
 }
 
 /**
@@ -15,7 +16,7 @@ interface UseImpressionRecorderOptions {
  * - Immediate first-frame flush for hero impression
  */
 export function useImpressionRecorder(options: UseImpressionRecorderOptions = {}) {
-  const { maxBatchSize = 200, flushDelayMs = 2000 } = options;
+  const { maxBatchSize = 200, flushDelayMs = 2000, sessionId } = options;
   
   // Queue of pending impression IDs
   const queueRef = useRef<Set<string>>(new Set());
@@ -52,38 +53,52 @@ export function useImpressionRecorder(options: UseImpressionRecorderOptions = {}
       chunks.push(idsToSend.slice(i, i + maxBatchSize));
     }
     
-    // Process each chunk
-    isFlushingRef.current = true;
+    // Process each chunk with try/finally safety
+    let anyChunkSucceeded = false;
     
-    for (const chunk of chunks) {
-      try {
-        const res = await apiRequest("POST", "/api/artworks/batch-impressions", { artworkIds: chunk });
-        
-        if (res.ok) {
-          // Mark as recorded and remove from queue
-          chunk.forEach(id => {
-            recordedRef.current.add(id);
-            queueRef.current.delete(id);
-          });
+    try {
+      isFlushingRef.current = true;
+      
+      for (const chunk of chunks) {
+        try {
+          const res = await apiRequest("POST", "/api/artworks/batch-impressions", { artworkIds: chunk });
           
-          console.log(`[ImpressionRecorder] ✅ Flushed ${chunk.length} impressions`);
-        } else {
-          console.error(`[ImpressionRecorder] ❌ Batch failed (${res.status}), will retry`);
+          if (res.ok) {
+            // Mark as recorded and remove from queue
+            chunk.forEach(id => {
+              recordedRef.current.add(id);
+              queueRef.current.delete(id);
+            });
+            
+            anyChunkSucceeded = true;
+            console.log(`[ImpressionRecorder] ✅ Flushed ${chunk.length} impressions`);
+          } else {
+            console.error(`[ImpressionRecorder] ❌ Batch failed (${res.status}), will retry`);
+            // Keep in queue for retry
+          }
+        } catch (error) {
+          console.error(`[ImpressionRecorder] ❌ Network error, will retry:`, error);
           // Keep in queue for retry
         }
-      } catch (error) {
-        console.error(`[ImpressionRecorder] ❌ Network error, will retry:`, error);
-        // Keep in queue for retry
       }
+      
+      // ⭐ OPTIMIZED: Single cache invalidation after all chunks (not per chunk)
+      if (anyChunkSucceeded && sessionId) {
+        queryClient.invalidateQueries({
+          queryKey: ["/api/artworks/next", sessionId],
+          refetchType: "active",
+        });
+      }
+    } finally {
+      // ⭐ SAFETY: Always reset flush flag, even on error
+      isFlushingRef.current = false;
     }
-    
-    isFlushingRef.current = false;
     
     // If there are still items in queue (failed), schedule retry
     if (queueRef.current.size > 0) {
       flushTimerRef.current = setTimeout(() => flush(false), 5000); // Retry in 5s
     }
-  }, [maxBatchSize]);
+  }, [maxBatchSize, sessionId]);
   
   /**
    * Queue impression IDs for recording

@@ -724,6 +724,7 @@ export default function Display() {
   const impressionRecorder = useImpressionRecorder({
     maxBatchSize: 200,
     flushDelayMs: 2000,
+    sessionId: sessionId.current, // For cache invalidation
   });
 
   // Generate art mutation
