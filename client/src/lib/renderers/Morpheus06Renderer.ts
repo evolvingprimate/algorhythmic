@@ -185,28 +185,27 @@ export class Morpheus06Renderer implements IMorphRenderer {
   
   /**
    * Compute camera zoom and translation to move toward anchor
+   * Uses sine wave for smooth round-trip (1.0 → 1.06 → 1.0) with no jump
    */
   private computeZoomTransform(
     progress: number,
     anchor: AnchorPoint
   ): { cameraZoom: number; cameraTranslate: { x: number; y: number } } {
-    // Cubic-in easing with slight overshoot
-    const t = progress;
-    const easedProgress = t * t * t;
-    
-    // Zoom from 1.0 to 1.06 (6% zoom in)
+    // Sine wave: peaks at 50%, returns to baseline at 100%
+    // This eliminates the jump when cycle resets from 100% → 0%
     const maxZoom = 1.06;
-    const cameraZoom = 1.0 + easedProgress * (maxZoom - 1.0);
+    const zoomAmount = Math.sin(progress * Math.PI); // 0 → 1 → 0
+    const cameraZoom = 1.0 + zoomAmount * (maxZoom - 1.0);
     
     // Translate to center the anchor
     // Convert anchor coords (0-1 space) to NDC (-1 to 1 space)
     const targetX = (anchor.centerX - 0.5) * 2.0;
     const targetY = -(anchor.centerY - 0.5) * 2.0; // Flip Y for WebGL
     
-    // Smooth movement toward anchor
+    // Smooth movement toward anchor (same sine wave pattern)
     const cameraTranslate = {
-      x: -targetX * easedProgress * 0.3, // 30% movement
-      y: -targetY * easedProgress * 0.3,
+      x: -targetX * zoomAmount * 0.3, // 30% movement
+      y: -targetY * zoomAmount * 0.3,
     };
     
     return { cameraZoom, cameraTranslate };
