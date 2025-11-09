@@ -533,7 +533,7 @@ export default function Display() {
         song_link: undefined
       } : null;
       
-      morphEngineRef.current.addFrame({
+      morphEngineRef.current.insertFrameAfterCurrent({
         imageUrl: artwork.imageUrl,
         dnaVector,
         prompt: artwork.prompt,
@@ -543,7 +543,7 @@ export default function Display() {
         audioAnalysis: audioFeatures,
       });
       
-      console.log(`[Display] ✅ Smart sync added frame: ${artwork.prompt?.substring(0, 50)}...`);
+      console.log(`[Display] ✅ Smart sync prioritized fresh frame (next in queue): ${artwork.prompt?.substring(0, 50)}...`);
     });
     
     // CRITICAL: Enforce frame cap AFTER adding new frames

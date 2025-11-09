@@ -121,6 +121,39 @@ export class MorphEngine {
     console.log(`[MorphEngine] Added frame. Total frames: ${this.frames.length}`);
   }
 
+  insertFrameAfterCurrent(frame: DNAFrame): void {
+    // Initialize Ken Burns tracker for this frame
+    if (!this.frameTrackers.has(frame.imageUrl)) {
+      this.frameTrackers.set(frame.imageUrl, {
+        cycleStart: Date.now(),
+        progress: 0,
+        zoomDirection: 'out',
+      });
+    }
+    
+    // Special case: first frame
+    if (this.frames.length === 0) {
+      this.frames.push(frame);
+      this.phaseStartTime = Date.now();
+      console.log(`[MorphEngine] First frame inserted, timing reset`);
+      return;
+    }
+    
+    // Insert after current frame (will be next in queue)
+    const insertIndex = this.currentIndex + 1;
+    this.frames.splice(insertIndex, 0, frame);
+    
+    // CRITICAL: Skip current cycle to show fresh artwork immediately
+    // This prevents users from waiting up to 5 minutes for current cycle to finish
+    if (this.isRunning) {
+      this.currentIndex = insertIndex; // Jump to new frame
+      this.phaseStartTime = Date.now(); // Reset timing
+      console.log(`[MorphEngine] 🚀 Jumped to fresh frame immediately (skipped wait)`);
+    }
+    
+    console.log(`[MorphEngine] 🎨 Inserted fresh frame after position ${insertIndex - 1}. Total frames: ${this.frames.length}`);
+  }
+
   getFrameCount(): number {
     return this.frames.length;
   }
