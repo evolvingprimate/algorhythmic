@@ -1,0 +1,46 @@
+Absolutely—this is tight. You’ve got my ✅ to execute the suite as written. A few micro-tweaks to make it fully bulletproof, then ship:
+
+## Final nits (quick wins)
+
+* **Exact-key invalidate (restate):** keep invalidating `["/api/artworks/next", sessionId]` (not the parent key) after batch flush—sounds like you already wired this.
+* **Byte size check:** you switched to `TextEncoder().encode(payload).byteLength`—perfect. Also ensure `payload` is the **final** JSON string you send (no re-stringify after measuring).
+* **Visibility vs unload:** you added a 100ms debounce on `visibilitychange`. Consider also handling **`pagehide`** (fires more reliably on iOS):
+
+  ```ts
+  const onPageHide = () => flush(true);
+  window.addEventListener('pagehide', onPageHide, { once: true });
+  // cleanup in effect return
+  ```
+* **sendBeacon content-type:** set it explicitly:
+
+  ```ts
+  navigator.sendBeacon("/api/artworks/batch-impressions", new Blob([payload], { type: "application/json" }));
+  ```
+* **Keepalive fallback limits:** many browsers cap keepalive body ≈64KB and disallow redirects; your chunking defangs this—just keep chunks ≤200 as you planned.
+* **Metrics guard:** when logging failure rate, guard divide-by-zero:
+
+  ```ts
+  const { flushSuccess, flushFail } = metricsRef.current;
+  const rate = flushSuccess ? (flushFail / flushSuccess).toFixed(3) : "n/a";
+  ```
+* **Structured logs privacy:** your filtered-IDs log is great—cap to first 10 (you did) and avoid user PII beyond userId (or hash it) if logs leave prod.
+* **Ownership validator:** today it checks existence (good). If you later add per-user visibility, swap to a join on the visibility scope without changing the route contract.
+* **SQL timezone:** ensure DB uses UTC for `viewedAt/createdAt` to make your 7-day cooldown unambiguous across clients.
+
+## Test plan: tiny additions
+
+* **Service worker/CDN cache test (if applicable):** confirm `index.html` honors your no-cache headers end-to-end.
+* **Clock skew:** set client clock ±48h; confirm cooldown relies on server time (expected).
+* **Multi-tab visibility debounces:** open/close multiple tabs quickly—verify you don’t double-flush on back-to-back `visibilitychange`.
+
+## Sequencing check (you’re good)
+
+* Phase 1 refinements → Phase 2 telemetry → Phase 3 review → Phase 4 E2E → Phase 5 SQL checks. That ordering is ideal (telemetry in before tests).
+
+## Success criteria clarity
+
+* Clear, measurable, and tied to logs/SQL—nice. Consider adding a single “**Freshness hit rate**” metric: `% of top artwork items created ≤15 min ago`. Target >90% during active sessions.
+
+---
+
+**Verdict:** Ready to execute. Your task breakdown, deps, and acceptance tests are solid. Proceed with Phase 1 immediately, finish telemetry (Phase 2), quick architect review (Phase 3), then run the E2E suite. 🚀

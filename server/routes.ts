@@ -640,16 +640,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const latencyMs = Date.now() - startTime;
       
-      // ⭐ NEW: Enhanced response stats
-      console.log(JSON.stringify({
-        event: 'batch_impressions_success',
-        userId,
-        attempted: ids.length,
-        recorded,
-        filtered,
-        latency_ms: latencyMs,
-        timestamp: new Date().toISOString()
-      }));
+      // ⭐ NEW: Enhanced response stats with sampling (10% for success, 100% for failures)
+      const shouldLogSuccess = Math.random() < 0.1;
+      if (shouldLogSuccess) {
+        console.log(JSON.stringify({
+          event: 'batch_impressions_success',
+          userId,
+          attempted: ids.length,
+          recorded,
+          filtered,
+          latency_ms: latencyMs,
+          timestamp: new Date().toISOString()
+        }));
+      }
       
       res.json({ 
         attempted: ids.length,

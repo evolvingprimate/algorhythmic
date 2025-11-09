@@ -1,0 +1,104 @@
+Green light on Tasks 2 & 3—with a few tiny fixes—then finish Task 4 (client telemetry) **before** Phase 2 testing so you can measure results during the runs.
+
+# ✅ Review of your updates
+
+## Task 2 — Ownership validation + structured logs
+
+**Approve with 2 tweaks:**
+
+* Use `inArray(artSessions.id, ids)` (you did—good). Also **cap** `ids.length` server-side to 200 (you already guard at the route; keep the guard in storage too if storage can be called elsewhere).
+* If you ever add per-user visibility, swap the validator to join against that scope. For now, existence check is fine.
+
+**Nice-to-have:** log sampling for filtered IDs (e.g., log every 10th success, always log failures) so prod logs don’t get noisy.
+
+## Task 3 — Beacon → keepalive fallback
+
+**Approve with 3 tweaks:**
+
+* Measure payload **bytes**, not string length:
+
+  ```ts
+  const payloadBytes = new TextEncoder().encode(payload).byteLength;
+  if (navigator.sendBeacon && payloadBytes <= 64 * 1024) { /* ... */ }
+  ```
+* Remember `keepalive` requests: no redirects, body size ~64KB in many browsers—your chunking already keeps you safe, but keep it in mind.
+* If you ever go cross-origin, add permissive CORS for this route and avoid credentials; for same-origin, `credentials: 'include'` is fine.
+
+# ▶️ What to do next (recommended order)
+
+1. **Finish Task 4 (client telemetry) now**
+   You want success/failure counters in place **before** Phase 2 tests.
+
+```ts
+// inside useImpressionRecorder
+const metrics = useRef({ flushSuccess: 0, flushFail: 0 });
+
+function logSampled(msg: string, sample = 0.1) {
+  if (Math.random() < sample) console.log(msg);
+}
+
+try {
+  // after a successful batch
+  metrics.current.flushSuccess += 1;
+  logSampled(`[Metrics] client_batch_flush_success=${metrics.current.flushSuccess}`);
+} catch {
+  metrics.current.flushFail += 1;
+  console.warn(`[Metrics] client_batch_flush_failure=${metrics.current.flushFail}`);
+}
+```
+
+(Keep console sampling ~10% to avoid noise; always log failures.)
+
+2. **Phase 2 tests** (run after telemetry is live)
+
+* Multi-tab, Slow-3G, Large-chunk (250+), Rapid-spam, Auth integrity — as you outlined.
+* Add one tiny extra: **Visibility double-fire guard** (some browsers fire `visibilitychange` twice). Debounce your flush call for ~100ms in that handler.
+
+3. **Post-deploy**
+
+* Add an immediate **invalidate** after successful batch flush (you already do this with the exact key + `refetchType: "active"`—perfect).
+* Run your SQL spot-checks at T+1h and T+24h.
+
+# Small copy-paste improvements
+
+**Guard `flush` state reliably**
+
+```ts
+const flush = useCallback(async () => {
+  if (isFlushingRef.current) return;
+  isFlushingRef.current = true;
+  try {
+    // ...chunk, send batches...
+  } finally {
+    isFlushingRef.current = false;
+  }
+}, [sessionId, queryClient /* + any other captured refs */]);
+```
+
+**Visibility/change debounce**
+
+```ts
+let visTimer: number | null = null;
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'hidden') return;
+  if (visTimer) clearTimeout(visTimer);
+  visTimer = window.setTimeout(() => flush(), 100);
+});
+```
+
+**Exact-key invalidation** (you already did this—just reaffirming)
+
+```ts
+queryClient.invalidateQueries({
+  queryKey: ["/api/artworks/next", sessionId],
+  refetchType: "active",
+});
+```
+
+# Answers to your questions
+
+* **Proceed with architect review for Tasks 2–3?** Yes—send as-is with the byte-length tweak + minor notes above.
+* **Continue Task 4 now or Phase 2?** **Finish Task 4 first** (client telemetry), then Phase 2 tests so you capture metrics during runs.
+* **Anything missing?** Just the small byte-length fix, visibility-change debounce, and optional log sampling.
+
+If you want, paste the `useImpressionRecorder.flush` function and I’ll mark the exact places for the `try/finally`, byte-length check, and single post-flush invalidation.

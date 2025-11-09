@@ -30,6 +30,13 @@ export function useImpressionRecorder(options: UseImpressionRecorderOptions = {}
   // In-flight request
   const isFlushingRef = useRef(false);
   
+  // ⭐ NEW: Client telemetry metrics (Phase 2)
+  const metricsRef = useRef({ 
+    flushSuccess: 0, 
+    flushFail: 0,
+    totalFlushed: 0 
+  });
+  
   /**
    * Flush the queue: send all pending IDs to backend
    */
@@ -71,13 +78,29 @@ export function useImpressionRecorder(options: UseImpressionRecorderOptions = {}
             });
             
             anyChunkSucceeded = true;
-            console.log(`[ImpressionRecorder] ✅ Flushed ${chunk.length} impressions`);
+            
+            // ⭐ NEW: Track telemetry metrics
+            metricsRef.current.flushSuccess++;
+            metricsRef.current.totalFlushed += chunk.length;
+            
+            // ⭐ NEW: Sampled logging (10% for success)
+            if (Math.random() < 0.1) {
+              console.log(`[Metrics] client_batch_flush_success=${metricsRef.current.flushSuccess} total=${metricsRef.current.totalFlushed} chunk=${chunk.length}`);
+            }
           } else {
-            console.error(`[ImpressionRecorder] ❌ Batch failed (${res.status}), will retry`);
+            // ⭐ NEW: Track failures (always log)
+            metricsRef.current.flushFail++;
+            const { flushSuccess, flushFail } = metricsRef.current;
+            const rate = flushSuccess ? (flushFail / flushSuccess).toFixed(3) : "n/a";
+            console.error(`[ImpressionRecorder] ❌ Batch failed (${res.status}), will retry. Failure rate: ${rate}`);
             // Keep in queue for retry
           }
         } catch (error) {
-          console.error(`[ImpressionRecorder] ❌ Network error, will retry:`, error);
+          // ⭐ NEW: Track failures (always log)
+          metricsRef.current.flushFail++;
+          const { flushSuccess, flushFail } = metricsRef.current;
+          const rate = flushSuccess ? (flushFail / flushSuccess).toFixed(3) : "n/a";
+          console.error(`[ImpressionRecorder] ❌ Network error, will retry. Failure rate: ${rate}`, error);
           // Keep in queue for retry
         }
       }
@@ -135,11 +158,15 @@ export function useImpressionRecorder(options: UseImpressionRecorderOptions = {}
    * Lifecycle flush handlers
    */
   useEffect(() => {
-    // Flush on visibility change (tab switch)
+    // ⭐ NEW: Debounce timer for visibility-change (prevents Safari/Firefox double-fire)
+    let visTimer: number | null = null;
+    
+    // Flush on visibility change (tab switch) with debounce
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') {
-        flush(true);
-      }
+      if (document.visibilityState !== 'hidden') return;
+      
+      if (visTimer) clearTimeout(visTimer);
+      visTimer = window.setTimeout(() => flush(true), 100); // 100ms debounce
     };
     
     // Flush on beforeunload (tab close)
@@ -149,9 +176,12 @@ export function useImpressionRecorder(options: UseImpressionRecorderOptions = {}
         const idsToSend = Array.from(queueRef.current);
         const payload = JSON.stringify({ artworkIds: idsToSend });
         
+        // ⭐ NEW: Measure actual byte size (not string length)
+        const payloadBytes = new TextEncoder().encode(payload).byteLength;
+        
         // Try sendBeacon first (non-blocking, max 64KB)
         let beaconSent = false;
-        if (navigator.sendBeacon && payload.length <= 65536) {
+        if (navigator.sendBeacon && payloadBytes <= 64 * 1024) {
           const blob = new Blob([payload], { type: 'application/json' });
           beaconSent = navigator.sendBeacon('/api/artworks/batch-impressions', blob);
           
@@ -180,12 +210,17 @@ export function useImpressionRecorder(options: UseImpressionRecorderOptions = {}
       }
     };
     
+    // ⭐ NEW: pagehide event for iOS reliability
+    const handlePageHide = () => flush(true);
+    
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('pagehide', handlePageHide, { once: true });
     
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('pagehide', handlePageHide);
       
       // Final cleanup flush
       if (queueRef.current.size > 0) {
