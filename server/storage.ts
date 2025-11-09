@@ -19,6 +19,7 @@ import {
   artPreferences,
   artVotes,
   artSessions,
+  userArtImpressions,
   users,
   dailyUsage,
   storageMetrics,
@@ -62,6 +63,10 @@ export interface IStorage {
   getRecentArt(limit?: number): Promise<ArtSession[]>; // Global artwork pool (all users)
   toggleArtSaved(artId: string, userId: string): Promise<ArtSession>;
   deleteArt(artId: string, userId: string): Promise<void>;
+  
+  // User Art Impressions (Freshness Pipeline)
+  recordImpression(userId: string, artworkId: string): Promise<void>;
+  getUnseenArtworks(userId: string, limit?: number): Promise<ArtSession[]>;
   
   // Users (for subscription management and authentication)
   getUser(id: string): Promise<User | undefined>;
@@ -208,6 +213,16 @@ export class MemStorage implements IStorage {
     return Array.from(this.sessions.values())
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .slice(0, limit);
+  }
+
+  async recordImpression(userId: string, artworkId: string): Promise<void> {
+    // Stub implementation (not used, DbStorage handles this)
+    return;
+  }
+
+  async getUnseenArtworks(userId: string, limit: number = 20): Promise<ArtSession[]> {
+    // Stub implementation (not used, DbStorage handles this)
+    return this.getRecentArt(limit);
   }
 
   async toggleArtSaved(artId: string, userId: string): Promise<ArtSession> {
@@ -588,6 +603,40 @@ export class PostgresStorage implements IStorage {
     await this.db
       .delete(artSessions)
       .where(eq(artSessions.id, artId));
+  }
+
+  // User Art Impressions (Freshness Pipeline)
+  async recordImpression(userId: string, artworkId: string): Promise<void> {
+    await this.db
+      .insert(userArtImpressions)
+      .values({ userId, artworkId })
+      .onConflictDoNothing(); // Prevent duplicate impressions
+  }
+
+  async getUnseenArtworks(userId: string, limit: number = 20): Promise<ArtSession[]> {
+    // Get IDs of artworks this user has already seen
+    const seenArtworkIds = await this.db
+      .select({ artworkId: userArtImpressions.artworkId })
+      .from(userArtImpressions)
+      .where(eq(userArtImpressions.userId, userId));
+    
+    const seenIds = seenArtworkIds.map(row => row.artworkId);
+    
+    // Return artworks NOT in the seen list
+    if (seenIds.length === 0) {
+      // User hasn't seen anything yet, return recent art
+      return await this.getRecentArt(limit);
+    }
+    
+    // Filter out seen artworks using NOT IN
+    const unseenArtworks = await this.db
+      .select()
+      .from(artSessions)
+      .where(sql`${artSessions.id} NOT IN ${seenIds}`)
+      .orderBy(desc(artSessions.createdAt))
+      .limit(limit);
+    
+    return unseenArtworks;
   }
 
   // Users

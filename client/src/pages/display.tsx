@@ -198,13 +198,20 @@ export default function Display() {
     queryKey: [`/api/preferences/${sessionId.current}`],
   });
 
-  // Fetch user's most recent artwork (all artworks, not just saved ones)
-  const { data: recentArtworks } = useQuery<any[]>({
-    queryKey: ["/api/recent-artworks"],
+  // Fetch UNSEEN artwork only - Freshness Pipeline ensures never seeing repeats
+  const { data: unseenResponse } = useQuery<{
+    artworks: any[];
+    poolSize: number;
+    needsGeneration: boolean;
+  }>({
+    queryKey: ["/api/artworks/next"],
     enabled: isAuthenticated,
     refetchOnWindowFocus: false,
     refetchOnMount: true,
   });
+
+  // Extract artworks from response
+  const recentArtworks = unseenResponse?.artworks;
 
   useEffect(() => {
     if (preferences?.styles?.length) {
@@ -214,6 +221,19 @@ export default function Display() {
       setDynamicMode(preferences.dynamicMode);
     }
   }, [preferences]);
+
+  // Auto-generate artwork when unseen pool runs low (Freshness Pipeline)
+  useEffect(() => {
+    if (
+      unseenResponse?.needsGeneration && 
+      morphEngineRef.current.getFrameCount() > 0 && 
+      !isGeneratingRef.current
+    ) {
+      console.log('[Freshness] Pool low, auto-generating artwork to refill...');
+      const audioAnalysis = createDefaultAudioAnalysis();
+      generateArtMutation.mutate({ audioAnalysis, musicInfo: null });
+    }
+  }, [unseenResponse?.needsGeneration]);
 
   // Keyboard shortcuts for debug overlay
   useEffect(() => {
@@ -409,6 +429,9 @@ export default function Display() {
             audioAnalysis: audioFeatures,
           });
           
+          // CRITICAL: Record impression for freshness pipeline
+          recordImpressionMutation.mutate(artwork.id);
+          
           console.log(`[Display] ✅ Loaded frame ${validatedArtworks.length}: ${artwork.prompt?.substring(0, 50)}...`);
         }
         
@@ -592,6 +615,13 @@ export default function Display() {
     mood: 'energetic',
   });
 
+  // Record impression mutation (Freshness Pipeline)
+  const recordImpressionMutation = useMutation({
+    mutationFn: async (artworkId: string) => {
+      await apiRequest("POST", `/api/artworks/${artworkId}/viewed`, {});
+    },
+  });
+
   // Generate art mutation
   const generateArtMutation = useMutation({
     mutationFn: async ({ audioAnalysis, musicInfo }: { audioAnalysis: AudioAnalysis; musicInfo: MusicIdentification | null }) => {
@@ -687,8 +717,13 @@ export default function Display() {
       // Refetch usage stats after successful generation
       refetchUsageStats();
       
-      // CRITICAL: Invalidate recent artworks query to refresh pool for next reload
-      queryClient.invalidateQueries({ queryKey: ["/api/recent-artworks"] });
+      // CRITICAL: Invalidate unseen artworks query to refresh pool for next reload
+      queryClient.invalidateQueries({ queryKey: ["/api/artworks/next"] });
+      
+      // Record impression for freshness pipeline
+      if (data.session?.id) {
+        recordImpressionMutation.mutate(data.session.id);
+      }
     },
     onError: (error: any) => {
       toast({
@@ -782,9 +817,9 @@ export default function Display() {
         title: data.isSaved ? "Artwork saved!" : "Artwork unsaved",
         description: data.isSaved ? "Added to your gallery" : "Removed from your gallery",
       });
-      // Invalidate both gallery (saved only) and recent artworks (all artworks)
+      // Invalidate both gallery (saved only) and unseen artworks (freshness pipeline)
       queryClient.invalidateQueries({ queryKey: ["/api/gallery"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/recent-artworks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/artworks/next"] });
     },
     onError: (error: Error) => {
       toast({

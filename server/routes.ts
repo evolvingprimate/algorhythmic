@@ -387,6 +387,47 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Next unseen artworks endpoint (Freshness Pipeline)
+  // Returns only artworks the user hasn't seen yet - NEVER repeats
+  app.get("/api/artworks/next", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : 20;
+      
+      const unseenArtworks = await storage.getUnseenArtworks(userId, limit);
+      
+      // Check if pool is running low (< 5 unseen artworks remaining)
+      const needsGeneration = unseenArtworks.length < 5;
+      
+      console.log(`[Freshness] User ${userId} - Unseen pool: ${unseenArtworks.length} artworks, Generation needed: ${needsGeneration}`);
+      
+      res.json({
+        artworks: unseenArtworks,
+        poolSize: unseenArtworks.length,
+        needsGeneration, // Signal client to request new artwork generation
+      });
+    } catch (error: any) {
+      console.error('[Freshness] Error fetching unseen artworks:', error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Mark artwork as viewed (record impression)
+  app.post("/api/artworks/:artworkId/viewed", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { artworkId } = req.params;
+      
+      await storage.recordImpression(userId, artworkId);
+      
+      console.log(`[Freshness] Recorded impression - User: ${userId}, Artwork: ${artworkId}`);
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error('[Freshness] Error recording impression:', error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // Recent artworks endpoint (for display page morphing)
   // GLOBAL POOL: Returns artworks from all users for discovery and instant display
   app.get("/api/recent-artworks", isAuthenticated, async (req: any, res) => {

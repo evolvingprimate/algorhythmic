@@ -60,6 +60,20 @@ export const artFavorites = pgTable("art_favorites", {
   uniqueUserArtwork: uniqueIndex("art_favorites_unique_user_artwork").on(table.userId, table.artworkId),
 }));
 
+// User art impressions - Tracks which artworks each user has viewed
+// CRITICAL for "never see the same frame twice" guarantee
+export const userArtImpressions = pgTable("user_art_impressions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  artworkId: varchar("artwork_id").notNull().references(() => artSessions.id, { onDelete: "cascade" }),
+  viewedAt: timestamp("viewed_at").notNull().defaultNow(),
+}, (table) => ({
+  userIdIdx: index("user_art_impressions_user_id_idx").on(table.userId),
+  artworkIdIdx: index("user_art_impressions_artwork_id_idx").on(table.artworkId),
+  uniqueUserArtwork: uniqueIndex("user_art_impressions_unique_user_artwork").on(table.userId, table.artworkId),
+  viewedAtIdx: index("user_art_impressions_viewed_at_idx").on(table.viewedAt),
+}));
+
 // Session storage table (required for Replit Auth)
 export const sessions = pgTable(
   "sessions",
