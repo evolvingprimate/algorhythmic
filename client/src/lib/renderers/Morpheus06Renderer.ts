@@ -33,21 +33,11 @@ const fragmentShader = `
     vec4 colorA = texture2D(u_imageA, v_texCoord);
     vec4 colorB = texture2D(u_imageB, v_texCoord);
     
-    // Radial mask from anchor center (for subtle effect, not to block full transition)
-    vec2 centered = v_texCoord - u_anchorCenter;
-    float aspectRatio = 16.0 / 9.0;
-    centered.x *= aspectRatio;
+    // Smooth cubic easing for crossfade (matches zoom animation)
+    float t = u_morphProgress;
+    float easedBlend = t * t * (3.0 - 2.0 * t); // smoothstep curve
     
-    float dist = length(centered);
-    float radius = u_anchorSize * 1.5;
-    float maskInfluence = smoothstep(radius, 0.0, dist);
-    
-    // Ensure blend reaches 1.0 at morphProgress=1.0 everywhere
-    // Inner regions (high maskInfluence) fade in slightly faster
-    float blendAmount = u_morphProgress + (1.0 - u_morphProgress) * maskInfluence * 0.3;
-    blendAmount = clamp(blendAmount, 0.0, 1.0);
-    
-    gl_FragColor = mix(colorA, colorB, blendAmount);
+    gl_FragColor = mix(colorA, colorB, easedBlend);
   }
 `;
 
