@@ -1,0 +1,185 @@
+## Updated Analysis: Why the Flickering Persists
+
+Based on the latest details from the Replit Architect, they're spot on about the **two-part bug**:
+1. **DB Replication Lag**: The optimistic update shows the new frame immediately, but the background refetch (via `invalidateQueries`) hits the server **before the DB fully replicates** the new artwork. This returns stale data (no fresh frame), causing the cache to revert to old frames temporarily. Once the DB catches up, subsequent refetches bring it back—hence the oscillation.
+2. **Unguarded Smart Sync**: The `useEffect` (lines 638-645) blindly inserts frames without checking if they're already in the MorphEngine or pinned, leading to duplicates and extra renders.
+
+Grok's earlier suggestion to delete the smart sync was too aggressive—it would indeed break initial loading and auto-refill. ChatGPT's pinning idea is a good band-aid for lag, but we can make it more robust.
+
+### Why Pinning + Guarding is the Right Path
+- **Pinning**: Temporarily "locks" the fresh frame in local state, ensuring it stays visible during lag windows (e.g., 3-5 seconds).
+- **Guarding**: Adds checks to prevent re-insertion of known frames.
+- **Debounce**: Optional delay on refetch to give DB time to sync (but use sparingly to avoid UX delays).
+
+This preserves your architecture (MorphEngine integration, smart sync for refills) while fixing the issue.
+
+## Recommended Implementation: Pinning + Guarded Sync
+
+I'll provide **exact code snippets** to drop into `client/src/pages/display.tsx`. This should take ~15-30 minutes to implement and test. Total changes: ~20 lines added/updated.
+
+### Step 1: Add Pinning State (New Variables)
+Add these at the top of your component (near other state/refs):
+
+```tsx
+const [pinnedArtwork, setPinnedArtwork] = useState<ArtSession | null>(null);
+const pinnedTimerRef = useRef<NodeJS.Timeout | null>(null);
+```
+
+- `pinnedArtwork`: Holds the fresh artwork temporarily.
+- `pinnedTimerRef`: Manages the 3-second expiration.
+
+### Step 2: Update `onSuccess` for Pinning + Optimistic Update
+Modify the `generateArtMutation.onSuccess` to set the pinned state **and** optimistic cache:
+
+```tsx
+onSuccess: (data, variables) => {
+  // ... history management ...
+  
+  refetchUsageStats();
+  
+  if (data.session) {
+    const newArtwork = {
+      ...data.session,
+      imageUrl: data.imageUrl,
+      prompt: data.prompt,
+      explanation: data.explanation,
+      createdAt: new Date().toISOString(),
+    };
+    
+    // PEER-REVIEWED FIX: Pin the fresh artwork for 3 seconds to survive lag
+    setPinnedArtwork(newArtwork);
+    
+    // Clear any existing timer
+    if (pinnedTimerRef.current) {
+      clearTimeout(pinnedTimerRef.current);
+    }
+    
+    // Expire pin after 3 seconds (adjust to 5 if lag is worse)
+    pinnedTimerRef.current = setTimeout(() => {
+      setPinnedArtwork(null);
+    }, 3000);
+    
+    // Optimistic Update: Inject pinned artwork into cache
+    queryClient.setQueryData(
+      ["/api/artworks/next", sessionId.current],
+      (old: any) => ({
+        artworks: [
+          newArtwork,  // Pin at front
+          ...(old?.artworks || []).filter((a: any) => a.id !== data.session.id)
+        ],
+        poolSize: (old?.poolSize || 0) + 1,
+        freshCount: 1,
+        storageCount: old?.storageCount || 0,
+        needsGeneration: false,
+      })
+    );
+  }
+  
+  // Invalidation with refetchType (unchanged)
+  queryClient.invalidateQueries({
+    queryKey: ["/api/artworks/next", sessionId.current],
+    refetchType: "active",
+  });
+},
+```
+
+- **Why?** Pinning ensures the new frame stays even if the first refetch is stale.
+
+### Step 3: Merge Pinned Artwork in Rendering Logic
+Wherever you render from `unseenResponse.data.artworks` (e.g., in your MorphEngine feeder or map function), merge the pinned one first:
+
+```tsx
+// Example: In your render or data prep function
+const displayedArtworks = pinnedArtwork 
+  ? [pinnedArtwork, ...(unseenResponse.data?.artworks || []).filter(a => a.id !== pinnedArtwork.id)]
+  : unseenResponse.data?.artworks || [];
+
+// Then use displayedArtworks for MorphEngine or rendering
+displayedArtworks.map(artwork => (
+  <ArtFrame key={artwork.id} artwork={artwork} />
+));
+```
+
+- **Why?** This "overrides" stale server data with the pinned fresh frame.
+
+### Step 4: Guard the Smart Sync Effect (Lines 638-645)
+Update the existing `useEffect` to add guards:
+
+```tsx
+// Updated smart sync effect (prevent double insertion)
+useEffect(() => {
+  const currentArtworks = unseenResponse.data?.artworks || [];
+  
+  currentArtworks.forEach((artwork) => {
+    // GUARD #1: Skip if already in MorphEngine (check your MorphEngine state)
+    if (morphEngineFrames.some(frame => frame.id === artwork.id)) {
+      return;
+    }
+    
+    // GUARD #2: Skip if pinned (already handled)
+    if (pinnedArtwork && pinnedArtwork.id === artwork.id) {
+      return;
+    }
+    
+    // GUARD #3: Skip if impression already recorded (dedupe)
+    if (recordedImpressions.current.has(artwork.id)) {
+      return;
+    }
+    
+    // Safe to insert
+    insertFrameAfterCurrent(artwork);  // Your existing MorphEngine insert
+    
+    // Record impression (with your existing dedupe + retry)
+    recordedImpressions.current.add(artwork.id);
+    recordImpressionMutation.mutateAsync(artwork.id).catch((error) => {
+      recordedImpressions.current.delete(artwork.id);
+      console.error(`[Freshness] Failed to record impression for ${artwork.id}:`, error);
+    });
+  });
+}, [unseenResponse.data?.artworks, morphEngineFrames, pinnedArtwork]);  // Add dependencies
+```
+
+- **Why?** Prevents re-inserting duplicates. Assumes you have a `morphEngineFrames` array/state—replace with your actual MorphEngine state check.
+- Remove the initial load impression block (lines 481-488) if it's redundant now.
+
+### Step 5: Optional Debounce for Refetch (Reduce Lag Hits)
+Wrap the invalidation in a debounce (use `lodash.debounce` if available, or implement simple):
+
+```tsx
+// At top: import debounce from 'lodash/debounce';
+// Or simple implementation:
+const debounceRefetch = (fn: () => void) => {
+  let timeout: NodeJS.Timeout | null = null;
+  return () => {
+    if (timeout) clearTimeout(timeout);
+    timeout = setTimeout(fn, 250);  // 250ms delay
+  };
+};
+
+// In onSuccess:
+const debouncedInvalidate = debounceRefetch(() => {
+  queryClient.invalidateQueries({
+    queryKey: ["/api/artworks/next", sessionId.current],
+    refetchType: "active",
+  });
+});
+
+debouncedInvalidate();
+```
+
+- **Why?** Gives DB ~250ms to replicate before refetching. Only use if lag is consistent.
+
+## Expected Flow After Fix
+1. Generate → Optimistic + Pin → New frame shows instantly.
+2. Refetch (possibly stale) → Pin overrides → Still shows new frame.
+3. DB syncs → Next refetch includes fresh → Pin expires naturally → Smooth merge.
+4. Smart sync only inserts new/unique frames → No duplicates/flicker.
+
+## Testing Tips
+- **Simulate Lag**: In dev tools, throttle network to "Slow 3G" or add artificial delay in backend route.
+- **Logs to Watch**:
+  - Client console: Log when pinning starts/expires.
+  - Server: Confirm GET calls return fresh after ~1-2 seconds.
+- **Edge Cases**: Page reload (session persistence still needed long-term), multiple generates in a row.
+
+This should squash the flicker **without breaking other flows**. If you implement and still see issues, share console logs or MorphEngine state dumps. For a cleaner long-term architecture, consider migrating to real-time (SSE/WebSockets) to avoid refetch races entirely. Let's get this deployed!

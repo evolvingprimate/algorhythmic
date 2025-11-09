@@ -1,0 +1,42 @@
+Short answer: **yes**—that plan should stop the flicker.
+
+A few tiny gotchas to make it rock-solid:
+
+* **Type of the timer (Vite/DOM):** in the browser, `setTimeout` returns a `number`, not `NodeJS.Timeout`. Use
+  `const pinnedTimerRef = useRef<number | null>(null);`
+* **Clean up timer on unmount:**
+
+  ```ts
+  useEffect(() => () => {
+    if (pinnedTimerRef.current) clearTimeout(pinnedTimerRef.current);
+  }, []);
+  ```
+* **Early unpin when server catches up:** if the refetch now includes the pinned id, drop the pin immediately (no visual jump since it’s the same id):
+
+  ```ts
+  useEffect(() => {
+    if (!pinnedArtwork) return;
+    if (serverArtworks.some(a => a.id === pinnedArtwork.id)) {
+      setPinnedArtwork(null);
+      if (pinnedTimerRef.current) clearTimeout(pinnedTimerRef.current);
+      pinnedTimerRef.current = null;
+    }
+  }, [serverArtworks, pinnedArtwork]);
+  ```
+* **Guard Smart-Sync by id (and pin):** before inserting into MorphEngine, check:
+
+  1. `if (pinnedArtwork && art.id === pinnedArtwork.id) return;`
+  2. `if (MorphEngine.hasFrameById(art.id)) return;`
+  3. (optional) keep a local `enqueuedIdsRef: Set<string>` for O(1) guards.
+* **Use `mergedArtworks` everywhere** (UI render, impression recording, smart-sync source). Avoid reading from raw `serverArtworks` in any effect.
+* **React keys:** ensure list items are `key={art.id}`, never array index.
+* **Refetch debounce:** 200–300ms is a sweet spot. Still include `refetchType: "active"` with the exact query key.
+* **Backend duplicates:** if your unseen pool uses joins, add `DISTINCT art_sessions.id` to avoid double entries during merges.
+
+Smoke test checklist:
+
+1. Generate → new frame shows instantly and stays steady for ~3s (pin window).
+2. Exactly one enqueue per artwork id; no duplicate calls to impressions.
+3. First refetch may be stale but doesn’t visually revert; the next refetch contains the fresh id and the pin drops silently.
+
+If you wire those nits in, your 5-part plan will fix the oscillation.

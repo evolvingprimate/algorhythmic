@@ -1,0 +1,192 @@
+Nice—your Architect’s read tracks with what I’m seeing. Let’s ship a no-nonsense fix that (a) pins the freshly created frame so the UI can’t bounce back to stale data, and (b) guards your Smart-Sync so it can’t double-insert.
+
+Below are **drop-in patches** for `client/src/pages/display.tsx`. They’re written to be pasted in with minimal surgery.
+
+---
+
+# 1) Add pinning + enqueue guards (top of component)
+
+```ts
+// --- Pin the freshest item so server refetch can't visually displace it ---
+const PIN_MS = 3000; // 3–5s works well
+const [pinnedId, setPinnedId] = useState<string | null>(null);
+const [pinnedItem, setPinnedItem] = useState<any | null>(null);
+const unpinTimerRef = useRef<number | null>(null);
+
+// --- Track which artwork ids we have already pushed into the MorphEngine ---
+const enqueuedIdsRef = useRef<Set<string>>(new Set());
+
+// Optional: morph engine enqueue helper (you likely have something similar)
+const enqueueToMorph = useCallback((artwork: any) => {
+  if (!artwork?.id) return;
+  if (enqueuedIdsRef.current.has(artwork.id)) return;       // ✅ no double-insert
+  if (pinnedId && artwork.id === pinnedId) return;           // ✅ don't re-insert pinned
+  enqueuedIdsRef.current.add(artwork.id);
+  MorphEngine.insertFrameAfterCurrent?.(artwork);            // ← your actual call
+}, [pinnedId]);
+```
+
+---
+
+# 2) Make the optimistic success handler pin and (lightly) debounce the refetch
+
+```ts
+onSuccess: (data) => {
+  const newItem = {
+    ...data.session,
+    imageUrl: data.imageUrl,
+    prompt: data.prompt,
+    explanation: data.explanation,
+    createdAt: new Date().toISOString(),
+  };
+
+  // Optimistic cache insert (top of list)
+  queryClient.setQueryData(
+    ["/api/artworks/next", sessionId.current],
+    (old: { artworks: any[]; [k: string]: any } | undefined) => {
+      const prev = old?.artworks ?? [];
+      const withoutDupes = prev.filter(a => a.id !== newItem.id);
+      return {
+        ...(old ?? {}),
+        artworks: [newItem, ...withoutDupes],
+      };
+    }
+  );
+
+  // --- Pin this item so refetch can't visually bump it ---
+  if (unpinTimerRef.current) window.clearTimeout(unpinTimerRef.current);
+  setPinnedId(newItem.id);
+  setPinnedItem(newItem);
+  unpinTimerRef.current = window.setTimeout(() => {
+    setPinnedId(null);
+    setPinnedItem(null);
+    unpinTimerRef.current = null;
+  }, PIN_MS);
+
+  // Optional: immediately enqueue to morph once (guarded)
+  enqueueToMorph(newItem);
+
+  // Light debounce so DB is very likely to include the fresh row
+  window.setTimeout(() => {
+    queryClient.invalidateQueries({
+      queryKey: ["/api/artworks/next", sessionId.current],
+      refetchType: "active",
+    });
+  }, 250);
+
+  // (keep your usage stats, etc.)
+  refetchUsageStats?.();
+};
+```
+
+---
+
+# 3) Merge pinned item with server results for rendering & side-effects
+
+```ts
+// Wherever you read the query result:
+const serverArtworks = unseenResponse.data?.artworks ?? [];
+
+// Merge: pinned always first while it’s active; remove duplicate if present
+const mergedArtworks = useMemo(() => {
+  if (pinnedId && pinnedItem) {
+    return [pinnedItem, ...serverArtworks.filter(a => a.id !== pinnedId)];
+  }
+  return serverArtworks;
+}, [serverArtworks, pinnedId, pinnedItem]);
+
+// If/when server finally returns the pinned id, drop the pin early (smooth handoff)
+useEffect(() => {
+  if (!pinnedId) return;
+  const serverHasPinned = serverArtworks.some(a => a.id === pinnedId);
+  if (serverHasPinned) {
+    setPinnedId(null);
+    setPinnedItem(null);
+    if (unpinTimerRef.current) {
+      window.clearTimeout(unpinTimerRef.current);
+      unpinTimerRef.current = null;
+    }
+  }
+}, [serverArtworks, pinnedId]);
+```
+
+> Use `mergedArtworks` **everywhere** you previously used `data.artworks`—both for display and for “top-item” side effects.
+
+---
+
+# 4) Guard your Smart-Sync effect to prevent double insertion
+
+Wherever your “smart sync” lives (you mentioned ~lines 638–645), make it operate on `mergedArtworks` and apply **id-based dedupe + pin guard**:
+
+```ts
+useEffect(() => {
+  // Example: lift the first few items into the morph queue
+  for (const art of mergedArtworks.slice(0, 3)) {
+    // ✅ Do not enqueue if pinned (already shown) or already enqueued
+    if (pinnedId && art.id === pinnedId) continue;
+    if (enqueuedIdsRef.current.has(art.id)) continue;
+    enqueueToMorph(art);
+  }
+}, [mergedArtworks, enqueueToMorph, pinnedId]);
+```
+
+If you also have an “initial bulk load” path, it should iterate over `mergedArtworks` with the **same guards**.
+
+---
+
+# 5) Impression recording should key off `mergedArtworks[0]` (single source of truth)
+
+```ts
+useEffect(() => {
+  const top = mergedArtworks[0];
+  if (!top) return;
+  if (!recordedImpressions.current.has(top.id)) {
+    recordedImpressions.current.add(top.id);
+    recordImpressionMutation.mutateAsync(top.id).catch(() => {
+      recordedImpressions.current.delete(top.id);
+    });
+  }
+}, [mergedArtworks]); // ← not serverArtworks
+```
+
+---
+
+# 6) List rendering: never use array index keys
+
+```tsx
+{mergedArtworks.map(art => (
+  <ArtworkCard key={art.id} artwork={art} />
+))}
+```
+
+---
+
+# 7) (Optional, but helpful) Server “must-include” guard
+
+In `GET /api/artworks/next`, if `sessionId` is provided, look up the **most recent** artwork for that `sessionId` in the last ~60s and **force-include** it at index 0 of `combinedArtworks` if it’s missing. This removes any chance of the first refetch being stale:
+
+```ts
+const latest = sessionId
+  ? await storage.getMostRecentForSession(sessionId, userId, 60_000)
+  : null;
+
+if (latest && !combinedArtworks.some(a => a.id === latest.id)) {
+  combinedArtworks.unshift(latest);
+}
+```
+
+Also ensure your unseen pool query doesn’t duplicate rows (use `distinct` on `artSessions.id` if needed).
+
+---
+
+## Quick sanity checks
+
+* After Generate:
+
+  * You see the new frame immediately (optimistic).
+  * Within ~0.3–1s, a GET happens; **no flicker** thanks to the pin.
+  * When the server payload finally includes the fresh id, the pin drops; the top remains the same (same id), so no visual jump.
+* MorphEngine receives each id **once** (watch your enqueue logs).
+* Impressions post **once** per top id (watch network tab).
+
+This combo (pin + guarded smart-sync + merged selector) eliminates the “old → new → old → new” oscillation while keeping all your existing flows intact.

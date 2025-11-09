@@ -1,0 +1,157 @@
+Got it. The “old → new → old → new” flip-flop is classic **race + cache replacement** behavior. Your optimistic insert shows the new frame, but one or more subsequent refetches replace the cache with a payload that **doesn’t yet include** that fresh item (or reorders items), so the UI reverts to the previous top frame. Then another refetch *does* include it, and you see it again. Here are the most likely causes and the fixes that stop the oscillation cold.
+
+---
+
+# Why it’s flickering
+
+1. **Read-after-write timing**
+   Right after POST, your GET can land before the DB row is visible (replica lag, transaction timing, or even just the query pipeline finishing). That GET returns **no fresh** → storage pool only → UI shows the old frame. The next GET *does* see the fresh item → shows new → and so on.
+
+2. **Cache replacement stomps your optimistic item**
+   `setQueryData` puts the new item at the top. When the refetch completes, TanStack replaces the data with the server response. If the server’s response doesn’t include the fresh item yet (or it sorts differently), your optimistic top gets displaced → back to old.
+
+3. **Key/ordering/identity drift in the UI**
+
+* Rendering with **array index** as React key will cause re-mounting/shuffle flicker.
+* Different shapes between optimistic payload and server payload can trip downstream code.
+* If MorphEngine subscribes to “first item change” and each replacement reorders, you’ll bounce.
+
+---
+
+# Fixes (ship these)
+
+## 1) Pin the just-created artwork for a short “grace window”
+
+Even if refetch returns a stale list, keep showing the fresh item for e.g. **2–5 seconds**. That fully masks read-after-write lag and ordering jitters.
+
+```ts
+// at module or component scope
+const PIN_MS = 3000;
+const [pinnedId, setPinnedId] = useState<string | null>(null);
+const [pinnedItem, setPinnedItem] = useState<any | null>(null);
+const unpinRef = useRef<number | null>(null);
+
+// on success of generate:
+onSuccess: (data) => {
+  const newItem = { ...data.session, imageUrl: data.imageUrl };
+
+  // Optimistic insert
+  queryClient.setQueryData(
+    ["/api/artworks/next", sessionId.current],
+    (old: { artworks: any[] } | undefined) => {
+      const prev = old?.artworks ?? [];
+      return { artworks: [newItem, ...prev.filter(a => a.id !== newItem.id)] };
+    }
+  );
+
+  // Pin it for a short time
+  setPinnedId(newItem.id);
+  setPinnedItem(newItem);
+  if (unpinRef.current) window.clearTimeout(unpinRef.current);
+  unpinRef.current = window.setTimeout(() => {
+    setPinnedId(null);
+    setPinnedItem(null);
+    unpinRef.current = null;
+  }, PIN_MS);
+
+  // Now refetch, but it won't visually displace the pinned item
+  queryClient.invalidateQueries({
+    queryKey: ["/api/artworks/next", sessionId.current],
+    refetchType: "active",
+  });
+}
+```
+
+Then **merge** the pinned item with server results for display:
+
+```ts
+const serverArtworks = unseenResponse.data?.artworks ?? [];
+const mergedArtworks = pinnedId
+  ? [pinnedItem!, ...serverArtworks.filter(a => a.id !== pinnedId)]
+  : serverArtworks;
+
+// Use mergedArtworks for your UI / MorphEngine input
+```
+
+> Result: even if the first refetch is stale, users keep seeing the fresh frame; once the DB catches up, the next refetch contains the item and the pin naturally drops.
+
+---
+
+## 2) Debounce the first refetch slightly
+
+Give the DB a beat to become consistent:
+
+```ts
+// after optimistic insert
+setTimeout(() => {
+  queryClient.invalidateQueries({
+    queryKey: ["/api/artworks/next", sessionId.current],
+    refetchType: "active",
+  });
+}, 250); // 200–500ms is plenty
+```
+
+---
+
+## 3) Dedupe by **id** consistently (client + server)
+
+* Your optimistic code filters by `a.id !== data.session.id` ✅
+* Ensure the **server always returns the exact same id type** (string vs number mismatches cause duplicates).
+* On the server, consider returning a **stable, unique** `id` and **never** change it across layers.
+* If your unseen pool query can duplicate rows via joins, add `distinct(artSessions.id)`.
+
+---
+
+## 4) Never render with array index keys
+
+Make sure your list uses `key={art.id}`, not `key={i}`. Index keys + reordering = flicker.
+
+---
+
+## 5) Only record impressions after the frame is actually on screen
+
+You moved this—great. Also ensure the impression effect **keys off the merged list** (so a stale server list arriving doesn’t cause the old top item to be re-recorded or re-selected).
+
+```ts
+useEffect(() => {
+  const first = mergedArtworks[0];
+  if (!first) return;
+  if (!recordedImpressions.current.has(first.id)) {
+    recordedImpressions.current.add(first.id);
+    recordImpressionMutation.mutateAsync(first.id).catch(() => {
+      recordedImpressions.current.delete(first.id);
+    });
+  }
+}, [mergedArtworks]);
+```
+
+---
+
+## 6) (Optional but nice) Add a “must-include” guard on the server
+
+In `GET /api/artworks/next`, if `sessionId` is present and you can identify the **last created artwork id** for that session in the past 60s, **force-include** it at position 0 in the response even if other filters would exclude it. That guarantees the fresh frame is present on first read.
+
+---
+
+# Quick checklist to verify
+
+* [ ] After POST, do you see **exactly one** GET within ~300ms, not 2–3 back-to-back? (If multiple, ensure you aren’t invalidating twice.)
+* [ ] Does the first GET payload sometimes *not* include the fresh id? (Replica timing → the pin/debounce solves this.)
+* [ ] Are React keys set to `art.id`, never index?
+* [ ] Are all code paths using the **same** `artworks` shape (no missing fields causing fallback logic)?
+* [ ] Is `sessionId` stable (not regenerated) for the mounted page?
+
+---
+
+# If you want the simplest fix with no pinning
+
+If you’d rather not add pinning, a **single change** removes most flicker:
+
+* **Debounce** the first invalidation by ~300ms **and**
+* Call `queryClient.refetchQueries({ queryKey: [...], type: "active" })` after invalidation completes.
+
+But in practice, **pinning for ~3s** is what makes the UX bulletproof.
+
+---
+
+If you paste your list rendering block (JSX for the artworks list / MorphEngine enqueue), I’ll spot any key or ordering pitfalls there too.
