@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import heroVideo from "@assets/Surreal_flowing_abstract_art_video_1762635004997.mp4";
+import heroVideo from "@assets/Surreal_flowing_abstract_art_video_2_1762650434281.mp4";
 import heroImage from "@assets/generated_images/Surreal_flowing_abstract_art_0d26abec.png";
 
 export function AnimatedBackground() {
