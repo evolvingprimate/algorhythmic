@@ -387,32 +387,59 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Next unseen artworks endpoint (Freshness Pipeline)
-  // Returns only artworks the user hasn't seen yet - NEVER repeats
+  // Hybrid gen+retrieve endpoint - Real-time DALL-E generation based on audio context
+  // NEW: Accepts optional audio context (music ID, features, DNA) for personalized generation
+  // FALLBACK: Returns pool warm-start if no context provided (backward compatible)
   app.get("/api/artworks/next", isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       const limit = req.query.limit ? parseInt(req.query.limit as string) : 20;
       
-      const unseenArtworks = await storage.getUnseenArtworks(userId, limit);
+      // NEW: Parse optional audio context for real-time generation
+      const audioContext = req.query.audioContext ? JSON.parse(req.query.audioContext as string) : null;
+      const generateRealTime = req.query.generateRealTime === 'true';
       
-      // Check if pool is running low (< 5 unseen artworks remaining)
-      const needsGeneration = unseenArtworks.length < 5;
+      // BACKWARD COMPATIBLE: Legacy behavior if no audio context
+      if (!audioContext || !generateRealTime) {
+        const unseenArtworks = await storage.getUnseenArtworks(userId, limit);
+        const needsGeneration = unseenArtworks.length < 5;
+        
+        console.log(`[Freshness] User ${userId} - Legacy mode - Unseen pool: ${unseenArtworks.length} artworks`);
+        
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+        
+        return res.json({
+          artworks: unseenArtworks,
+          poolSize: unseenArtworks.length,
+          needsGeneration,
+          mode: 'pool-only', // Indicator for client
+        });
+      }
       
-      console.log(`[Freshness] User ${userId} - Unseen pool: ${unseenArtworks.length} artworks, Generation needed: ${needsGeneration}`);
+      // NEW: Hybrid gen+retrieve flow
+      console.log(`[Hybrid Gen] User ${userId} - Real-time generation requested with audio context`);
       
-      // CRITICAL: Prevent browser caching - always fetch fresh unseen list
+      // TODO: Implement warm-start pool retrieval using ImagePool service
+      // TODO: Trigger async DALL-E generation with ACRCloud music context
+      // TODO: Emit WebSocket event when generation complete
+      
+      // For now, return pool warm-start as placeholder
+      const unseenArtworks = await storage.getUnseenArtworks(userId, 1);
+      
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
       res.setHeader('Pragma', 'no-cache');
       res.setHeader('Expires', '0');
       
       res.json({
-        artworks: unseenArtworks,
+        warmStart: unseenArtworks[0] || null,
+        jobId: null, // Will be generation job ID for async swap
+        mode: 'hybrid-gen+retrieve',
         poolSize: unseenArtworks.length,
-        needsGeneration, // Signal client to request new artwork generation
       });
     } catch (error: any) {
-      console.error('[Freshness] Error fetching unseen artworks:', error);
+      console.error('[Hybrid Gen] Error in next artwork endpoint:', error);
       res.status(500).json({ message: error.message });
     }
   });

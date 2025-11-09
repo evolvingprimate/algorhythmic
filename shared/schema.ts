@@ -142,6 +142,25 @@ export const storageMetrics = pgTable("storage_metrics", {
   userIdIdx: index("storage_metrics_user_id_idx").on(table.userId),
 }));
 
+// Generation Jobs - Hybrid gen+retrieve job tracking
+export const generationJobs = pgTable("generation_jobs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  warmStartArtworkId: varchar("warm_start_artwork_id").references(() => artSessions.id, { onDelete: "set null" }),
+  generatedArtworkId: varchar("generated_artwork_id").references(() => artSessions.id, { onDelete: "set null" }),
+  audioContext: text("audio_context"), // JSON: {musicId, audioFeatures, targetDNA, motifs}
+  status: varchar("status").notNull().default("pending"), // pending, processing, completed, failed
+  attemptCount: integer("attempt_count").notNull().default(0),
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  startedAt: timestamp("started_at"),
+  completedAt: timestamp("completed_at"),
+}, (table) => ({
+  userIdIdx: index("generation_jobs_user_id_idx").on(table.userId),
+  statusIdx: index("generation_jobs_status_idx").on(table.status),
+  createdAtIdx: index("generation_jobs_created_at_idx").on(table.createdAt),
+}));
+
 // ============================================================================
 // PHASE 2: RAI (Real-time Aesthetic Intelligence) Tables
 // ============================================================================
