@@ -425,7 +425,7 @@ export type UpsertUser = typeof users.$inferInsert;
 export const SUBSCRIPTION_TIERS = {
   free: { name: "Free", dailyLimit: 3, price: 0 },
   premium: { name: "Premium", dailyLimit: 10, price: 14.99 },
-  ultimate: { name: "Ultimate", dailyLimit: 20, price: 19.99 },
+  ultimate: { name: "Ultimate", dailyLimit: 999999, price: 19.99 },
   enthusiast: { name: "Enthusiast", dailyLimit: 50, price: 49.99 },
   business_basic: { name: "Business Basic", dailyLimit: 100, price: 199.99 },
   business_premium: { name: "Business Premium", dailyLimit: 300, price: 499 },

@@ -984,7 +984,7 @@ export class PostgresStorage implements IStorage {
     // Build conditional where clauses
     const whereConditions = [
       isNull(userArtImpressions.id), // Unseen only
-      eq(artSessions.poolStatus, 'active'), // Active pool items only
+      or(eq(artSessions.poolStatus, 'active'), isNull(artSessions.poolStatus)), // Active or legacy (NULL) pool items
     ];
     
     // Add quality filter if specified
