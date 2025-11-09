@@ -149,14 +149,33 @@ export function useImpressionRecorder(options: UseImpressionRecorderOptions = {}
         const idsToSend = Array.from(queueRef.current);
         const payload = JSON.stringify({ artworkIds: idsToSend });
         
-        // Try sendBeacon first (non-blocking)
-        if (navigator.sendBeacon) {
+        // Try sendBeacon first (non-blocking, max 64KB)
+        let beaconSent = false;
+        if (navigator.sendBeacon && payload.length <= 65536) {
           const blob = new Blob([payload], { type: 'application/json' });
-          navigator.sendBeacon('/api/artworks/batch-impressions', blob);
-          console.log(`[ImpressionRecorder] 📡 Sent ${idsToSend.length} impressions via beacon`);
-        } else {
-          // Fallback: synchronous flush
-          flush(true);
+          beaconSent = navigator.sendBeacon('/api/artworks/batch-impressions', blob);
+          
+          if (beaconSent) {
+            console.log(`[ImpressionRecorder] 📡 Sent ${idsToSend.length} impressions via beacon`);
+          }
+        }
+        
+        // ⭐ NEW: Fallback to fetch keepalive for large payloads or beacon failure
+        if (!beaconSent) {
+          try {
+            fetch('/api/artworks/batch-impressions', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: payload,
+              keepalive: true, // Allows request to outlive page
+              credentials: 'include',
+            });
+            console.log(`[ImpressionRecorder] 🚀 Sent ${idsToSend.length} impressions via fetch keepalive`);
+          } catch (error) {
+            console.error(`[ImpressionRecorder] ❌ Keepalive fetch failed:`, error);
+            // Final fallback: synchronous flush (blocks unload briefly)
+            flush(true);
+          }
         }
       }
     };

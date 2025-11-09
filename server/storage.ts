@@ -32,7 +32,7 @@ import {
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { drizzle } from "drizzle-orm/neon-serverless";
-import { eq, desc, and, or, isNull, lt, gte, sql, getTableColumns } from "drizzle-orm";
+import { eq, desc, and, or, isNull, lt, gte, sql, getTableColumns, inArray } from "drizzle-orm";
 import { Pool, neonConfig } from "@neondatabase/serverless";
 import ws from "ws";
 
@@ -70,6 +70,7 @@ export interface IStorage {
   // User Art Impressions (Freshness Pipeline)
   recordImpression(userId: string, artworkId: string): Promise<void>;
   recordBatchImpressions(userId: string, artworkIds: string[]): Promise<number>;
+  validateArtworkVisibility(userId: string, artworkIds: string[]): Promise<string[]>; // Filter to valid IDs in global pool
   getUnseenArtworks(userId: string, limit?: number): Promise<ArtSession[]>;
   getFreshArtworks(sessionId: string, userId: string, limit?: number): Promise<ArtSession[]>; // Fresh AI-generated artwork (priority queue)
   
@@ -236,6 +237,11 @@ export class MemStorage implements IStorage {
   async recordImpression(userId: string, artworkId: string): Promise<void> {
     // Stub implementation (not used, DbStorage handles this)
     return;
+  }
+
+  async validateArtworkVisibility(userId: string, artworkIds: string[]): Promise<string[]> {
+    // Filter to only IDs that exist in session map
+    return artworkIds.filter(id => this.sessions.has(id));
   }
 
   async recordBatchImpressions(userId: string, artworkIds: string[]): Promise<number> {
@@ -691,6 +697,19 @@ export class PostgresStorage implements IStorage {
         target: [userArtImpressions.userId, userArtImpressions.artworkId],
         set: { viewedAt: sql`NOW()` } // Update timestamp on conflict
       });
+  }
+
+  async validateArtworkVisibility(userId: string, artworkIds: string[]): Promise<string[]> {
+    if (!artworkIds.length) return [];
+    
+    // Filter to only IDs that exist in global artwork pool
+    // Note: All artworks are globally visible (shared pool design)
+    const results = await this.db
+      .select({ id: artSessions.id })
+      .from(artSessions)
+      .where(inArray(artSessions.id, artworkIds));
+    
+    return results.map(r => r.id);
   }
 
   async recordBatchImpressions(userId: string, artworkIds: string[]): Promise<number> {

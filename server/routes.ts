@@ -596,6 +596,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Batch impression recording (for legacy artwork backfill + performance)
   app.post("/api/artworks/batch-impressions", isAuthenticated, async (req: any, res) => {
+    const startTime = Date.now();
+    
     try {
       const userId = req.user.claims.sub;
       const { artworkIds } = req.body as { artworkIds?: string[] };
@@ -614,11 +616,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Deduplication and sanitization
       const ids = Array.from(new Set(artworkIds.map(String))).filter(Boolean);
       
-      // Batch insert
-      const recorded = await storage.recordBatchImpressions(userId, ids);
+      // ⭐ NEW: Validate artwork IDs exist in global pool (security)
+      const validIds = await storage.validateArtworkVisibility(userId, ids);
+      const filtered = ids.length - validIds.length;
       
-      console.log(`[Freshness] Batch recorded ${recorded} impressions - User: ${userId}`);
-      res.json({ recorded });
+      // ⭐ NEW: Structured logging for security monitoring
+      if (filtered > 0) {
+        const invalidIds = ids.filter(id => !validIds.includes(id));
+        console.log(JSON.stringify({
+          event: 'batch_impressions_filtered',
+          userId,
+          attempted: ids.length,
+          filtered,
+          invalidIds: invalidIds.slice(0, 10), // Log first 10 invalid IDs for forensics
+          timestamp: new Date().toISOString()
+        }));
+      }
+      
+      // Batch insert (only valid IDs)
+      const recorded = validIds.length > 0 
+        ? await storage.recordBatchImpressions(userId, validIds)
+        : 0;
+      
+      const latencyMs = Date.now() - startTime;
+      
+      // ⭐ NEW: Enhanced response stats
+      console.log(JSON.stringify({
+        event: 'batch_impressions_success',
+        userId,
+        attempted: ids.length,
+        recorded,
+        filtered,
+        latency_ms: latencyMs,
+        timestamp: new Date().toISOString()
+      }));
+      
+      res.json({ 
+        attempted: ids.length,
+        recorded,
+        filtered,
+        ids: validIds,
+        timestamp: new Date().toISOString()
+      });
     } catch (error: any) {
       console.error('[Freshness] Error batch recording impressions:', error);
       res.status(500).json({ error: "Batch insert failed" });
