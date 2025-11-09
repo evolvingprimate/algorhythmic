@@ -387,6 +387,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // GET endpoint for initial page load - returns unseen artworks from pool
+  app.get("/api/artworks/next", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : 20;
+      
+      const unseenArtworks = await storage.getUnseenArtworks(userId, limit);
+      const needsGeneration = unseenArtworks.length < 5;
+      
+      console.log(`[Artworks GET] User ${userId} - Unseen pool: ${unseenArtworks.length} artworks`);
+      
+      // Set no-cache headers to prevent stale data
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      
+      res.json({
+        artworks: unseenArtworks,
+        poolSize: unseenArtworks.length,
+        needsGeneration,
+      });
+    } catch (error: any) {
+      console.error('[Artworks GET] Error:', error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // Hybrid gen+retrieve endpoint - Real-time DALL-E generation based on audio context
   // NEW: Accepts optional audio context (music ID, features, DNA) for personalized generation
   // FALLBACK: Returns pool warm-start if no context provided (backward compatible)
