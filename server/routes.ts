@@ -21,6 +21,18 @@ if (process.env.STRIPE_SECRET_KEY) {
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Cache-Control headers for HTML to prevent stale bundle issues
+  app.use((req, res, next) => {
+    // Detect HTML requests via Accept header (works for SPA routes + deep links)
+    const acceptsHtml = req.headers.accept?.includes('text/html');
+    if (acceptsHtml) {
+      res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.set('Pragma', 'no-cache');
+      res.set('Expires', '0');
+    }
+    next();
+  });
+
   // Setup Replit Auth
   await setupAuth(app);
 
