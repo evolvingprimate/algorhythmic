@@ -1,6 +1,7 @@
 import type { IMorphRenderer, RenderContext } from './types';
 import { ParameterSampler } from './ParameterSampler';
 import { ParticlesNode } from './morpheusV2/nodes/ParticlesNode';
+import { GlobalEffectsConfig } from '../globalEffectsConfig';
 
 /**
  * Morpheus 0.5 - Fully Maestro-Controlled Renderer
@@ -207,12 +208,18 @@ export class Morpheus05Renderer implements IMorphRenderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.texCoordBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, texCoords, gl.STATIC_DRAW);
     
-    // Initialize particle system
-    this.particlesNode = new ParticlesNode(gl);
-    this.particlesNode.initialize().catch(err => {
-      console.error('[Morpheus05] Failed to initialize ParticlesNode:', err);
+    // Initialize particle system (conditional based on global config)
+    if (GlobalEffectsConfig.areParticlesEnabled()) {
+      console.log('[Morpheus05] Particles ENABLED - initializing ParticlesNode');
+      this.particlesNode = new ParticlesNode(gl);
+      this.particlesNode.initialize().catch(err => {
+        console.error('[Morpheus05] Failed to initialize ParticlesNode:', err);
+        this.particlesNode = null;
+      });
+    } else {
+      console.log('[Morpheus05] Particles DISABLED - skipping ParticlesNode initialization');
       this.particlesNode = null;
-    });
+    }
     
     this.lastFrameTime = performance.now();
     
