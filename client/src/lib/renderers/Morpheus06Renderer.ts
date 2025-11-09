@@ -187,27 +187,36 @@ export class Morpheus06Renderer implements IMorphRenderer {
   
   /**
    * Compute camera zoom and translation to move toward anchor
-   * Uses sine wave for smooth round-trip (1.0 → 1.06 → 1.0) with no jump
+   * Uses sine wave for smooth round-trip with smart pan clamping to eliminate black edges
    */
   private computeZoomTransform(
     progress: number,
     anchor: AnchorPoint
   ): { cameraZoom: number; cameraTranslate: { x: number; y: number } } {
     // Sine wave: peaks at 50%, returns to baseline at 100%
-    // This eliminates the jump when cycle resets from 100% → 0%
-    const maxZoom = 1.10; // Increased from 1.06 for more dramatic pop
+    // Baseline zoom increased to 1.03 for overscan headroom
+    const baselineZoom = 1.03; // Prevents black edges at low zoom
+    const maxZoom = 1.12; // Increased from 1.06 for more dramatic pop
     const zoomAmount = Math.sin(progress * Math.PI); // 0 → 1 → 0
-    const cameraZoom = 1.0 + zoomAmount * (maxZoom - 1.0);
+    const cameraZoom = baselineZoom + zoomAmount * (maxZoom - baselineZoom);
     
     // Translate to center the anchor
     // Convert anchor coords (0-1 space) to NDC (-1 to 1 space)
     const targetX = (anchor.centerX - 0.5) * 2.0;
     const targetY = -(anchor.centerY - 0.5) * 2.0; // Flip Y for WebGL
     
-    // Smooth movement toward anchor (same sine wave pattern)
+    // Calculate desired pan (40% movement strength)
+    const desiredPanX = -targetX * zoomAmount * 0.4;
+    const desiredPanY = -targetY * zoomAmount * 0.4;
+    
+    // Smart pan bounds: clamp to safe range based on current zoom
+    // Maximum safe translation = 1 - 1/zoom (derived from view frustum math)
+    const maxSafeTranslate = 1.0 - 1.0 / cameraZoom;
+    
+    // Clamp each axis independently to prevent black edges
     const cameraTranslate = {
-      x: -targetX * zoomAmount * 0.4, // Increased from 0.3 (40% movement for more contrast)
-      y: -targetY * zoomAmount * 0.4,
+      x: Math.max(-maxSafeTranslate, Math.min(maxSafeTranslate, desiredPanX)),
+      y: Math.max(-maxSafeTranslate, Math.min(maxSafeTranslate, desiredPanY)),
     };
     
     return { cameraZoom, cameraTranslate };
