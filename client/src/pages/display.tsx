@@ -473,6 +473,35 @@ export default function Display() {
     }
   };
 
+  /**
+   * BUG FIX: Safe prewarm helper with null checks, readiness gate, and error handling
+   * Prevents crashes from prewarming before renderer initialization completes
+   */
+  const safePrewarmFrame = async (imageUrl: string, frameId: string, context: string = 'frame') => {
+    try {
+      // Null check
+      if (!rendererRef.current) {
+        console.warn(`[Display] ⏸️ Renderer not initialized, skipping prewarm for ${context}`);
+        return;
+      }
+      
+      // Wait for renderer to be ready (with 5s timeout)
+      try {
+        await rendererRef.current.whenReady();
+      } catch (readyError) {
+        console.warn(`[Display] ⚠️ Renderer not ready (timeout), skipping prewarm for ${context}:`, readyError);
+        return;
+      }
+      
+      // Prewarm with error handling
+      await rendererRef.current.prewarmFrame(imageUrl, frameId);
+      console.log(`[Display] ✅ Prewarmed ${context}: ${frameId}`);
+    } catch (error) {
+      console.error(`[Display] ❌ Prewarm failed for ${context} (${frameId}):`, error);
+      // Graceful degradation - continue without prewarming (JIT fallback will handle)
+    }
+  };
+
   // Load multiple recent artworks on mount to enable morphing
   useEffect(() => {
     // CRITICAL GUARD: Prevent infinite loop during fallback generation
@@ -587,13 +616,9 @@ export default function Display() {
             audioAnalysis: audioFeatures,
           });
           
-          // BUG FIX: Prewarm frame to prevent visual glitches
-          if (rendererRef.current) {
-            const frameId = artwork.imageUrl.split('/').pop() || artwork.imageUrl;
-            rendererRef.current.prewarmFrame(artwork.imageUrl, frameId).catch(err => {
-              console.error(`[Display] Prewarming failed for ${frameId}:`, err);
-            });
-          }
+          // BUG FIX: Safely prewarm frame to prevent visual glitches (with null checks + readiness gate)
+          const frameId = artwork.imageUrl.split('/').pop() || artwork.imageUrl;
+          safePrewarmFrame(artwork.imageUrl, frameId, `initial-frame-${validatedArtworks.length}`);
           
           console.log(`[Display] ✅ Loaded frame ${validatedArtworks.length}: ${artwork.prompt?.substring(0, 50)}...`);
         }
@@ -762,13 +787,9 @@ export default function Display() {
         audioAnalysis: audioFeatures,
       });
       
-      // BUG FIX: Prewarm fresh frame to prevent visual glitches
-      if (rendererRef.current) {
-        const frameId = artwork.imageUrl.split('/').pop() || artwork.imageUrl;
-        rendererRef.current.prewarmFrame(artwork.imageUrl, frameId).catch(err => {
-          console.error(`[Display] Prewarming failed for fresh frame ${frameId}:`, err);
-        });
-      }
+      // BUG FIX: Safely prewarm fresh frame to prevent visual glitches (with null checks + readiness gate)
+      const frameId = artwork.imageUrl.split('/').pop() || artwork.imageUrl;
+      safePrewarmFrame(artwork.imageUrl, frameId, 'fresh-frame');
       
       // PEER-REVIEWED FIX #3: Record impression when fresh frame is inserted (deduplicated with retry on failure)
       impressionRecorder.queueImpressions(artwork.id);
@@ -880,13 +901,9 @@ export default function Display() {
             audioAnalysis: variables.audioAnalysis,
           });
           
-          // BUG FIX: Prewarm newly generated frame
-          if (rendererRef.current) {
-            const frameId = data.imageUrl.split('/').pop() || data.imageUrl;
-            rendererRef.current.prewarmFrame(data.imageUrl, frameId).catch(err => {
-              console.error(`[Display] Prewarming failed for generated frame ${frameId}:`, err);
-            });
-          }
+          // BUG FIX: Safely prewarm newly generated frame (with null checks + readiness gate)
+          const frameId = data.imageUrl.split('/').pop() || data.imageUrl;
+          safePrewarmFrame(data.imageUrl, frameId, 'generated-frame');
           
           // Start the morph engine if not already started
           if (morphEngineRef.current.getFrameCount() === 1) {
