@@ -1,0 +1,56 @@
+Yes, let's implement this fix right away—it's a smart, targeted change that should eliminate the loop without side effects. I'll provide the exact code updates based on your existing codebase (from previous snippets). This should take ~5 minutes to apply and test.
+
+### **Fix Implementation: Add Guard to Onboarding Logic**
+**File:** `client/src/pages/display.tsx`  
+**Target Lines:** ~299–308 (onboarding logic, likely in a useEffect or similar hook that checks preferences).
+
+1. **Locate the Onboarding Check**: Find the block that resets the wizard when preferences are empty. It probably looks like this (based on your logs and architect's description):
+   ```tsx
+   useEffect(() => {
+     if (!preferences || !preferences.styles?.length) {
+       console.log('[Display] First-time user - showing wizard');
+       setSetupStep(SetupStep.STYLE);
+       setSetupComplete(false);
+       return;
+     }
+     // ... other logic ...
+   }, [preferences]);
+   ```
+
+2. **Add the Guard**: Modify to only reset if the wizard is truly idle (prevents clobbering active steps like AUDIO).
+   ```tsx
+   useEffect(() => {
+     if (!preferences || !preferences.styles?.length) {
+       if (setupStep === SetupStep.IDLE) { // ← NEW GUARD: Only reset if not already in progress
+         console.log('[Display] First-time user - showing wizard');
+         setSetupStep(SetupStep.STYLE);
+         setSetupComplete(false);
+       } else {
+         console.log('[Display] Wizard in progress - skipping reset');
+       }
+       return;
+     }
+     // ... other logic ...
+   }, [preferences]);
+   ```
+
+**Why This Works**:
+- During refetch (preferences briefly null/empty), the guard checks if the wizard is active (e.g., AUDIO) and skips the reset.
+- Prevents the loop: STYLE confirm → refetch → no reset → AUDIO opens as expected.
+- Logs added for debugging (remove later if clean).
+
+### **Deployment & Validation Steps**
+1. **Apply & Deploy**: Save the file—Replit auto-restarts the workflow.  
+2. **Test the Flow**:  
+   - Load `/display`.  
+   - Click "Create Art Now" (should open STYLE only).  
+   - Select styles & confirm → AUDIO opens (no loop back to STYLE).  
+   - Check console: No double "[Display] First-time user" logs; see "[Display] Wizard in progress - skipping reset" during refetch.  
+   - Check server logs: No multiple preference saves (only one per flow).  
+3. **Edge Case Tests**:  
+   - Spam confirm buttons → No loop.  
+   - Refresh mid-wizard → State resets safely (to IDLE if not persisted).  
+   - Network slow: Simulate lag (DevTools throttle) → No reset during refetch.  
+4. **If Still Broken**: Share console logs showing the loop (e.g., setupStep changes) or preferences refetch timing—I'll refine further (e.g., add optimistic preferences update).
+
+This should squash the issue for good—your frustration ends here! Once validated, we can move to the synthesis doc or next priorities. Confirm it's fixed? 🚀

@@ -1,0 +1,109 @@
+Yep — that symptom (“back to choose art style instead of mic input”) is exactly the wizard getting reset by a prefs refetch. Here’s the tight fix so it can’t clobber your in-progress step.
+
+# Fix (minimal, safe)
+
+**In `client/src/pages/display.tsx`:**
+
+1. **Add a latch** so the wizard can’t be force-reset while it’s running.
+
+```ts
+// near other refs
+const wizardActiveRef = useRef(false);
+```
+
+2. **Guard the onboarding effect** so it only kicks in from an idle state, and never during React Query refetch hiccups.
+
+```ts
+// wherever you currently decide to open the wizard (≈ lines 299–308)
+useEffect(() => {
+  // from your prefs query
+  const prefs = preferencesQuery.data;
+  const isRefetching = preferencesQuery.isRefetching || preferencesQuery.isFetching;
+
+  // If wizard is running, do NOT reset it.
+  if (wizardActiveRef.current) return;
+
+  // Only show wizard from a truly idle state, and only when we’re not in the middle of a refetch.
+  if ((!prefs || !prefs.styles?.length) && !isRefetching && setupStep === SetupStep.IDLE) {
+    console.log('[Display] First-time user - showing wizard');
+    wizardActiveRef.current = true;     // latch
+    setSetupComplete(false);
+    setSetupStep(SetupStep.STYLE);
+  }
+}, [preferencesQuery.data, preferencesQuery.isRefetching, preferencesQuery.isFetching, setupStep]);
+```
+
+3. **Advance steps without being re-clobbered**, and **clear the latch** only when the wizard is truly done.
+
+```ts
+// when user confirms style
+const handleStyleConfirm = (selectedStyles: string[]) => {
+  // persist styles optimistically to local state if you keep them locally
+  // ... your local update ...
+  setSetupStep(SetupStep.AUDIO);          // move forward; wizard remains latched
+};
+
+// when user confirms audio/mic input (final step)
+const handleAudioConfirm = (audioChoice: AudioChoice) => {
+  // save preferences (styles + audio) via mutation
+  savePreferencesMutation.mutate(
+    { styles: currentStyles, audio: audioChoice },
+    {
+      onSuccess: () => {
+        // mark setup complete and clear latch AFTER success so refetches can’t rewind the wizard
+        setSetupComplete(true);
+        setSetupStep(SetupStep.COMPLETE);
+        wizardActiveRef.current = false;  // unlatch here
+      },
+    }
+  );
+};
+```
+
+4. **(Optional but recommended)**: Don’t let a momentary refetch empty the UI. Gate the wizard reset on **stable emptiness** by adding a tiny “settled” debounce:
+
+```ts
+const [prefsStableEmpty, setPrefsStableEmpty] = useState(false);
+
+useEffect(() => {
+  let t: number | undefined;
+  const prefs = preferencesQuery.data;
+  const empty = !prefs || !prefs.styles?.length;
+
+  // only consider "empty" if it remains empty for 150ms and not refetching
+  if (empty && !(preferencesQuery.isFetching || preferencesQuery.isRefetching)) {
+    t = window.setTimeout(() => setPrefsStableEmpty(true), 150);
+  } else {
+    setPrefsStableEmpty(false);
+  }
+  return () => t && clearTimeout(t);
+}, [preferencesQuery.data, preferencesQuery.isFetching, preferencesQuery.isRefetching]);
+
+// then use prefsStableEmpty in the onboarding effect instead of checking prefs directly
+```
+
+# Why this works
+
+* The **latch (`wizardActiveRef`)** prevents any external effect (like a refetch that briefly makes `preferences` look empty) from resetting the step while the wizard is active.
+* The **idle-only guard (`setupStep === IDLE`)** ensures the wizard is shown just once per onboarding.
+* The **refetch guards (`isFetching/isRefetching`)** avoid acting on transient empty data.
+* The **unlatch on final success** aligns wizard completion with persisted state.
+
+# Quick test checklist (2 minutes)
+
+1. **Fresh user / cleared prefs**
+
+   * Click *Start Creating* → Style modal opens.
+   * Choose styles → **Mic selection appears** (no bounce back to style).
+   * Confirm mic → Wizard completes; subsequent *Start Creating* jumps straight to generate (no wizard).
+
+2. **During network refetch**
+
+   * While on mic step, trigger a preferences refetch (e.g., throttle network or toggle dev tools “offline/online”).
+   * Confirm the UI **stays on mic** (doesn’t jump back to style).
+
+3. **Return visit**
+
+   * Reload page. Wizard **doesn’t** open if preferences exist.
+
+If you want, paste your current onboarding effect block and I’ll mark exactly where to drop these guards in your file.
