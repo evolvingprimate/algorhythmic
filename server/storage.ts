@@ -18,6 +18,10 @@ import {
   type InsertTelemetryEvent,
   type GenerationJob,
   type InsertGenerationJob,
+  type CreditLedger,
+  type InsertCreditLedger,
+  type UserCredits,
+  type InsertUserCredits,
   artPreferences,
   artVotes,
   artSessions,
@@ -28,6 +32,8 @@ import {
   raiSessions,
   telemetryEvents,
   generationJobs,
+  creditLedger,
+  userCredits,
   SUBSCRIPTION_TIERS,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
@@ -82,11 +88,34 @@ export interface IStorage {
   upsertUser(user: UpsertUser): Promise<User>; // For Replit Auth
   updateUserSubscription(id: string, tier: string, stripeCustomerId?: string, stripeSubscriptionId?: string): Promise<User>;
   
-  // Daily Usage
+  // Daily Usage (LEGACY - being replaced by monthly credit system)
   getDailyUsage(userId: string, date: string): Promise<DailyUsage | undefined>;
   incrementDailyUsage(userId: string, date: string): Promise<DailyUsage>;
   getUserDailyLimit(userId: string): Promise<number>;
   checkDailyLimit(userId: string): Promise<{ canGenerate: boolean; count: number; limit: number }>;
+  
+  // Monthly Credit System
+  initializeUserCredits(userId: string, tier: string): Promise<UserCredits>;
+  getCreditsContext(userId: string): Promise<{
+    balance: number;
+    rolloverBalance: number;
+    baseQuota: number;
+    cycleStart: Date;
+    cycleEnd: Date;
+    daysRemaining: number;
+  }>;
+  deductCredit(userId: string, amount: number, metadata?: Record<string, any>): Promise<{ success: boolean; newBalance: number }>;
+  refundCredit(userId: string, amount: number, reason: string, metadata?: Record<string, any>): Promise<{ success: boolean; newBalance: number }>;
+  getCreditHistory(userId: string, limit?: number): Promise<CreditLedger[]>;
+  
+  // Image Catalogue Manager
+  getCatalogCoverage(userId: string, orientation?: string): Promise<{
+    totalLibrary: number;
+    unseenCount: number;
+    unseenRatio: number;
+    distinctStyles: number;
+  }>;
+  getLibraryArtwork(userId: string, orientation?: string, styles?: string[], limit?: number): Promise<ArtSession[]>;
   
   // Storage Metrics
   recordStorageMetric(metric: InsertStorageMetric): Promise<StorageMetric>;

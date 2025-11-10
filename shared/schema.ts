@@ -48,12 +48,27 @@ export const artSessions = pgTable("art_sessions", {
   perceptualHash: varchar("perceptual_hash"), // pHash/dHash for deduplication
   poolStatus: varchar("pool_status").default("active"), // active, archived, pending
   lastUsedAt: timestamp("last_used_at"), // For LRU eviction
+  // Image Catalogue Manager metadata (for pre-generated library images)
+  isLibrary: boolean("is_library").notNull().default(false), // true = pre-generated library, false = user-generated
+  orientation: varchar("orientation"), // 'portrait' | 'landscape' | 'square'
+  aspectRatio: varchar("aspect_ratio"), // '9:16' | '16:9' | '1:1'
+  catalogueTier: varchar("catalogue_tier"), // 'dual-native' | 'square-master' | 'landscape-only'
+  width: integer("width"), // Pixel width
+  height: integer("height"), // Pixel height
+  safeArea: text("safe_area"), // JSON: {x, y, w, h} for saliency-guided crops
+  focalPoints: text("focal_points"), // JSON: [{x, y, confidence}] detected focal points
+  sidefillPalette: text("sidefill_palette"), // JSON: ['#color1', '#color2'] for artistic side-fills
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => ({
   sessionIdIdx: index("art_sessions_session_id_idx").on(table.sessionId),
   userIdIdx: index("art_sessions_user_id_idx").on(table.userId),
   qualityScoreIdx: index("art_sessions_quality_score_idx").on(table.qualityScore),
   poolStatusIdx: index("art_sessions_pool_status_idx").on(table.poolStatus),
+  isLibraryIdx: index("art_sessions_is_library_idx").on(table.isLibrary),
+  orientationIdx: index("art_sessions_orientation_idx").on(table.orientation),
+  catalogueTierIdx: index("art_sessions_catalogue_tier_idx").on(table.catalogueTier),
+  // Composite index for library artwork selection queries (Architect recommendation)
+  libraryOrientationIdx: index("art_sessions_library_orientation_idx").on(table.isLibrary, table.orientation, table.catalogueTier),
 }));
 
 // User favorites for weighted rotation (future feature)
@@ -111,11 +126,15 @@ export const users = pgTable("users", {
   stripeCustomerId: text("stripe_customer_id"),
   stripeSubscriptionId: text("stripe_subscription_id"),
   isActive: boolean("is_active").notNull().default(true),
+  // Image Catalogue Manager preferences
+  preferredOrientation: varchar("preferred_orientation"), // 'portrait' | 'landscape' | 'both' | null
+  // Credit Controller session state (PostgreSQL-based, no Redis needed)
+  controllerState: text("controller_state"), // JSON: {lastDecision, lastProbability, sessionFreshCount, lastUpdated}
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
-// Daily usage tracking for image generations
+// Daily usage tracking for image generations (LEGACY - being replaced by monthly credit system)
 export const dailyUsage = pgTable("daily_usage", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
@@ -124,6 +143,44 @@ export const dailyUsage = pgTable("daily_usage", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => ({
   userDateIdx: index("daily_usage_user_date_idx").on(table.userId, table.date),
+}));
+
+// ============================================================================
+// MONTHLY CREDIT SYSTEM (Ledger-First Architecture)
+// ============================================================================
+
+// Credit Ledger - Immutable transaction log (source of truth)
+export const creditLedger = pgTable("credit_ledger", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  eventType: varchar("event_type").notNull(), // 'grant' | 'deduct' | 'refund' | 'rollover' | 'decay' | 'admin_adjustment'
+  amount: integer("amount").notNull(), // Positive for grant/refund, negative for deduct/decay
+  balanceAfter: integer("balance_after").notNull(), // Snapshot of balance after this transaction
+  description: text("description"), // Human-readable explanation
+  metadata: text("metadata"), // JSON: {artworkId, controllerDecision, refundReason, etc.}
+  idempotencyKey: varchar("idempotency_key"), // Prevents duplicate deductions (e.g., artwork-{uuid}-deduct)
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => ({
+  userIdIdx: index("credit_ledger_user_id_idx").on(table.userId),
+  createdAtIdx: index("credit_ledger_created_at_idx").on(table.createdAt),
+  eventTypeIdx: index("credit_ledger_event_type_idx").on(table.eventType),
+  idempotencyIdx: uniqueIndex("credit_ledger_idempotency_idx").on(table.idempotencyKey),
+  // Composite index for credit audit queries (Architect recommendation)
+  userCreatedIdx: index("credit_ledger_user_created_idx").on(table.userId, table.createdAt),
+}));
+
+// User Credits - Materialized snapshot for fast reads (updated via triggers/code)
+export const userCredits = pgTable("user_credits", {
+  userId: varchar("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  balance: integer("balance").notNull().default(0), // Current total credits
+  rolloverBalance: integer("rollover_balance").notNull().default(0), // Credits from previous cycles
+  baseQuota: integer("base_quota").notNull().default(100), // Monthly base allocation (tier-dependent)
+  billingCycleStart: timestamp("billing_cycle_start").notNull(), // Start of current cycle
+  billingCycleEnd: timestamp("billing_cycle_end").notNull(), // End of current cycle
+  timezone: varchar("timezone").notNull().default('UTC'), // User timezone for cycle boundaries
+  lastUpdated: timestamp("last_updated").notNull().defaultNow(), // For cache freshness checks
+}, (table) => ({
+  billingCycleEndIdx: index("user_credits_billing_cycle_end_idx").on(table.billingCycleEnd),
 }));
 
 // Storage metrics for monitoring object storage reliability
@@ -356,6 +413,16 @@ export const insertGenerationJobSchema = createInsertSchema(generationJobs).omit
   createdAt: true,
 });
 
+// Credit System insert schemas
+export const insertCreditLedgerSchema = createInsertSchema(creditLedger).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertUserCreditsSchema = createInsertSchema(userCredits).omit({
+  lastUpdated: true,
+});
+
 // Audio Context DTO for hybrid gen+retrieve
 export const audioContextSchema = z.object({
   musicId: z.object({
@@ -418,6 +485,12 @@ export type InsertUserDnaProfile = z.infer<typeof insertUserDnaProfileSchema>;
 
 export type GenerationJob = typeof generationJobs.$inferSelect;
 export type InsertGenerationJob = z.infer<typeof insertGenerationJobSchema>;
+
+export type CreditLedger = typeof creditLedger.$inferSelect;
+export type InsertCreditLedger = z.infer<typeof insertCreditLedgerSchema>;
+
+export type UserCredits = typeof userCredits.$inferSelect;
+export type InsertUserCredits = z.infer<typeof insertUserCreditsSchema>;
 
 export type AudioContext = z.infer<typeof audioContextSchema>;
 
