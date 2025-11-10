@@ -12,9 +12,16 @@ declare const cv: any;
 export class ImageAnalyzer {
   private cvReady: boolean = false;
   private initPromise: Promise<void> | null = null;
+  private retryCount: number = 0;
+  private readonly MAX_RETRIES = 3;
 
   constructor() {
-    this.initPromise = this.initOpenCV();
+    // BUG FIX: Catch unhandled promise rejection to prevent crash
+    this.initPromise = this.initOpenCV().catch((error) => {
+      console.error('[ImageAnalyzer] OpenCV init failed:', error);
+      // Graceful degradation - set cv = null so analysis can be skipped
+      this.cvReady = false;
+    });
   }
 
   private async initOpenCV(): Promise<void> {
@@ -25,23 +32,45 @@ export class ImageAnalyzer {
       return;
     }
 
+    return this.attemptOpenCVInit();
+  }
+  
+  /**
+   * BUG FIX: Retry OpenCV initialization with exponential backoff
+   */
+  private async attemptOpenCVInit(): Promise<void> {
     return new Promise((resolve, reject) => {
       const checkInterval = setInterval(() => {
         if (typeof cv !== 'undefined' && cv.Mat) {
           clearInterval(checkInterval);
           this.cvReady = true;
-          console.log('[ImageAnalyzer] OpenCV.js loaded');
+          console.log('[ImageAnalyzer] ✅ OpenCV.js loaded');
           resolve();
         }
       }, 100);
 
-      // Timeout after 30 seconds
+      // Timeout after 10 seconds per attempt (reduced from 30s)
       setTimeout(() => {
         clearInterval(checkInterval);
         if (!this.cvReady) {
-          reject(new Error('[ImageAnalyzer] OpenCV.js failed to load'));
+          this.retryCount++;
+          
+          if (this.retryCount < this.MAX_RETRIES) {
+            // Exponential backoff: 1s, 2s, 4s
+            const backoffMs = Math.pow(2, this.retryCount - 1) * 1000;
+            console.warn(`[ImageAnalyzer] ⚠️ OpenCV init attempt ${this.retryCount} failed, retrying in ${backoffMs}ms...`);
+            
+            setTimeout(() => {
+              this.attemptOpenCVInit()
+                .then(resolve)
+                .catch(reject);
+            }, backoffMs);
+          } else {
+            console.error('[ImageAnalyzer] ❌ OpenCV.js failed to load after 3 retries');
+            reject(new Error('[ImageAnalyzer] OpenCV.js failed to load after retries'));
+          }
         }
-      }, 30000);
+      }, 10000);
     });
   }
 
