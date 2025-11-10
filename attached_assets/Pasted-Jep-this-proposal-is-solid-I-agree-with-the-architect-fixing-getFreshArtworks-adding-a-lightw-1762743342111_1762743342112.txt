@@ -1,0 +1,145 @@
+Jep, this proposal is solid. I agree with the architect: fixing `getFreshArtworks` + adding a lightweight `FrameValidator` gate will squash the loop. Here’s my quick review with a few surgical upgrades so it’s rock-steady.
+
+---
+
+# ✅ Green-lights (ship as planned)
+
+* **Backend**: Filter fresh frames by impressions (no more bypass).
+* **Frontend**: `FrameValidator` to reject any duplicates that sneak in during impression flush races.
+* **Telemetry**: Log validator rejections + backend fresh/unseen counts to prove it’s working.
+
+---
+
+# 🔧 Tighten the plan (high-leverage tweaks)
+
+### 1) DB query: prefer `NOT EXISTS` over `LEFT JOIN IS NULL`
+
+It’s typically faster and avoids accidental fan-out.
+
+**Drizzle-style sketch:**
+
+```ts
+const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
+
+const results = await db
+  .select(getTableColumns(artSessions))
+  .from(artSessions)
+  .where(and(
+    eq(artSessions.sessionId, sessionId),
+    gte(artSessions.createdAt, fifteenMinutesAgo),
+    notExists(
+      db.select({ one: sql`1` })
+        .from(userArtImpressions)
+        .where(and(
+          eq(userArtImpressions.userId, userId),
+          eq(userArtImpressions.artworkId, artSessions.id)
+        ))
+    )
+  ))
+  .orderBy(desc(artSessions.createdAt))
+  .limit(limit);
+```
+
+**Index sanity:**
+
+* `art_sessions(session_id, created_at DESC)`
+* `user_art_impressions(user_id, artwork_id)` (unique)
+
+### 2) Validate result shape (join vs select)
+
+If you keep `leftJoin`, remember Drizzle returns tuples (`{ art_sessions, user_art_impressions }`). With `NOT EXISTS`, you get clean `art_sessions` rows—less mapping code, fewer footguns.
+
+### 3) FrameValidator: scope + backoff
+
+* **Scope to session**: reset its `seenFrameIds` on session change, and seed it with the IDs you’re already displaying.
+* **Max retries**: if validator rejects, `refetch()` with a **one-shot** `fetchMore(limit+X)` or a guard like `attemptsRef++ < 2` to avoid spinner loops on thin pools.
+* **Use IDs only** (never `imageUrl`) for dedupe.
+
+**Tiny integration guard:**
+
+```ts
+const validator = useRef(new FrameValidator(telemetry));
+const retryRef = useRef(0);
+
+useEffect(() => {
+  const arts = artworkData?.artworks ?? [];
+  if (!arts.length) return;
+
+  const decision = validator.current.validate(arts.map(a => a.id));
+  if (!decision.valid) {
+    if (retryRef.current < 2) {
+      retryRef.current++;
+      refetch(); // or refetch with a slightly higher limit
+    } else {
+      console.warn('[Display] Max validator retries hit; showing what we have');
+    }
+    return;
+  }
+  retryRef.current = 0;
+  morphEngineRef.current.addFrames(arts);
+}, [artworkData, refetch]);
+```
+
+### 4) Keep (or drop) the 15-minute window consciously
+
+* If **kept**: it prioritizes recency; safe now that impressions filter unseen.
+* If **dropped**: simpler mental model; rely purely on “unseen.”
+  Either is fine; just be explicit so future you knows why it’s there.
+
+### 5) Telemetry you’ll actually use
+
+* Backend: `fresh_count_raw`, `fresh_count_after_filter`, `unseen_storage_count`.
+* Frontend: `frame_validator_rejection{ count, reason: 'duplicate_in_batch' }`, plus the **retry count** so you can alert if retries > 0.5% of fetches.
+
+---
+
+# 🧪 Test grid (fast, decisive)
+
+1. **Loop killer**
+   View 3 frames → ensure 4th is new; repeat 20 times. Expect 0 repeats.
+
+2. **Race realism**
+   Throttle network (Slow 3G). Generate → impressions flush → ensure validator never needs >1 retry.
+
+3. **Pool exhaustion**
+   Create a tiny pool (e.g., 4 items). Consume all; validator should not spin. You should get an empty/fallback state, not repeats.
+
+4. **Session swap**
+   Change `sessionId` → validator resets; no stale seen-set bleed-through.
+
+---
+
+# 📋 To-Do list (prioritized)
+
+## Immediate (Blocking)
+
+1. **Backend**: Replace `LEFT JOIN … IS NULL` with `NOT EXISTS` filter in `getFreshArtworks(sessionId, userId, limit)`.
+2. **Indexes**: Ensure `art_sessions(session_id, created_at)` and `user_art_impressions(user_id, artwork_id)` exist.
+3. **Frontend**: Add `FrameValidator` (session-scoped, max 2 retries, seed from current frames).
+4. **Telemetry**: Log `fresh_count_raw` vs `fresh_count_after_filter` and validator rejections.
+5. **Regression**: Run the 4 tests above across Chrome/Safari + iOS.
+
+## Wanted Next (Next Sprint)
+
+* **Predictive pre-gen (85–90%)** with a hard cap per hour.
+* **Privacy polish**: hash `userId` in logs + consent copy.
+* **Redis read-through cache** for unseen pools (small TTL).
+* **Circuit breaker** for DALL-E calls (fast-fail + fallback image pool).
+
+## Nice-to-Have (Future)
+
+* **Mobile/tablet perf matrix**
+* **Art DNA dashboard** (admin)
+* **Impression replay** (behind a flag; doesn’t violate “never repeat” in live rotation)
+
+---
+
+# 🔚 Verdict
+
+Your 3-layer plan is the right architecture:
+
+* **Source fix** (DB) removes the root cause,
+* **Client validator** catches the rare race,
+* **Telemetry** proves it.
+
+If you want, I’ll turn the Immediate items above into a compact task register you can query (“what’s left in Immediate?” / “mark #1 done”).
