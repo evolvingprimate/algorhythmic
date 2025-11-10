@@ -57,6 +57,7 @@ import { detectDeviceCapabilities } from "@/lib/deviceDetection";
 import { parseDNAFromSession } from "@/lib/dna";
 import { EffectLogger } from "@/lib/effectLogger";
 import { EngineRegistry } from "@/lib/renderers";
+import { FrameValidator } from "@/lib/FrameValidator";
 import type { AudioAnalysis, ArtVote, ArtPreference, MusicIdentification } from "@shared/schema";
 
 // BUG FIX: Setup step enum for sequential modal flow (prevents overlapping modals)
@@ -173,6 +174,7 @@ export default function Display() {
   const effectLoggerRef = useRef<EffectLogger>(new EffectLogger());
   const showDebugOverlayRef = useRef<boolean>(false);
   const effectsConfigRef = useRef<EffectsConfig>(effectsConfig);
+  const frameValidatorRef = useRef<FrameValidator>(new FrameValidator({ maxRetries: 2, enableTelemetry: true }));
   
   // Sync refs with state
   useEffect(() => {
@@ -487,6 +489,42 @@ export default function Display() {
         
         // FIFO ORDER: Load artworks sequentially (no shuffle) for true freshness
         const orderedArtworks = [...mergedArtworks];
+        
+        // ⭐ BUG FIX #5: VALIDATE FRAMES BEFORE LOADING (3-layer defense)
+        const frameIds = orderedArtworks.map(a => a.id);
+        const validation = frameValidatorRef.current.validate(frameIds, sessionId.current);
+        
+        if (!validation.valid) {
+          console.warn('[Display] ❌ Validator rejected frames:', validation.reason);
+          
+          if (validation.reason === 'max_retries_exceeded') {
+            console.error('[Display] 🚨 Validator exhausted retries - triggering fallback generation');
+            toast({
+              title: "Loading Artwork",
+              description: "Pool temporarily low, generating fresh artwork...",
+            });
+            
+            // CRITICAL FIX: Trigger fallback generation to prevent morph engine stall
+            isFallbackGeneratingRef.current = true;
+            
+            try {
+              await generateFallbackArtwork();
+            } finally {
+              isFallbackGeneratingRef.current = false;
+              setIsValidatingImages(false);
+            }
+            return;
+          }
+          
+          // Refetch with cache invalidation to get truly fresh frames
+          console.log('[Display] 🔄 Refetching fresh frames after validator rejection');
+          queryClient.invalidateQueries({ 
+            queryKey: ["/api/artworks/next", sessionId.current],
+            refetchType: "active",
+          });
+          setIsValidatingImages(false);
+          return;
+        }
         
         // Track validated artworks for UI selection
         const validatedArtworks: typeof recentArtworks = [];

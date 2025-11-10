@@ -756,21 +756,51 @@ export class PostgresStorage implements IStorage {
 
   async getFreshArtworks(sessionId: string, userId: string, limit: number = 20): Promise<ArtSession[]> {
     // Fresh artwork: created in this session within last 15 minutes
-    // CRITICAL FIX: NO impression filtering - fresh frames bypass "never repeat" logic
-    // This ensures just-generated artwork appears immediately, even if impression was recorded
-    const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
+    // BUG FIX #5: NOW FILTERS BY IMPRESSIONS - ensures "never repeat" guarantee
+    // Fresh frames are prioritized but MUST respect user's viewed history
+    const FRESH_WINDOW_MINUTES = 15; // Configurable freshness interval
+    const freshWindowAgo = new Date(Date.now() - FRESH_WINDOW_MINUTES * 60 * 1000);
     
-    const results = await this.db
-      .select()
+    // Count total fresh frames before filtering (for telemetry)
+    const rawCount = await this.db
+      .select({ count: sql<number>`count(*)` })
       .from(artSessions)
       .where(
         and(
+          eq(artSessions.sessionId, sessionId),
+          gte(artSessions.createdAt, freshWindowAgo)
+        )
+      );
+    
+    const freshCountRaw = Number(rawCount[0]?.count ?? 0);
+    
+    // Apply impression filter using LEFT JOIN pattern (same as getUnseenArtworks)
+    const results = await this.db
+      .select(getTableColumns(artSessions))
+      .from(artSessions)
+      .leftJoin(
+        userArtImpressions,
+        and(
+          eq(artSessions.id, userArtImpressions.artworkId),
+          eq(userArtImpressions.userId, userId)
+        )
+      )
+      .where(
+        and(
           eq(artSessions.sessionId, sessionId),  // Session-scoped fresh queue
-          gte(artSessions.createdAt, fifteenMinutesAgo) // Last 15 min only
+          gte(artSessions.createdAt, freshWindowAgo), // Last 15 min only
+          isNull(userArtImpressions.id) // EXCLUDE SEEN FRAMES
         )
       )
       .orderBy(desc(artSessions.createdAt)) // Newest first
       .limit(limit);
+    
+    const freshCountAfterFilter = results.length;
+    
+    // Telemetry: Log filtering effectiveness
+    if (freshCountRaw > 0) {
+      console.log(`[Fresh Queue] Raw: ${freshCountRaw}, After Filter: ${freshCountAfterFilter}, Filtered Out: ${freshCountRaw - freshCountAfterFilter}`);
+    }
     
     return results;
   }
