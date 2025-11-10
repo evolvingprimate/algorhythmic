@@ -555,9 +555,12 @@ Provide structured output with ARTISTIC CONTEXT, SONG INSIGHT, VISUAL LANGUAGE, 
 
 export async function generateArtImage(prompt: string): Promise<string> {
   try {
+    // CRITICAL FIX: Add universal "no text" directive to prevent unwanted text/letters in artwork
+    const enhancedPrompt = `${prompt} IMPORTANT: absolutely no text, no letters, no words, no typography, no signage, pure abstract visual art only.`;
+    
     const response = await openai.images.generate({
       model: "dall-e-3",
-      prompt: prompt,
+      prompt: enhancedPrompt,
       n: 1,
       size: "1024x1024",
       quality: "standard",
