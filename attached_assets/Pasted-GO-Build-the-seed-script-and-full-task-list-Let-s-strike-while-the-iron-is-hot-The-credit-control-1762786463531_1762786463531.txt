@@ -1,0 +1,175 @@
+GO – Build the seed script and full task list
+Let’s strike while the iron is hot. The credit controller is now bulletproof — tier-invariant, crash-proof, and mathematically sound. With the core logic validated, Task 9 (Catalogue Seed Script) is the perfect next step.
+
+Final Go-Ahead: Task 9 – Catalogue Seed Script
+Objective: Generate 1,400 high-quality, orientation-aware, metadata-rich library images using Stable Diffusion in ~45 minutes for ~$2.80.
+
+Task 9: `npm run catalogue:seed` – Full Implementation
+Script Overview
+npm run catalogue:seed -- \
+  --count=1400 \
+  --tiers=hybrid \
+  --api=stable-diffusion \
+  --res=1080p \
+  --dry-run=false
+
+1. Style & Orientation Distribution (Locked)
+Tier
+%
+Count
+Styles
+Orientation Strategy
+Dual-Native
+40%
+560 files (280 unique)
+cyberpunk, psychedelic, space-opera, vaporwave, synthwave
+280 × (1920×1080 + 1080×1920)
+Square-Master
+45%
+630 files
+abstract, ambient, fractal, minimal, geometric
+630 × 1536×1536
+Landscape-Only
+15%
+210 files
+experimental, industrial, glitch, collage
+210 × 1920×1080
+Total: 1,400 files → ~1,000 unique compositions
+
+2. Prompt Engineering (Orientation-Aware)
+const PROMPT_TEMPLATES = {
+  landscape: "{style} scene, wide cinematic framing, 16:9 aspect ratio, panoramic, rule of thirds, dramatic perspective",
+  portrait: "{style} scene, vertical composition, 9:16 aspect ratio, subject in upper third, tall perspective, centered focus",
+  square: "{style} scene, balanced central composition, 1:1 aspect ratio, safe subject in middle 60%, symmetrical margins"
+};
+
+3. Script Flow (TypeScript + Node.js)
+// catalogue-seed.ts
+import { generateImage } from './sd-api';
+import { uploadToS3, saveArtwork } from './storage';
+import { extractSaliency, extractPalette } from './vision';
+import { v4 as uuidv4 } from 'uuid';
+
+async function seedCatalogue() {
+  const jobs = generateJobQueue(); // 1,400 jobs from CSV/JSON plan
+  const batchSize = 25;
+  
+  for (let i = 0; i < jobs.length; i += batchSize) {
+    const batch = jobs.slice(i, i + batchSize);
+    await Promise.all(batch.map(async (job) => {
+      try {
+        const { prompt, width, height, tier, style, orientation } = job;
+        const imageBuffer = await generateImage(prompt, width, height);
+        
+        // Vision processing
+        const { focalPoints, safeArea } = await extractSaliency(imageBuffer);
+        const palette = await extractPalette(imageBuffer);
+        
+        // Storage
+        const uuid = uuidv4();
+        const key = `library/${style}/${orientation}/${uuid}.webp`;
+        await uploadToS3(imageBuffer, key, 'image/webp');
+        
+        // DB
+        await saveArtwork({
+          uuid,
+          url: `https://cdn.yourapp.com/${key}`,
+          style,
+          orientation,
+          tier,
+          isLibrary: true,
+          focalPoints,
+          safeArea,
+          sidefillPalette: palette,
+          prompt,
+          generatedAt: new Date()
+        });
+        
+        console.log(`Generated: ${style} ${orientation} [${tier}]`);
+      } catch (err) {
+        console.error(`Failed: ${job.style}`, err);
+      }
+    }));
+    
+    console.log(`Batch ${i / batchSize + 1} complete`);
+    await new Promise(r => setTimeout(r, 2000)); // Rate limit
+  }
+}
+
+4. OpenCV Saliency & Palette Extraction
+// vision.ts
+import cv from 'opencv4nodejs';
+
+export async function extractSaliency(buffer: Buffer) {
+  const img = cv.imdecode(buffer);
+  const gray = img.bgrToGray();
+  const saliency = new cv.Saliency.StaticSaliencyFineGrained();
+  const map = saliency.computeSaliency(gray);
+  
+  // Find top 3 focal points
+  const focalPoints = findTopPeaks(map, 3);
+  const safeArea = calculateSafeCropArea(focalPoints, img.cols, img.rows);
+  
+  return { focalPoints, safeArea };
+}
+
+export async function extractPalette(buffer: Buffer) {
+  const img = cv.imdecode(buffer);
+  const resized = img.resize(50, 50);
+  const pixels = resized.getData();
+  // K-means clustering → top 5 colors
+  return kMeansPalette(pixels, 5);
+}
+
+5. Config & Safety
+// seed-config.json
+{
+  "api": "replicate", // or "huggingface", "fal.ai"
+  "model": "stability-ai/sdxl:39b1a2...",
+  "batchSize": 25,
+  "rateLimitMs": 2000,
+  "dryRun": false,
+  "outputDir": "./seed-output"
+}
+
+6. Cost & Runtime Estimate
+Item
+Cost
+1,400 SD generations @ $0.002
+$2.80
+OpenCV processing (local)
+$0.00
+S3 upload (1.4 GB)
+~$0.03
+Total
+~$2.83
+Runtime: ~45–60 mins on Replit + Cloud VM
+
+Full Task List (Next 5 Days)
+Task
+Owner
+Est.
+Status
+9. Catalogue Seed Script
+Architect
+1 day
+IN PROGRESS
+10. OpenCV Saliency Module
+You/Grok
+4 hrs
+Next
+11. Image Catalogue Manager (Cron)
+Architect
+1 day
+Queued
+12. Client-Side Smart Renderer
+Frontend
+1 day
+Queued
+13. Integrate Controller → Orchestrator
+Architect
+4 hrs
+Final
+
+Your Action: Reply: “Start Task 9 – Deliver seed script”
+I’ll have The Architect push the full catalogue-seed.ts, package.json scripts
