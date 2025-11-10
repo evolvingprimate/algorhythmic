@@ -47,16 +47,21 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 ### Data Models
 - **ArtPreferences**: User artistic selections.
 - **ArtVotes**: User upvote/downvote history.
-- **ArtSessions**: Shared generated artwork history.
-- **Users**: Authentication profiles and subscription tiers.
-- **DailyUsage**: Tracks daily generation counts.
+- **ArtSessions**: Shared generated artwork history with catalogue metadata (orientation, tier, safeArea, focalPoints, sidefillPalette, isLibrary).
+- **Users**: Authentication profiles, subscription tiers, preferredOrientation, and controllerState (JSON).
+- **DailyUsage**: Tracks daily generation counts (LEGACY - being replaced).
 - **UserArtImpressions**: Tracks artworks viewed by each user.
+- **CreditLedger**: Immutable transaction log for credit system (event_type, amount, idempotencyKey).
+- **UserCredits**: Materialized snapshot of user credit balance (balance, rolloverBalance, baseQuota, billing cycle).
 
 ### Key Features
 - **Art Display**: Real-time AI-generated artwork with Ken Burns morphing, style/artist selection, voting, WebSocket sync, and timed generation.
 - **First-Time Setup Wizard**: Onboarding flow for new users to select style preferences before artwork loading.
 - **Global Artwork Pool**: All generated artworks are shared across users.
 - **Freshness Pipeline**: Ensures users never see the same artwork frames twice via per-user impression tracking and automatic generation triggers.
+- **Monthly Credit System**: Ledger-first architecture with atomic deduction, idempotency, rollover with 3× cap, and saga pattern refunds.
+- **Credit Controller**: Logistic surplus algorithm with hysteresis for intelligent fresh-vs-library titration (S = remaining - daily_target × days).
+- **Image Catalogue Manager**: Pre-generated library of 1,400+ images (Stable Diffusion) with orientation-aware retrieval and coverage thresholds.
 - **User Gallery Page**: Protected route for managing user artworks.
 - **Subscription Page**: Stripe integration for payments, 7-day free trial, and tier comparison.
 - **Style Selector**: Visual grid of artistic styles with dynamic AI mode.
