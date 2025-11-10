@@ -32,10 +32,21 @@ export interface VisionAnalysisResult {
 }
 
 export class VisionAnalyzer {
+  private readonly MAX_RETRIES = 2;
+  private readonly INITIAL_DELAY_MS = 1000;
+
   /**
    * Analyze image for focal points and safe areas using GPT-4o Vision
+   * Includes exponential backoff retry logic for transient failures
    */
   async analyzeImage(imageUrl: string): Promise<VisionAnalysisResult> {
+    return this.analyzeImageWithRetry(imageUrl, 0);
+  }
+
+  private async analyzeImageWithRetry(
+    imageUrl: string,
+    attempt: number
+  ): Promise<VisionAnalysisResult> {
     try {
       const response = await openai.chat.completions.create({
         model: "gpt-4o",
@@ -116,7 +127,30 @@ Return ONLY valid JSON in this exact format:
 
       return result;
     } catch (error: any) {
-      console.error("[VisionAnalyzer] Failed to analyze image:", error.message);
+      const isRetryable = 
+        error.code === 'ECONNRESET' ||
+        error.code === 'ETIMEDOUT' ||
+        error.status === 429 || // Rate limit
+        error.status === 500 || // Server error
+        error.status === 502 || // Bad gateway
+        error.status === 503 || // Service unavailable
+        error.status === 504;   // Gateway timeout
+
+      if (isRetryable && attempt < this.MAX_RETRIES) {
+        const delay = this.INITIAL_DELAY_MS * Math.pow(2, attempt);
+        console.warn(
+          `[VisionAnalyzer] Retry ${attempt + 1}/${this.MAX_RETRIES} after ${delay}ms (${error.message})`
+        );
+        
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        return this.analyzeImageWithRetry(imageUrl, attempt + 1);
+      }
+
+      // Max retries exceeded or non-retryable error
+      console.error(
+        `[VisionAnalyzer] Failed after ${attempt + 1} attempts:`,
+        error.message
+      );
       
       // Return sensible defaults on failure
       return this.getDefaultAnalysis();

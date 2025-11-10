@@ -37,11 +37,23 @@ export class CatalogueManager {
 
   /**
    * Retrieve catalogue artwork with orientation-aware filtering and user preferences
+   * ENFORCES COVERAGE THRESHOLD: Refuses to serve if below 200 images per orientation
    */
   async retrieveArtwork(options: CatalogueRetrievalOptions): Promise<ArtSession | null> {
     const { userId, orientation, styleTags, excludeIds } = options;
 
     console.log(`[CatalogueManager] Retrieving ${orientation} artwork for user ${userId}`);
+
+    // CRITICAL: Enforce coverage threshold before serving catalogue artwork
+    const health = await this.getHealthReport();
+    const orientationCount = health.byOrientation[orientation];
+
+    if (orientationCount < this.MINIMUM_PER_ORIENTATION) {
+      console.warn(
+        `[CatalogueManager] ⚠️ Coverage threshold not met: ${orientationCount}/${this.MINIMUM_PER_ORIENTATION} ${orientation} artworks. Refusing catalogue mode.`
+      );
+      return null; // Force caller to use fresh generation
+    }
 
     // Get library artworks matching preferences
     const candidates = await this.storage.getLibraryArtwork(
