@@ -386,6 +386,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         musicAlbum: music?.album || null,
         generationExplanation: result.explanation,
         isSaved: false,
+        // BUG FIX: Store preference tags for filtering
+        styles: resolvedStyles,
+        artists: preferences?.artists || [],
       });
 
       console.log('[ArtGeneration] ✅ Database save complete, session ID:', session.id);
@@ -550,16 +553,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const sessionId = req.query.sessionId as string;
       const limit = req.query.limit ? parseInt(req.query.limit as string) : 20;
       
+      // BUG FIX: Fetch user preferences (session-scoped first, fallback to user-level)
+      const preferences = sessionId 
+        ? await storage.getPreferencesBySession(sessionId)
+        : null;
+      
+      const user = await storage.getUser(userId);
+      
+      // Normalize preference filters (empty arrays = no filtering)
+      const styleTags = preferences?.styles || [];
+      const artistTags = preferences?.artists || [];
+      const orientation = user?.preferredOrientation || undefined;
+      
+      console.log('[Style Filtering] /api/artworks/next filters:', {
+        userId,
+        sessionId,
+        styleTags,
+        artistTags,
+        orientation,
+        source: preferences ? 'session' : 'user-profile'
+      });
+      
       // PRIORITY 1: Fresh AI-generated artwork (this session, last 15 minutes, not yet viewed)
-      const freshArtworks = sessionId 
+      let freshArtworks = sessionId 
         ? await storage.getFreshArtworks(sessionId, userId, limit)
         : [];
       
+      // BUG FIX: Apply orientation filter to fresh queue (hard filter)
+      if (orientation && freshArtworks.length > 0) {
+        const beforeFilter = freshArtworks.length;
+        freshArtworks = freshArtworks.filter(art => art.orientation === orientation);
+        console.log(`[Style Filtering] Fresh queue orientation filter: ${beforeFilter} → ${freshArtworks.length}`);
+      }
+      
       // PRIORITY 2: Unseen storage pool (fallback only when fresh queue empty)
+      // BUG FIX: Pass preference filters to getUnseenArtworks
       let combinedArtworks = [...freshArtworks];
       if (combinedArtworks.length < limit) {
         const remainingLimit = limit - combinedArtworks.length;
-        const unseenArtworks = await storage.getUnseenArtworks(userId, remainingLimit);
+        const unseenArtworks = await storage.getUnseenArtworks(userId, {
+          limit: remainingLimit,
+          orientation,
+          styleTags,
+          artistTags,
+        });
         
         // Deduplicate IDs (fresh queue takes precedence)
         const existingIds = new Set(combinedArtworks.map(a => a.id));
@@ -570,7 +607,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const needsGeneration = combinedArtworks.length < 5;
       
-      console.log(`[Artworks GET] User ${userId} - Fresh: ${freshArtworks.length}, Storage: ${combinedArtworks.length - freshArtworks.length}, Total: ${combinedArtworks.length}`);
+      // Structured telemetry: log filtering effectiveness
+      console.log(`[Style Filtering] Result breakdown:`, {
+        userId,
+        filters: { orientation, styleTags, artistTags },
+        freshCount: freshArtworks.length,
+        storageCount: combinedArtworks.length - freshArtworks.length,
+        totalReturned: combinedArtworks.length,
+        needsGeneration,
+      });
       
       // Set no-cache headers to prevent stale data
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
@@ -600,7 +645,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // BACKWARD COMPATIBLE: Legacy behavior if no audio context
       if (!audioContext || !generateRealTime) {
-        const unseenArtworks = await storage.getUnseenArtworks(userId, limit);
+        const unseenArtworks = await storage.getUnseenArtworks(userId, { limit });
         const needsGeneration = unseenArtworks.length < 5;
         
         console.log(`[Freshness] User ${userId} - Legacy mode - Unseen pool: ${unseenArtworks.length} artworks`);
@@ -625,7 +670,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const usageCheck = await storage.checkDailyLimit(userId);
       if (!usageCheck.canGenerate) {
         console.log(`[Hybrid Gen] User ${userId} hit daily limit - falling back to pool only`);
-        const poolArtworks = await storage.getUnseenArtworks(userId, 1);
+        const poolArtworks = await storage.getUnseenArtworks(userId, { limit: 1 });
         
         return res.json({
           warmStart: poolArtworks[0] || null,
@@ -1049,6 +1094,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         perceptualHash: null, // Will be computed in future
         poolStatus: 'active',
         lastUsedAt: new Date(),
+        // BUG FIX: Store preference tags for filtering
+        styles: preferences.styles || [],
+        artists: preferences.artists || [],
       });
       
       console.log(`[Async Worker] Stored artwork ${artwork.id} for job ${jobId}`);
