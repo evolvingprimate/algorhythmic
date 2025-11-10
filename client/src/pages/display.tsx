@@ -81,6 +81,9 @@ export default function Display() {
   const [setupStep, setSetupStep] = useState<SetupStep>(SetupStep.IDLE);
   const [setupComplete, setSetupComplete] = useState(false); // Track if first-time setup is done
   
+  // BUG FIX #3: Wizard latch to prevent refetch race conditions
+  const wizardActiveRef = useRef(false);
+  
   // BUG FIX: Use ref instead of state for impressionVersion (immediate access across all code)
   const impressionVersionRef = useRef(0);
   const [impressionVersionTrigger, setImpressionVersionTrigger] = useState(0); // Trigger re-renders
@@ -278,10 +281,17 @@ export default function Display() {
   }, [unseenResponse?.artworks, pinnedArtwork]);
 
   // First-Time Setup Wizard: Check if user has preferences
+  // BUG FIX #3: Guard against refetch race conditions that reset the wizard
   useEffect(() => {
     // CRITICAL: Handle loading and error states to prevent blank screen
     if (isLoadingPreferences) {
       // Still loading preferences, wait...
+      return;
+    }
+    
+    // BUG FIX #3: If wizard is active (user mid-flow), NEVER reset it during refetch
+    if (wizardActiveRef.current) {
+      console.log('[Display] Wizard active - skipping reset during refetch');
       return;
     }
     
@@ -293,17 +303,26 @@ export default function Display() {
         description: "Couldn't load your saved preferences. You can select new ones now.",
         variant: "default",
       });
-      setSetupStep(SetupStep.STYLE);
-      setSetupComplete(false);
+      // BUG FIX #3: Only reset if wizard is IDLE (not mid-flow)
+      if (setupStep === SetupStep.IDLE) {
+        wizardActiveRef.current = true;
+        setSetupStep(SetupStep.STYLE);
+        setSetupComplete(false);
+      }
       return;
     }
     
     // Tight type guard: Show wizard if no preferences or empty styles
     if (!preferences || !preferences.styles?.length) {
-      // No preferences saved - show wizard for first-time user
-      console.log('[Display] First-time user detected - showing style selector wizard');
-      setSetupStep(SetupStep.STYLE);
-      setSetupComplete(false);
+      // BUG FIX #3: Only reset if wizard is IDLE (prevents loop during refetch)
+      if (setupStep === SetupStep.IDLE) {
+        console.log('[Display] First-time user detected - showing style selector wizard');
+        wizardActiveRef.current = true;
+        setSetupStep(SetupStep.STYLE);
+        setSetupComplete(false);
+      } else {
+        console.log('[Display] Wizard in progress - skipping reset during refetch');
+      }
       return;
     }
     
@@ -314,7 +333,7 @@ export default function Display() {
       setDynamicMode(preferences.dynamicMode);
     }
     setSetupComplete(true); // Allow artwork loading
-  }, [preferences, isLoadingPreferences, preferencesError]);
+  }, [preferences, isLoadingPreferences, preferencesError, setupStep]);
 
   // Auto-generate artwork when unseen pool runs low (Freshness Pipeline)
   useEffect(() => {
@@ -1461,14 +1480,13 @@ export default function Display() {
   };
 
   const handleStartListening = () => {
-    // BUG FIX: Use SetupStep enum for sequential flow
-    // ALWAYS show style selector first, even if user has saved preferences
-    // This lets them review/change their choices before starting
+    // BUG FIX #3: Activate wizard latch and advance to STYLE
+    wizardActiveRef.current = true;
     setSetupStep(SetupStep.STYLE);
   };
 
   const handleAudioSourceConfirm = async (deviceId: string | undefined) => {
-    // BUG FIX: Advance to COMPLETE step (modal auto-closes via enum check)
+    // BUG FIX #3: Clear wizard latch AFTER successful audio initialization
     setSetupStep(SetupStep.COMPLETE);
 
     try {
@@ -1478,6 +1496,9 @@ export default function Display() {
         // Only assign after successful initialization
         audioAnalyzerRef.current = analyzer;
         
+        // BUG FIX #3: Clear wizard latch after successful completion
+        wizardActiveRef.current = false;
+        
         setIsPlaying(true);
         toast({
           title: "Listening Started",
@@ -1485,7 +1506,8 @@ export default function Display() {
         });
       }
     } catch (error: any) {
-      // Reset ref to allow retry
+      // BUG FIX #3: Clear latch on error to allow retry
+      wizardActiveRef.current = false;
       audioAnalyzerRef.current = null;
       toast({
         title: "Microphone Access Denied",
@@ -1519,16 +1541,23 @@ export default function Display() {
   const handleStylesChange = (styles: string[], isDynamicMode: boolean) => {
     setSelectedStyles(styles);
     setDynamicMode(isDynamicMode);
-    savePreferencesMutation.mutate({ styles, dynamicMode: isDynamicMode });
     
-    // BUG FIX: Advance to AUDIO step after style selection
+    // BUG FIX #3: Advance to AUDIO step (wizard remains latched until completion)
     setSetupStep(SetupStep.AUDIO);
     
-    // Mark setup as complete after first-time user saves preferences
-    if (!setupComplete) {
-      console.log('[Display] First-time setup complete - enabling artwork loading');
-      setSetupComplete(true);
-    }
+    // Save preferences mutation (will refetch but latch prevents reset)
+    savePreferencesMutation.mutate(
+      { styles, dynamicMode: isDynamicMode },
+      {
+        onSuccess: () => {
+          // Mark setup as complete after first-time user saves preferences
+          if (!setupComplete) {
+            console.log('[Display] First-time setup complete - enabling artwork loading');
+            setSetupComplete(true);
+          }
+        }
+      }
+    );
   };
 
   // Navigation functions - only update index
