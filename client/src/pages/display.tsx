@@ -1581,6 +1581,11 @@ export default function Display() {
     setSelectedStyles(styles);
     setDynamicMode(isDynamicMode);
     
+    // BUG FIX: CRITICAL - Immediate flush impressions before style switch
+    // Prevents race condition where new frames are fetched before old impressions are recorded
+    console.log('[Display] 🔥 Style change detected - immediate flush to prevent repeats');
+    impressionRecorder.flush(true); // Immediate synchronous flush
+    
     // BUG FIX #3: Advance to AUDIO step (wizard remains latched until completion)
     setSetupStep(SetupStep.AUDIO);
     

@@ -545,6 +545,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // BUG FIX #1: Server-side request-scoped deduplication cache
+  // Tracks recently-served artwork IDs per user session to prevent rapid re-serving
+  // Maps: `${userId}:${sessionId}` → Set<artworkId>
+  // TTL: 30 seconds (cleared via setTimeout)
+  const recentlyServedCache = new Map<string, { ids: Set<string>, timeout: NodeJS.Timeout }>();
+  
+  function addToServedCache(userId: string, sessionId: string, artworkIds: string[]) {
+    const key = `${userId}:${sessionId}`;
+    const existing = recentlyServedCache.get(key);
+    
+    // Clear existing timeout
+    if (existing) {
+      clearTimeout(existing.timeout);
+      artworkIds.forEach(id => existing.ids.add(id));
+    } else {
+      recentlyServedCache.set(key, {
+        ids: new Set(artworkIds),
+        timeout: setTimeout(() => {}, 0), // Placeholder, set below
+      });
+    }
+    
+    // Reset 30-second TTL
+    const entry = recentlyServedCache.get(key)!;
+    entry.timeout = setTimeout(() => {
+      recentlyServedCache.delete(key);
+      console.log(`[ServedCache] Expired cache for ${key}`);
+    }, 30000);
+    
+    console.log(`[ServedCache] Cached ${artworkIds.length} IDs for ${key} (TTL: 30s)`);
+  }
+  
+  function getServedCache(userId: string, sessionId: string): Set<string> {
+    const key = `${userId}:${sessionId}`;
+    return recentlyServedCache.get(key)?.ids || new Set();
+  }
+
   // GET endpoint with PRIORITY QUEUE: fresh → unseen
   // Fresh artwork (this session's last 15 min) shown FIRST, storage pool is fallback only
   app.get("/api/artworks/next", isAuthenticated, async (req: any, res) => {
@@ -552,6 +588,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user.claims.sub;
       const sessionId = req.query.sessionId as string;
       const limit = req.query.limit ? parseInt(req.query.limit as string) : 20;
+      
+      // BUG FIX #1: Get server-side recently-served IDs (30s window)
+      const recentlyServedIds = sessionId ? getServedCache(userId, sessionId) : new Set<string>();
       
       // BUG FIX: Fetch user preferences (session-scoped first, fallback to user-level)
       const preferences = sessionId 
@@ -571,6 +610,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         styleTags,
         artistTags,
         orientation,
+        recentlyServedCount: recentlyServedIds.size,
         source: preferences ? 'session' : 'user-profile'
       });
       
@@ -586,6 +626,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.log(`[Style Filtering] Fresh queue orientation filter: ${beforeFilter} → ${freshArtworks.length}`);
       }
       
+      // BUG FIX #1: Filter out recently-served IDs from fresh queue
+      const beforeServedFilter = freshArtworks.length;
+      freshArtworks = freshArtworks.filter(art => !recentlyServedIds.has(art.id));
+      if (beforeServedFilter > freshArtworks.length) {
+        console.log(`[ServedCache] Filtered ${beforeServedFilter - freshArtworks.length} recently-served from fresh queue`);
+      }
+      
       // PRIORITY 2: Unseen storage pool (fallback only when fresh queue empty)
       // BUG FIX: Pass preference filters to getUnseenArtworks
       let combinedArtworks = [...freshArtworks];
@@ -598,24 +645,47 @@ export async function registerRoutes(app: Express): Promise<Server> {
           artistTags,
         });
         
+        // BUG FIX #1: Filter out recently-served IDs from storage pool
+        const beforeStorageServedFilter = unseenArtworks.length;
+        const filteredUnseen = unseenArtworks.filter(art => !recentlyServedIds.has(art.id));
+        if (beforeStorageServedFilter > filteredUnseen.length) {
+          console.log(`[ServedCache] Filtered ${beforeStorageServedFilter - filteredUnseen.length} recently-served from storage pool`);
+        }
+        
         // Deduplicate IDs (fresh queue takes precedence)
         const existingIds = new Set(combinedArtworks.map(a => a.id));
-        const uniqueUnseen = unseenArtworks.filter(a => !existingIds.has(a.id));
+        const uniqueUnseen = filteredUnseen.filter(a => !existingIds.has(a.id));
         
         combinedArtworks.push(...uniqueUnseen);
       }
       
       const needsGeneration = combinedArtworks.length < 5;
       
-      // Structured telemetry: log filtering effectiveness
-      console.log(`[Style Filtering] Result breakdown:`, {
+      // BUG FIX #1: Cache served IDs for next request (30s window)
+      if (sessionId && combinedArtworks.length > 0) {
+        addToServedCache(userId, sessionId, combinedArtworks.map(a => a.id));
+      }
+      
+      // BUG FIX #2: Enhanced telemetry with validator metrics
+      const telemetry = {
         userId,
+        sessionId,
         filters: { orientation, styleTags, artistTags },
-        freshCount: freshArtworks.length,
-        storageCount: combinedArtworks.length - freshArtworks.length,
-        totalReturned: combinedArtworks.length,
-        needsGeneration,
-      });
+        fresh_count_raw: freshArtworks.length + (beforeServedFilter - freshArtworks.length),
+        fresh_count_after_filter: freshArtworks.length,
+        storage_count_returned: combinedArtworks.length - freshArtworks.length,
+        total_returned: combinedArtworks.length,
+        recently_served_filtered: recentlyServedIds.size,
+        needs_generation: needsGeneration,
+        pool_exhausted: combinedArtworks.length === 0,
+      };
+      
+      console.log(`[Style Filtering] Result breakdown:`, telemetry);
+      
+      // BUG FIX #3: Alert if pool exhausted (critical for fallback generation trigger)
+      if (telemetry.pool_exhausted) {
+        console.error(`[ALERT] 🚨 Pool exhausted for user ${userId} session ${sessionId} - TRIGGER FALLBACK GENERATION`);
+      }
       
       // Set no-cache headers to prevent stale data
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
@@ -628,6 +698,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         freshCount: freshArtworks.length,
         storageCount: combinedArtworks.length - freshArtworks.length,
         needsGeneration,
+        telemetry, // BUG FIX #2: Include telemetry in response for client monitoring
       });
     } catch (error: any) {
       console.error('[Artworks GET] Error:', error);

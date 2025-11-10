@@ -50,7 +50,7 @@ export class FrameValidator {
     }
     
     // CRITICAL: Deduplicate within current batch FIRST (same-batch repeats)
-    const uniqueFrameIds = [...new Set(frameIds)];
+    const uniqueFrameIds = Array.from(new Set(frameIds));
     if (uniqueFrameIds.length < frameIds.length) {
       console.warn('[FrameValidator] ⚠️ Found duplicates within same batch:', {
         original: frameIds.length,
