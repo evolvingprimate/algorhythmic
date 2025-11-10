@@ -1,0 +1,143 @@
+## PROPOSAL_BUSINESS_BRANDING.md
+
+**Proposal: Business Tier Branding Integration for Algorhythmic**  
+**Date: November 10, 2025**  
+**Author: The Architect (Claude), with Peer Input from Grok**  
+**Version: 1.0**  
+**Status: Ready for Review by ChatGPT and Grok**  
+
+### Executive Summary
+To address user feedback on unwanted text in artwork, repeating images, and frame glitches, this proposal incorporates immediate fixes while introducing a new "Business Branding" feature for the business tier. This allows customers (e.g., pizza shops, wine bars) to upload a logo, provide a business name and description, and subtly infuse their brand into generated visuals. The system will use GPT-4o Vision to extract elements like color palettes and keywords from the logo, blending them with user styles (e.g., sci-fi landscape) at a configurable strength (default 60% brand influence).
+
+Key benefits:  
+- **Personalization**: Tailored visuals for commercial use (e.g., in-store displays).  
+- **Cost Efficiency**: Cached extractions reduce Vision API calls.  
+- **Compliance**: No literal text/logos unless explicitly enabled; subtle thematic integration only.  
+- **Monetization**: Gated to business_basic ($X/month) and business_premium ($Y/month) tiers.  
+
+Estimated implementation: 2 weeks, low risk, high ROI.  
+
+### 1. Problem Statement & Immediate Fixes
+**Reported Issues:**  
+- **Text in Artwork**: Unwanted letters/signage appearing in sci-fi/landscape gens.  
+- **Repeating Artwork**: Violation of "never repeat" guarantee.  
+- **Frame Glitches**: Visual artifacts during transitions (e.g., Ken Burns or particle effects).  
+
+**Immediate Fixes (Deployable Today):**  
+- **No-Text Directive**: Append to all prompts (fal.ai/SDXL, DALL·E):  
+  ```
+  IMPORTANT: No text, letters, words, typography, signage, or readable elements whatsoever. Pure visual, abstract, or thematic art only. Exception: If business branding is enabled and specifies text (e.g., business name), integrate subtly as approved watermark—otherwise, strictly no text.
+  ```  
+  - Location: Update `server/services/fal-ai-provider.ts` and `server/openai-service.ts`.  
+  - Test: Regenerate 20 sci-fi landscape samples; verify zero text via GPT-4o Vision scan.  
+
+- **Repeating Artwork Patch**:  
+  - Enhance `retrieveArtwork` in `catalogue-manager.ts`:  
+    - Query `user_art_impressions` with stricter JOIN: Exclude all viewed IDs (including bridges).  
+    - Fallback: If pool exhausted, force fresh gen with `reason: "impressions_exhausted"`.  
+  - Add cron: Daily prune stale impressions (>90 days).  
+
+- **Frame Glitches Investigation**:  
+  - Likely causes: WebGL shader mismatches or React re-renders.  
+  - Fix: Audit Morpheus engine in client-side renderer; add debounce (200ms) to transitions.  
+  - Test: Simulate 100 transitions on landscape sci-fi; log GPU usage.  
+  - Timeline: 48-hour debug sprint.  
+
+These fixes align with safety (no deceptive text) and can deploy via hotfix without downtime.  
+
+### 2. Business Branding Feature Overview
+**Target Users**: Business tier subscribers (e.g., cafes, retail) wanting branded visuals for marketing/ambiance.  
+**Core Functionality**:  
+- Upload logo (PNG/JPG, <5MB).  
+- Input: Business name (string), description (text, e.g., "Artisan pizza with fresh ingredients").  
+- Auto-Extract: Use GPT-4o Vision on logo for color palette (3-5 HEX codes), keywords (e.g., "pizza", "oven", "cheese"), and style hints (e.g., "rustic", "vibrant").  
+- Blending: Infuse into prompts (e.g., "Sci-fi landscape with subtle warm reds/oranges and food-inspired motifs—no text.").  
+- Strength Slider: User-configurable (0-100%, default 60% brand vs. 40% style/mood).  
+
+**Example Prompt with Branding (Pizza Shop, Sci-Fi Landscape):**  
+```
+Generate a sci-fi landscape in landscape orientation: Futuristic city at dusk with ethereal glows. Blend 60% business themes: Subtle motifs of pizza-inspired warmth, circular shapes, melted textures, using palette #FF6B35, #C1292E, #F7B32B. 40% user style: Vaporwave aesthetics, no literal objects. IMPORTANT: No text, letters, or signage unless business watermark approved.
+```  
+
+### 3. Architecture & Data Model
+**New Table: `business_branding`** (PostgreSQL, normalized):  
+```sql
+CREATE TABLE business_branding (
+  id SERIAL PRIMARY KEY,
+  user_id VARCHAR NOT NULL REFERENCES users(id),
+  business_name VARCHAR(100),
+  description TEXT,
+  logo_url VARCHAR,  -- Private object storage path
+  color_palette JSONB,  -- e.g., ["#FF6B35", "#C1292E"]
+  keywords JSONB,  -- e.g., ["pizza", "italian", "warm"]
+  style_hints JSONB,  -- e.g., ["rustic", "appetizing"]
+  brand_strength INTEGER DEFAULT 60,  -- 0-100
+  watermark_enabled BOOLEAN DEFAULT FALSE,  -- Allow business name as subtle text
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP
+);
+```  
+- **One per User**: Business tier only; enforce via API guards.  
+- **Privacy**: Logos in private bucket (`/private-objects/branding-{uuid}.png`).  
+
+**Backend Flow:**  
+1. **Upload Endpoint**: `POST /api/business/branding` → Validate tier → Store logo → Queue background job.  
+2. **Background Job** (`branding-processor.ts`):  
+   - Call GPT-4o Vision:  
+     ```
+     Analyze logo: Extract 3-5 dominant colors (HEX). Identify 5-10 keywords describing visuals/themes. Suggest 3 style hints (e.g., "vibrant", "minimalist").
+     ```  
+   - Cache results in table; retry on 429/5xx.  
+3. **Prompt Integration**: In `generateArtImage` or `fal-ai-provider.ts`:  
+   - If user has branding: Fetch from table → Blend into prompt via template.  
+   - Cache per session for perf.  
+
+**Frontend UI:**  
+- Settings tab (business tier only): Upload form, text fields, strength slider.  
+- Preview: Generate sample thumbnail with branding applied.  
+
+### 4. Integration with Existing Systems
+- **Catalogue Bridge**: Seed library with branded variants for business users (e.g., pre-gen 100 branded sci-fi landscapes).  
+- **Titration Controller**: No change; branding applies to fresh gens only.  
+- **Orientation**: Inherit user preference; ensure branded prompts specify aspect (e.g., 1920x1080).  
+- **Vision Cost**: ~$0.005/logo; one-time per upload.  
+
+### 5. Security & Compliance
+- **Tier Gate**: Middleware check `user.tier IN ('business_basic', 'business_premium')`.  
+- **Data Privacy**: Anonymize descriptions; GDPR-compliant deletion.  
+- **Abuse Prevention**: Limit uploads (5/month); validate images (no NSFW via Vision mod).  
+- **Branding Rules**: No deceptive elements; subtle themes only (e.g., no fake endorsements).  
+
+### 6. Testing & Quality Assurance
+- **Unit Tests**: Prompt blending, Vision extraction mocks.  
+- **E2E**: Upload logo → Gen sci-fi landscape → Verify no text, subtle brand motifs.  
+- **Beta Rollout**: 10 business users; A/B test engagement.  
+- **Metrics**: Brand usage rate, gen time impact (<5% increase).  
+
+### 7. Timeline & Phases
+**Week 1: Foundation**  
+- Schema migration + API endpoints.  
+- Vision job + prompt integration.  
+- Fix text/repeats/glitches in parallel.  
+
+**Week 2: Polish & Deploy**  
+- Frontend UI + previews.  
+- Testing + docs.  
+- Production rollout.  
+
+**Effort**: 40-50 hours (1 dev full-time).  
+
+### 8. Open Questions for Review
+1. **Brand Strength Default**: 60%—too heavy, or start at 50%?  
+2. **Industry Input**: Dropdown (e.g., food, beverage) for better keywords, or freeform?  
+3. **Multi-Logos**: Support per-campaign (e.g., seasonal), or single?  
+4. **Preview Mode**: Real-time gen (costly), or static mockups?  
+5. **Watermark Opt-In**: Allow business name as text? (E.g., faint overlay.)  
+
+### 9. Risks & Mitigations
+- **Vision Accuracy**: Fallback to manual input if extraction fails.  
+- **Perf Overhead**: Cache aggressively; monitor gen latency.  
+- **User Confusion**: Clear docs/tooltips in UI.  
+- **Cost Creep**: Cap Vision calls (e.g., 1/upload).  
+
+This proposal builds on the Architect's input: Ledger for audits, async processing for scale, and modular blending for future ML tweaks. Ready for ChatGPT/Grok review—let's iterate! 🚀

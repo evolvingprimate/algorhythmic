@@ -1,0 +1,235 @@
+Got it. Here’s a tight, Architect-vetted proposal you can paste to Grok and ChatGPT. It tackles (1) the “no text” rule, (2) repeating/visual glitches, and (3) the new Business-tier branding system with logo/name/industry seeding—while keeping dynamic mode snappy.
+
+# 🧭 Executive Summary
+
+* **Immediate fix live:** global “no text” directive applied to all generations (except when Branding Mode explicitly opts in).
+* **Bug hardening:** reinforce **no repeats** + **no glitches** with a small set of engine & API changes (below).
+* **Business Branding (new):** add a gated branding context (logo, business name, industry description) that can tastefully steer generations and optionally watermark/logo—without breaking “no text” for regular users.
+
+---
+
+# 1) Immediate Bugs & Glitches — Surgical Hardening
+
+## 1.1 Repeats resurfacing (defense-in-depth)
+
+* **Backend:** ensure preference-filtered storage queries exclude seen IDs (you’ve got this in progress); also filter by **orientation** and **styles** (OR across tags).
+* **Validator:** keep session-scoped `FrameValidator` (maxRetries=2) and **fallback generation** if pool exhausted.
+* **Telemetry (add counters):**
+
+  * `fresh_count_raw`, `fresh_count_after_filter`
+  * `validator_rejections`, `validator_retries`
+  * **Alert** if `validator_rejections > 0.5%` over 15 min.
+
+## 1.2 Transition “frame glitch” (visual)
+
+* **Morph Engine pacing:** when a new batch arrives, **prewarm** the first target frame (decode → GPU upload) before crossfade starts.
+* **Atomic swap:** commit a new sequence only after `readyCount >= 1`; use a single `pendingJumpIndex` and ignore new swaps until current handoff completes.
+* **Procedural bridge:** if nothing is ready in ~500–800ms, show a **soft gradient/particle bridge** keyed by current style DNA, then fade to first ready frame.
+* **Metric:** `handoff_latency_ms` (target < 1200ms p95).
+
+---
+
+# 2) “No Text in Art” — Prompt & Policy
+
+## 2.1 Global rule (default)
+
+* **System clause (already added):**
+  “**Absolutely no text, letters, words, signage, typography, watermarks, numbers, or logos.** Pure imagery only.”
+
+## 2.2 Exception: Branding Mode
+
+* **Only** when `branding.enabled === true` for Business tier:
+
+  * Allow a **minimal** brand mark per rules (see §3.4).
+  * Still **forbid arbitrary text**: no captions/headlines/menus/posters unless a specific template explicitly needs them.
+
+---
+
+# 3) Business-Tier Branding — Feature Proposal
+
+## 3.1 What it adds
+
+* **Brand context** a business can provide:
+
+  * Logo upload (PNG/SVG preferred)
+  * Business name
+  * Industry/category & short description (e.g., “pizza, family-friendly, wood-fired”)
+* **Use cases:**
+
+  * Subtle color/mood steering from brand palette/keywords
+  * Optional tasteful **brand mark/watermark** for lobby displays
+  * “On-theme” imagery for music-reactive scenes (coffee→warm earth tones; wine→deep reds/purples)
+
+## 3.2 Data model (minimal, normalized)
+
+* **Table:** `business_branding`
+
+  * `user_id` (PK/FK)
+  * `enabled` (bool)
+  * `name` (text)
+  * `industry` (text) — enum or freeform
+  * `description` (text) — short pitch
+  * `logo_url` (text) — private object storage
+  * `brand_palette` (jsonb, e.g., `["#A12C2C", "#F7B32B", ...]`)
+  * `brand_keywords` (jsonb, e.g., `["pizza","oven","rustic","family"]`)
+  * `updated_at` (timestamptz)
+* **Processor queue/table (optional now, simple later):** `branding_jobs` for async logo analysis
+
+## 3.3 APIs
+
+* `POST /api/branding` (Business tier only): upload logo + name + industry + description
+* `GET /api/branding` (owner): retrieve current branding config
+* `PUT /api/branding` (owner): update fields; re-extract palette/keywords if logo changed
+* **Tier gate:** `plan in ('business_basic','business_premium')`
+* **Privacy:** store logo in private bucket; signed URL for processing only
+
+## 3.4 Branding Modes & Guardrails
+
+* `branding.enabled = false` → **Global No-Text** applies
+* `branding.enabled = true`:
+
+  * **Brand steer (default):** use `brand_palette`/`brand_keywords` to bias **color/mood/content**, **no visible text**; **no explicit logo rendering** unless watermark is turned on.
+  * **Brand watermark (optional toggle):**
+
+    * position: bottom-right; size: ≤ 5% of min(image_w, image_h)
+    * style: monochrome or brand-primary; opacity ~12–18%
+    * **never** add additional text; logo only
+  * **Templates** (future): allow text **only** in explicit templates (e.g., poster mode)
+
+## 3.5 Prompt blending (architect style)
+
+* **Weights (tunable):** `w_user_styles=0.6`, `w_brand=0.4`
+* **Combine into a single prompt with strict clause order:**
+
+  1. **Content & composition** from user styles and current music DNA
+  2. **Brand mood palette & soft motifs** (e.g., “warm hearth, wood-fired glow”)
+  3. **Orientation lock** (portrait/landscape as selected)
+  4. **Prohibitions:** “no text/letters/typography/signage, no logos, no watermarks”
+  5. **Exception block** (conditionally injected when `watermark=true`): “You may reserve a subtle corner for the provided logo; do not generate any text.”
+* **Example (STYLE_ONLY case):**
+  “Cinematic sci-fi landscape with luminous atmospherics and clean horizons; soft depth haze; **no text or signage**. Subtly reflect warm rustic palette (deep red, ember orange) and cozy artisan mood (wood-fired warmth) **without literal pizza imagery** unless abstracted (shapes, textures).”
+
+> Note: Use **“indirect brand motifs”** to avoid literal product photos unless wanted.
+
+## 3.6 Logo analysis (async)
+
+* On upload/update:
+
+  * Extract dominant palette (e.g., k-means on rasterized SVG/PNG)
+  * Extract **safe** keywords from name/description/logo alt text
+  * Cache in `business_branding.brand_palette/brand_keywords`
+* Time cost is off-path; generation reads the cached fields.
+
+## 3.7 Orientation discipline
+
+* Keep your existing **portrait/landscape pools**.
+* Branding never cross-converts; it **selects** the correct orientation pool.
+
+## 3.8 Telemetry & controls
+
+* Record per generation:
+
+  * `branding_enabled`, `watermark_enabled`
+  * `brand_weight`, `user_style_weight`
+  * `provenance` (MUSIC_ID | AUDIO_ONLY | STYLE_ONLY)
+  * `used_palette`, `used_keywords`
+* Add a **Brand Strength slider** (0–100) for Business tier → maps to weights.
+
+---
+
+# 4) Dynamic Mode — Instant style switches with branding
+
+* Keep the **Hybrid “Instant Retrieve → Fast Refresh”** flow:
+
+  * On a style/song change: immediately pull a **catalog frame** that matches `(orientation, styleTags, optionally brand_keywords)`; **then** queue a fresh generation with higher priority.
+  * If no catalog match in ~500–800ms → show **procedural bridge**, then swap to first ready fresh frame.
+* No Redis/pgvector required now; in-memory cosine on stored DNA works for Phase 1.
+* **Do not** relax “never repeat” for catalog pulls; if necessary, allow a **neutral bridge** rather than off-style repeat.
+
+---
+
+# 5) Rollout Plan (safe & incremental)
+
+## Phase A — Ship now (low risk)
+
+1. **No-text policy** (done) + conditional branding exception
+2. Storage pool filtering by **styles + orientation** (hard filter); artists optional/soft
+3. Morph engine handoff guard (prewarm + atomic swap + bridge)
+4. Telemetry & alerts (validator + handoff + branding flags)
+5. DB indexes:
+
+   ```sql
+   CREATE INDEX IF NOT EXISTS idx_art_sessions_style_tags ON art_sessions USING GIN (style_tags);
+   CREATE INDEX IF NOT EXISTS idx_art_sessions_orientation ON art_sessions (orientation, created_at DESC);
+   ```
+
+## Phase B — Branding MVP (1–2 weeks)
+
+* Schema + endpoints + upload pipeline
+* Logo analysis job → palette/keywords
+* Prompt blender with weights + optional watermark
+* Business settings UI (toggle, slider, upload, preview)
+* E2E tests for “no text unless Branding watermark on”
+
+## Phase C — Nice-to-haves
+
+* Brand-aware **catalog candidates** scoring
+* Template modes (poster/menu) that **explicitly** allow text
+* Vector DB/pgvector migration if catalog match latency becomes a bottleneck
+
+---
+
+# 6) Test Plan (essentials)
+
+**No-text:**
+
+* Regular tier: generate 50 images → assert no glyph/ASCII clusters found (simple OCR pass threshold).
+* Business tier with watermark off: still no text.
+* Business tier with watermark on: only logo visible; no other text.
+
+**Brand steer:**
+
+* With palette: color histogram shift matches palette (ΔE tolerance)
+* With keywords: content classifier sees weak but present motif alignment (not literal product unless requested)
+
+**Dynamic switch:**
+
+* Style/song switch → `handoff_latency_ms < 1200 p95`
+* No repeats over 20 frames post-switch
+* No off-style frames from storage
+
+---
+
+# 7) Open Questions for Grok & ChatGPT
+
+1. **Brand balance:** default `user:brand = 60:40`—good starting point?
+2. **Watermark policy:** on/off default? (Proposed: **off by default**; easy toggle per venue)
+3. **Literal product imagery:** default to **abstract motifs** vs. literal photos?
+4. **OR vs. AND on tags:** we use **OR** across style tags; keep it or introduce `minMatchCount`?
+5. **Neutral bridge palette:** derive from **brand_palette** (if branding) or **current style DNA** (else)?
+
+---
+
+# 8) Actionable To-Do (prioritized)
+
+**Immediate (Blocking)**
+
+* [ ] Enforce storage **styles + orientation** filters; add GIN index
+* [ ] Prewarm + atomic swap + procedural bridge
+* [ ] Telemetry/alerts for validator/handoff
+
+**Next Sprint**
+
+* [ ] Branding schema & endpoints
+* [ ] Logo analysis job (palette/keywords)
+* [ ] Prompt blender with conditional watermark
+* [ ] Business UI (toggle/slider/upload/preview)
+
+**Future**
+
+* [ ] Brand-aware catalog scoring; vector infra if needed
+* [ ] Template modes that allow text (opt-in)
+
+---
+
+If you want, I can convert this into two dev tickets (Phase A hardening + Phase B branding MVP) with exact file touches and acceptance criteria.
