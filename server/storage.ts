@@ -38,7 +38,7 @@ import {
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { drizzle } from "drizzle-orm/neon-serverless";
-import { eq, desc, and, or, isNull, lt, gte, sql, getTableColumns, inArray } from "drizzle-orm";
+import { eq, desc, and, or, isNull, lt, gte, sql, getTableColumns, inArray, type SQL } from "drizzle-orm";
 import { Pool, neonConfig } from "@neondatabase/serverless";
 import ws from "ws";
 
@@ -77,7 +77,15 @@ export interface IStorage {
   recordImpression(userId: string, artworkId: string, isBridge?: boolean): Promise<void>;
   recordBatchImpressions(userId: string, artworkIds: string[]): Promise<number>;
   validateArtworkVisibility(userId: string, artworkIds: string[]): Promise<string[]>; // Filter to valid IDs in global pool
-  getUnseenArtworks(userId: string, limit?: number): Promise<ArtSession[]>;
+  getUnseenArtworks(
+    userId: string, 
+    options?: {
+      limit?: number;
+      orientation?: string;
+      styleTags?: string[];
+      artistTags?: string[];
+    }
+  ): Promise<ArtSession[]>;
   getFreshArtworks(sessionId: string, userId: string, limit?: number): Promise<ArtSession[]>; // Fresh AI-generated artwork (priority queue)
   getCatalogCandidates(userId: string, styleTags: string[], limit?: number): Promise<ArtSession[]>; // Catalog search for style switching
   
@@ -231,6 +239,9 @@ export class MemStorage implements IStorage {
       perceptualHash: insertSession.perceptualHash ?? null,
       poolStatus: insertSession.poolStatus ?? null,
       lastUsedAt: insertSession.lastUsedAt ?? null,
+      // User preference tags (for filtering)
+      styles: insertSession.styles ?? null,
+      artists: insertSession.artists ?? null,
       // Image Catalogue Manager fields
       isLibrary: insertSession.isLibrary ?? false,
       orientation: insertSession.orientation ?? null,
@@ -289,9 +300,17 @@ export class MemStorage implements IStorage {
     return artworkIds.length;
   }
 
-  async getUnseenArtworks(userId: string, limit: number = 20): Promise<ArtSession[]> {
+  async getUnseenArtworks(
+    userId: string, 
+    options?: {
+      limit?: number;
+      orientation?: string;
+      styleTags?: string[];
+      artistTags?: string[];
+    }
+  ): Promise<ArtSession[]> {
     // Stub implementation (not used, DbStorage handles this)
-    return this.getRecentArt(limit);
+    return this.getRecentArt(options?.limit ?? 20);
   }
 
   async getFreshArtworks(sessionId: string, userId: string, limit: number = 20): Promise<ArtSession[]> {
@@ -932,10 +951,79 @@ export class PostgresStorage implements IStorage {
     return artworkIds.length;
   }
 
-  async getUnseenArtworks(userId: string, limit: number = 20): Promise<ArtSession[]> {
-    // LEFT JOIN to exclude ALL artworks this user has ever viewed
-    // Simple: if they've seen it, don't show it again
-    const results = await this.db
+  async getUnseenArtworks(
+    userId: string, 
+    options?: {
+      limit?: number;
+      orientation?: string;
+      styleTags?: string[];
+      artistTags?: string[];
+    }
+  ): Promise<ArtSession[]> {
+    const limit = options?.limit ?? 20;
+    const orientation = options?.orientation;
+    const styleTags = options?.styleTags || [];
+    const artistTags = options?.artistTags || [];
+    
+    // FEATURE FLAG: Switch between OR (lenient) and AND (strict) filtering
+    const PREFERENCE_STRICT_MATCH = false; // Future: environment variable
+    
+    console.log('[Style Filtering] getUnseenArtworks called with:', {
+      userId,
+      limit,
+      orientation,
+      styleTags,
+      artistTags,
+      strictMode: PREFERENCE_STRICT_MATCH
+    });
+    
+    // Build WHERE conditions
+    const baseConditions = [isNull(userArtImpressions.id)]; // Must be unseen
+    
+    // Hard filter: orientation (exact match required)
+    if (orientation) {
+      baseConditions.push(eq(artSessions.orientation, orientation));
+    }
+    
+    // Soft filter: style tags (OR logic - any matching tag qualifies)
+    // Empty arrays mean "no preference" (don't filter)
+    let styleCondition: SQL | undefined;
+    if (styleTags.length > 0) {
+      if (PREFERENCE_STRICT_MATCH) {
+        // Future AND logic: artwork must contain ALL user style tags
+        styleCondition = and(
+          ...styleTags.map(tag => 
+            sql`${artSessions.styles} @> ARRAY[${tag}]::text[]`
+          )
+        );
+      } else {
+        // Current OR logic: artwork must contain AT LEAST ONE user style tag
+        styleCondition = or(
+          ...styleTags.map(tag => 
+            sql`${artSessions.styles} @> ARRAY[${tag}]::text[]`
+          )
+        );
+      }
+    }
+    
+    // Soft filter: artist tags (OR logic - any matching artist qualifies)
+    let artistCondition: SQL | undefined;
+    if (artistTags.length > 0) {
+      artistCondition = or(
+        ...artistTags.map(tag => 
+          sql`${artSessions.artists} @> ARRAY[${tag}]::text[]`
+        )
+      );
+    }
+    
+    // Combine all conditions
+    const whereConditions = [...baseConditions];
+    if (styleCondition) whereConditions.push(styleCondition);
+    if (artistCondition) whereConditions.push(artistCondition);
+    
+    // PASS 1: Try full preference match
+    console.log('[Style Filtering] PASS 1: Full preference match');
+    let results = await this.db
       .select(getTableColumns(artSessions))
       .from(artSessions)
       .leftJoin(
@@ -945,11 +1033,61 @@ export class PostgresStorage implements IStorage {
           eq(userArtImpressions.userId, userId)
         )
       )
-      .where(isNull(userArtImpressions.id))
+      .where(and(...whereConditions))
       .orderBy(desc(artSessions.createdAt))
       .limit(limit);
     
-    return results;
+    console.log('[Style Filtering] PASS 1 results:', results.length);
+    
+    // PASS 2: If insufficient results, broaden search (orientation-only)
+    if (results.length < limit && orientation) {
+      console.log('[Style Filtering] PASS 2: Broadened to orientation-only (dropped style/artist filters)');
+      const broadenedResults = await this.db
+        .select(getTableColumns(artSessions))
+        .from(artSessions)
+        .leftJoin(
+          userArtImpressions,
+          and(
+            eq(artSessions.id, userArtImpressions.artworkId),
+            eq(userArtImpressions.userId, userId)
+          )
+        )
+        .where(
+          and(
+            isNull(userArtImpressions.id),
+            eq(artSessions.orientation, orientation)
+          )
+        )
+        .orderBy(desc(artSessions.createdAt))
+        .limit(limit - results.length); // Fill remainder
+      
+      results = [...results, ...broadenedResults];
+      console.log('[Style Filtering] PASS 2 added:', broadenedResults.length, 'total:', results.length);
+    }
+    
+    // PASS 3: Final fallback - no filters (orientation exhausted or no preference)
+    if (results.length < limit) {
+      console.log('[Style Filtering] PASS 3: Final fallback (no filters)');
+      const fallbackResults = await this.db
+        .select(getTableColumns(artSessions))
+        .from(artSessions)
+        .leftJoin(
+          userArtImpressions,
+          and(
+            eq(artSessions.id, userArtImpressions.artworkId),
+            eq(userArtImpressions.userId, userId)
+          )
+        )
+        .where(isNull(userArtImpressions.id))
+        .orderBy(desc(artSessions.createdAt))
+        .limit(limit - results.length);
+      
+      results = [...results, ...fallbackResults];
+      console.log('[Style Filtering] PASS 3 added:', fallbackResults.length, 'total:', results.length);
+    }
+    
+    console.log('[Style Filtering] Final result count:', results.length);
+    return results.slice(0, limit); // Ensure we don't exceed limit
   }
 
   async getFreshArtworks(sessionId: string, userId: string, limit: number = 20): Promise<ArtSession[]> {
