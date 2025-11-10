@@ -87,6 +87,16 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 - **First-Time Setup Wizard** (November 2025): Onboarding flow for new users that gates artwork loading until style preferences are selected. Features: automatic detection of first-time vs returning users via preferences query, StyleSelector modal shown immediately for users without saved preferences, artwork loading blocked (`setupComplete` state) until wizard completes, robust error handling with toast notifications when preferences fail to load, loading spinner hidden during wizard to prevent UI blocking. Returning users skip wizard and load artworks immediately.
 - **Global Artwork Pool**: All generated artworks are shared across users for instant discovery.
 - **Freshness Pipeline - Never Repeat** (November 2025): Guarantees users NEVER see the same artwork frames twice via per-user impression tracking. Features: `/api/artworks/next` endpoint filtering ALL previously viewed artworks using LEFT JOIN, automatic impression recording on frame load, **impression version query key** (increments on each impression to force React Query fresh fetch, preventing cached artwork reuse), auto-generation trigger when unseen pool < 5 artworks. Implementation uses `user_art_impressions` table with unique(userId, artworkId) constraint and simple `WHERE userArtImpressions.id IS NULL` filter to exclude any artwork the user has ever viewed. Query key pattern: `["/api/artworks/next", impressionVersion]` ensures every impression fetch returns genuinely new artworks.
+  - **Production Enhancements (November 2025 - Phase 1-2 Complete)**: Enterprise-grade impression recording with architect-approved reliability improvements:
+    - **TextEncoder byte measurement**: Accurate sendBeacon payload sizing using `new TextEncoder().encode(payload).byteLength` instead of string length
+    - **100ms visibility-change debounce**: Prevents Safari/Firefox double-fire on tab switching via scoped debounce timer
+    - **iOS pagehide handler**: Reliable mobile flush with `{ once: true }` flag for iOS compatibility
+    - **Client telemetry metrics**: metricsRef tracking (flushSuccess, flushFail, totalFlushed) with divide-by-zero guard on failure rate calculation
+    - **Sampled logging**: 10% success sampling, 100% failure logging to reduce production noise while maintaining diagnostics
+    - **Server-side sampling**: Structured JSON logging with 10% success sampling in `/api/artworks/batch-impressions`
+    - **Triple fallback chain**: sendBeacon → fetch keepalive → synchronous flush for large payloads and beacon failures
+    - **Database verification**: Zero duplicates confirmed via `user_art_impressions_unique_user_artwork` constraint enforcement
+    - **Monitoring documentation**: 7 production SQL queries in `docs/MONITORING_QUERIES.md` with KPI thresholds and alert rules
 - **User Gallery Page**: Protected route for managing user artworks.
 - **Subscription Page**: Stripe payment integration with a 7-day free trial and tier comparison.
 - **Style Selector**: Visual grid of 71 artistic styles across 8 master groups, with dynamic AI mode.
