@@ -1,0 +1,195 @@
+Love it. Here’s a tight, copy-pasteable plan that adapts Grok’s idea to **your current constraints** (no pgvector, no Redis, MorphEngine uses `pendingJumpIndex`) and gets you a big UX win fast.
+
+# 🎚️ Real-Time Style Switching — **Simplified Phase 1** (Build Now)
+
+## Goals
+
+* **Visual switch in ≤5s** on style/song change (down from 40–50s).
+* Preserve **never-repeat** for stored artworks.
+* Zero infra changes (no Redis, no pgvector).
+* Compatible with MorphEngine’s **`pendingJumpIndex`** (no drop queue).
+
+---
+
+## What We’ll Ship (2–3 days)
+
+### 1) API: `POST /api/style-transition`
+
+**Purpose:** return the **best unseen** catalog artwork for the new style, or `null` to signal a **procedural bridge**.
+
+**Request**
+
+```json
+{
+  "sessionId": "s_123",
+  "userId": "u_123",
+  "styleTags": ["surreal","dreamlike"],
+  "audioMeta": {"tempo":128,"energy":0.74,"mood":"uplifting"},
+  "trackId": "spotify:track:..."
+}
+```
+
+**Response (catalog hit)**
+
+```json
+{
+  "bridge": {
+    "type": "catalog",
+    "artwork": { "id":"a_456", "url":"...", "styleTags":["surreal"], "dna": {...} }
+  }
+}
+```
+
+**Response (no hit)**
+
+```json
+{ "bridge": { "type": "procedural" } }
+```
+
+**Server logic (Postgres + in-memory vector math)**
+
+* Select **candidate artworks** from `art_sessions` by `styleTags` (AND ≥1 tag overlap).
+* Exclude **user-seen** via `user_art_impressions`.
+* Score with in-memory **cosine(dna)** if present, else tag Jaccard.
+* Return top 1.
+* Record a lightweight **catalog view** in a new ephemeral table or reuse `user_art_impressions` with `source='catalog_bridge'` (doesn’t pollute “freshness” KPIs but prevents showing the same catalog card twice in 24h).
+
+> **DB note:** No pgvector. Keep DNA as JSON; parse to `Float32Array` in Node; cosine similarity in JS. Limit candidates (e.g., 200) for predictable <~150ms scoring.
+
+---
+
+### 2) Frontend: Dynamic Mode Controller
+
+**On style/song change:**
+
+1. `await fetch('/api/style-transition'…)`
+2. If **catalog bridge**:
+
+   * `morphEngine.insertFrameAfterCurrent(bridgeArtwork)`
+   * `morphEngine.requestJump()`  ← uses **existing `pendingJumpIndex`** to hop
+3. If **procedural**:
+
+   * Render **procedural bridge** (style-colored, subtle motion) while fetching next fetch cycle.
+4. Fire **priority generation request** (normal `/api/generate-art` with provenance; no infra change).
+5. When **first fresh** frame arrives through your normal pipeline, **crossfade 400–600ms** to it (and mark impression as usual).
+
+**Why this works now**
+
+* We **don’t drop** queued frames; we **jump** over them (your engine supports `pendingJumpIndex`).
+* We **don’t need Redis/pgvector**; we rank in memory.
+* We **preserve never-repeat** by excluding seen catalog items.
+
+---
+
+### 3) Telemetry (essential)
+
+* `style_transition_started` {from_style, to_style, trackId}
+* `bridge_rendered` {type:'catalog'|'procedural', latency_ms}
+* `catalog_hit_rate` (aggregate hourly)
+* `fresh_swap_latency_ms` (time from transition → first fresh frame render)
+* Alert if:
+
+  * `bridge p95 > 5000ms`
+  * `catalog_hit_rate < 30%` over 1h
+  * `fresh_swap_latency p95 > 30000ms`
+
+---
+
+## SLOs (Phase 1)
+
+* **T0 → Bridge:** p95 **≤ 5s**
+* **T0 → First Fresh:** p95 **≤ 30s**
+* **Stored artwork repeat rate:** **0%**
+
+---
+
+## Exact Tasks (tickets)
+
+### IMMEDIATE (Build now)
+
+1. **API:** `/api/style-transition`
+
+   * Query candidates by tag overlap; exclude `user_art_impressions`.
+   * JS cosine similarity on DNA (cap 200 candidates).
+   * Return top unseen or `procedural`.
+   * **Acceptance:** For a forced style change with existing catalog, API returns a result in **<300ms** for 95th percentile.
+2. **DB:** Catalog non-repeat
+
+   * Option A (preferred): `catalog_impressions(user_id, artwork_id, seen_at)` with UNIQUE (user_id, artwork_id).
+   * Option B: reuse `user_art_impressions` with `source='catalog_bridge'` and treat as “seen for 24h” in selection.
+   * **Acceptance:** Same catalog frame won’t be returned twice within 24h.
+3. **FE:** DynamicModeController
+
+   * Wire `style-transition` call on song/style change.
+   * On catalog bridge → `insertFrameAfterCurrent` + `requestJump()`.
+   * On procedural bridge → render minimal interstitial (no spinner).
+   * **Acceptance:** Visual switch occurs without blocking UI; **no modal**; **no stutter**.
+4. **FE:** Fresh swap integration
+
+   * Listen for first fresh frame post-transition; **crossfade** 400–600ms.
+   * **Acceptance:** Bridge → fresh swap is seamless; FPS stays >30 on mid devices.
+5. **Telemetry + Alerts**
+
+   * Log events listed above.
+   * Implement 2 alerts: `bridge p95 > 5s`, `fresh_swap p95 > 30s`.
+   * **Acceptance:** Telemetry visible in logs now; alert rules stubbed (wire to your stack later).
+
+### WANTED (Next sprint)
+
+6. **Priority generation (DB-only queue)**
+
+   * `generation_jobs(…, urgency_score INT)`; worker selects `ORDER BY urgency_score DESC, created_at ASC FOR UPDATE SKIP LOCKED`.
+   * Transitions enqueue with `urgency_score=100`.
+   * **Acceptance:** First fresh frame p95 improves by ≥20% vs baseline.
+7. **Debounce & collapse**
+
+   * If multiple transitions within 350ms, execute only the **latest**.
+   * **Acceptance:** Rapid scrubbing doesn’t spawn multiple bridges.
+
+### NICE-TO-HAVE (Future)
+
+8. **Warm pool pre-fill** (no credits waste until measured)
+
+   * Opportunistic pregen for top current styles (cap 3–5).
+   * Ship only if `catalog_hit_rate < 30%`.
+9. **pgvector migration**
+
+   * When catalog size grows and JS cosine > 2s.
+10. **Redis/Queue**
+
+    * Only if Postgres `SKIP LOCKED` shows contention.
+
+---
+
+## Test Plan (must pass)
+
+* **E2E:** 10 style switches in 15s → Bridge always shows; no stored-art repeats; no UI stalls.
+* **Empty catalog:** Procedural bridge shows instantly; later fresh swap arrives.
+* **Low-end laptop:** Crossfade remains smooth; CPU spike < 1s.
+* **ACR fail:** Still bridges; provenance STYLE_ONLY shows in logs; fresh arrives.
+
+---
+
+## Risks & Mitigations
+
+* **Catalog is small:** Hit-rate <30% → OK in Phase 1 (procedural bridge handles UX). Decide later if warm-pool/pregen worth credits.
+* **JS cosine time:** Cap candidates; short-circuit on high similarity.
+* **MorphEngine state:** We only use `insertFrameAfterCurrent` + `requestJump()` (no queue drops).
+
+---
+
+## Answering Your Questions
+
+* **Can you switch mid-stream?** After Phase 1: **Yes**, bridge in **≤5s**, then fresh in **≤30s**.
+* **Dynamic mode lag?** Feels near-instant thanks to the bridge; true fresh follows quickly.
+* **If generation is slow/unavailable?** Catalog (unseen) or procedural covers the gap—**no blanks, no repeats**.
+
+---
+
+If this looks good, I’ll convert these into tickets and start with:
+
+* **Ticket 1:** `/api/style-transition` (server + selection)
+* **Ticket 2:** DynamicModeController + bridge + jump
+* **Ticket 3:** Telemetry & alerts
+
+Want me to kick off **Simplified Phase 1** now?

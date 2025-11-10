@@ -70,11 +70,13 @@ export const artFavorites = pgTable("art_favorites", {
 
 // User art impressions - Tracks which artworks each user has viewed
 // CRITICAL for "never see the same frame twice" guarantee
+// PHASE 1 STYLE SWITCHING: Added bridgeAt for catalog bridge tracking
 export const userArtImpressions = pgTable("user_art_impressions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   artworkId: varchar("artwork_id").notNull().references(() => artSessions.id, { onDelete: "cascade" }),
   viewedAt: timestamp("viewed_at").notNull().defaultNow(),
+  bridgeAt: timestamp("bridge_at"), // Nullable: set when shown as catalog bridge for style transition
 }, (table) => ({
   userIdIdx: index("user_art_impressions_user_id_idx").on(table.userId),
   artworkIdIdx: index("user_art_impressions_artwork_id_idx").on(table.artworkId),
@@ -82,6 +84,7 @@ export const userArtImpressions = pgTable("user_art_impressions", {
   viewedAtIdx: index("user_art_impressions_viewed_at_idx").on(table.viewedAt),
   // Composite index for efficient 7-day freshness queries (LEFT JOIN + range filter)
   userViewedCompositeIdx: index("user_art_impressions_user_viewed_idx").on(table.userId, table.viewedAt),
+  bridgeAtIdx: index("user_art_impressions_bridge_at_idx").on(table.bridgeAt),
 }));
 
 // Session storage table (required for Replit Auth)

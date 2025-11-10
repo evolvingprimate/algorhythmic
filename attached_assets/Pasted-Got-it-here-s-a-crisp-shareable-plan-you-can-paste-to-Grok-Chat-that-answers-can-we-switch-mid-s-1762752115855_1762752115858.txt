@@ -1,0 +1,212 @@
+Got it—here’s a crisp, shareable plan you can paste to Grok + Chat that answers “can we switch mid-stream, how fast, and what to build to make it instant,” with Architect, Grok, and ChatGPT viewpoints rolled in.
+
+# 🎚️ Real-Time Style Switching — Solution Proposal (for Architect, Grok, ChatGPT)
+
+## TL;DR
+
+* **Today (current behavior):** Style change → new generation takes ~40–50s; you may briefly see prior frames while waiting.
+* **Target (proposed):**
+
+  * **T0 < 1s:** Instant visual switch using a **catalog or procedural bridge** (never repeats).
+  * **T0 + 5–10s:** “Warm pool” fresh image hot-swaps in.
+  * **T0 + 40–50s (worst case):** On-demand generation arrives and hot-swaps if warm pool missed.
+
+This keeps dynamic mode seamless (song-to-song crossfades) and preserves the **“never repeat”** contract.
+
+---
+
+## 1) Architecture: “Hybrid Instant-Retrieve + Fast-Refresh”
+
+Think **DJ crossfade** for visuals.
+
+### Tier A — Instant Bridge (T0 < 1s)
+
+* **Primary:** Pull **unseen** candidate from your **catalog** by **Style Tag + DNA similarity**.
+* **Fallback:** If no unseen catalog hit, show **procedural style card** (e.g., style-colored, audio-reactive “interstitial” with tasteful motion).
+* **Contract:** The bridge **does not** violate “never repeat”:
+
+  * Catalog candidates must be **unseen by this user** (enforced by `catalog_impressions` table).
+  * Procedural bridge is **not a stored frame** (therefore not a repeatable artwork).
+
+### Tier B — Warm Pool (T0 + 5–10s)
+
+* Keep a **small rolling pool** (e.g., 3–5 per top style) of pre-generated, **user-unseen** artwork per active session/playlist.
+* On a style switch, pull from warm pool → hot-swap.
+* Backfill warm pool opportunistically.
+
+### Tier C — Priority Generation (T0 + 40–50s worst case)
+
+* Fire **priority job** in the gen queue with provenance (MUSIC_ID→AUDIO_ONLY→STYLE_ONLY).
+* When ready, hot-swap in and record impression.
+
+---
+
+## 2) API + DB Changes
+
+### New API
+
+* `POST /api/style-transition`
+  **Body:** `{ sessionId, userId, styleTags: string[], audioMeta?: {...}, trackId?: string }`
+  **Returns (fast):** `{ bridge: { type: 'catalog'|'procedural', artwork?: Artwork }, warmReady: boolean }`
+
+* `GET /api/warm-pool?sessionId&style=surreal&limit=1`
+  Returns an **unseen** warm-pool artwork if available.
+
+### DB (new/updated)
+
+* `catalog_impressions(user_id, artwork_id, seen_at)` → prevents catalog repeats for 24h.
+* `style_transitions(id, user_id, session_id, from_style, to_style, track_id, created_at)` → telemetry.
+* **Optional:** `art_dna(artwork_id, vector)` (pgvector) for cosine similarity.
+
+**Indexes**
+
+* `(user_id, artwork_id)` UNIQUE on `catalog_impressions`.
+* `USING ivfflat (vector)` on `art_dna.vector` (if using pgvector).
+
+---
+
+## 3) Selection Logic (bridge)
+
+```ts
+// Pseudocode
+const candidates = searchCatalog({
+  styleTags,
+  excludeSeenForUser: true,  // via catalog_impressions
+  minSimilarity: 0.75,
+  limit: 5
+});
+
+if (candidates.length) {
+  return { type: 'catalog', artwork: candidates[0] };
+}
+return { type: 'procedural' }; // never a “repeat” and loads in <1s
+```
+
+**Similarity score:** `0.6 * cosine(DNA) + 0.4 * tagOverlapJaccard`.
+
+---
+
+## 4) Frontend Flow (dynamic mode)
+
+1. **Detect** track/style change (Spotify/ACR → or Maestro decision).
+2. **Call** `/api/style-transition` → render **bridge** immediately (no spinner).
+3. **Fetch** warm pool → if present, **hot-swap** (crossfade 400–600ms).
+4. **Enqueue** priority gen; on completion, **hot-swap** again.
+5. **Record** impressions:
+
+   * Catalog bridge → write to `catalog_impressions` (not core impressions).
+   * Warm/prompted frames → standard `user_art_impressions`.
+
+**UX polish:** micro-label “finding your vibe…” on procedural bridge only; no persistent banners.
+
+---
+
+## 5) SLOs & Telemetry
+
+**SLO Targets**
+
+* **Bridge time:** p95 < **800ms**
+* **Warm swap:** p95 < **10s**
+* **Hard gen swap:** p95 < **55s**
+* **Repeat rate:** **0%** for catalog/warm/gen (procedural excluded)
+
+**Telemetry**
+
+* `style_transition_started` {from_style, to_style, trackId}
+* `bridge_rendered` {type, latency_ms}
+* `warm_swap` {latency_ms, source:'pool'}
+* `gen_swap` {latency_ms, provenance}
+* `no_warm_pool_hit` (rate)
+* `catalog_impression_saved`
+* Alerts: `bridge_p95>1000ms`, `STYLE_ONLY>50%`, `no_warm_pool_hit>30%`
+
+---
+
+## 6) Reviews
+
+### Architect (system integrity)
+
+* ✅ Use **transitional procedural** rather than re-showing seen frames—keeps “never repeat” true.
+* ✅ Catalog hits must be **unseen** (24h cooldown via `catalog_impressions`).
+* ✅ Warm pool size 3–5 per top style per session; backfill opportunistically.
+* ✅ Priority queue class (Redis ZSET) with **deadline + jitter**; circuit breaker on gen API.
+* ⚠️ Guard against **thrash** on rapid track scrubbing:
+
+  * Debounce transitions (e.g., 350ms).
+  * Collapse overlapping transitions to latest.
+
+### Grok (scale/cost)
+
+* ✅ Redis ZSET for **priority gen**; expire stale items.
+* ✅ pgvector for DNA search; default to **tag-only** if no vector.
+* ✅ Keep warm pool tight; cap by **RAM + hit-rate**; LRU eviction.
+* ✅ Precompute DNA for catalog; async backfill for new art.
+* ⚠️ Add **back-pressure**: if warm hit-rate falls <50%, **pause** extra pregen to save credits.
+
+### ChatGPT (UX)
+
+* ✅ Crossfade 400–600ms; no hard cuts during bridges.
+* ✅ Tiny, transient hint on procedural bridge only; **no modal** / no choices.
+* ✅ Never block music-driven transitions for UI copy.
+* ✅ Keep “never repeat” promise: catalog entries unseen; procedural is exempt as it’s not stored artwork.
+
+---
+
+## 7) Implementation Plan (phased)
+
+**Phase 1 — Instant Bridge (2–3 days)**
+
+* API: `/api/style-transition` (bridge only).
+* Catalog search (tags + optional vector).
+* `catalog_impressions` table + writes.
+* Frontend: DynamicModeController; procedural bridge component; crossfade.
+* Telemetry: bridge latency, catalog hit-rate, fallbacks.
+
+**Phase 2 — Warm Pool (2–3 days)**
+
+* Pool builder job (hourly or demand-driven).
+* `GET /api/warm-pool` + hot-swap plumbing.
+* Pool sizing heuristics (3–5 per top style), LRU eviction.
+* Metrics: warm hit-rate, time-to-warm-swap.
+
+**Phase 3 — Priority Generation (2–3 days)**
+
+* Redis ZSET priority queue; deadline + jitter.
+* Worker consumes with provenance (MUSIC_ID→AUDIO_ONLY→STYLE_ONLY).
+* Circuit breaker on gen provider; fallback to pool/catalog.
+* Metrics: queue depth, gen latency p95, failure rate.
+
+**Phase 4 — Polish (1–2 days)**
+
+* Debounce scrubbing; collapse transitions.
+* pgvector rollout (if not already).
+* Final SLO/alert wiring.
+
+---
+
+## 8) Test Matrix (key E2E)
+
+* **Rapid track change:** 10 changes in 5s → always bridge <1s; no visual tears.
+* **No catalog/no pool:** procedural → warm/gen swap happens; no stall.
+* **Provider outage:** circuit breaker trips; still bridge instantly; warm/pool continues.
+* **Never repeat:** Over 20 transitions, **no duplicate** stored artworks.
+* **Low-end device:** FPS > 30 during crossfades.
+
+---
+
+## 9) Decision & Next Step
+
+If you approve, we’ll start **Phase 1 (Instant Bridge)** now:
+
+* Ship `/api/style-transition`
+* Wire catalog search with **unseen** enforcement
+* Add procedural bridge + crossfade
+* Telemetry + alerts for bridge p95 and catalog hit-rate
+
+**Answering your questions directly**
+
+* **Can you switch mid-stream?** Today: yes, but you wait for gen (~40–50s). With this plan: **visual switch in <1s**, then a **fresh** image in **≤10s** (warm pool) or **≤50s** (priority gen).
+* **Dynamic mode lag?** Target SLO above; practically **feels instant** due to the bridge.
+* **If we can’t gen in time?** We use **unseen catalog** first, otherwise a **procedural bridge**, then swap when warm/gen arrives—**no blanks, no repeats**.
+
+Want me to kick off **Phase 1** (Instant Bridge) and prep the exact tickets?
