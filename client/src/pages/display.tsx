@@ -587,6 +587,14 @@ export default function Display() {
             audioAnalysis: audioFeatures,
           });
           
+          // BUG FIX: Prewarm frame to prevent visual glitches
+          if (rendererRef.current) {
+            const frameId = artwork.imageUrl.split('/').pop() || artwork.imageUrl;
+            rendererRef.current.prewarmFrame(artwork.imageUrl, frameId).catch(err => {
+              console.error(`[Display] Prewarming failed for ${frameId}:`, err);
+            });
+          }
+          
           console.log(`[Display] ✅ Loaded frame ${validatedArtworks.length}: ${artwork.prompt?.substring(0, 50)}...`);
         }
         
@@ -754,6 +762,14 @@ export default function Display() {
         audioAnalysis: audioFeatures,
       });
       
+      // BUG FIX: Prewarm fresh frame to prevent visual glitches
+      if (rendererRef.current) {
+        const frameId = artwork.imageUrl.split('/').pop() || artwork.imageUrl;
+        rendererRef.current.prewarmFrame(artwork.imageUrl, frameId).catch(err => {
+          console.error(`[Display] Prewarming failed for fresh frame ${frameId}:`, err);
+        });
+      }
+      
       // PEER-REVIEWED FIX #3: Record impression when fresh frame is inserted (deduplicated with retry on failure)
       impressionRecorder.queueImpressions(artwork.id);
       
@@ -863,6 +879,14 @@ export default function Display() {
             musicInfo: data.musicInfo,
             audioAnalysis: variables.audioAnalysis,
           });
+          
+          // BUG FIX: Prewarm newly generated frame
+          if (rendererRef.current) {
+            const frameId = data.imageUrl.split('/').pop() || data.imageUrl;
+            rendererRef.current.prewarmFrame(data.imageUrl, frameId).catch(err => {
+              console.error(`[Display] Prewarming failed for generated frame ${frameId}:`, err);
+            });
+          }
           
           // Start the morph engine if not already started
           if (morphEngineRef.current.getFrameCount() === 1) {

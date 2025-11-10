@@ -21,6 +21,16 @@ export class RendererManager {
   private startTime: number = Date.now();
   private resizeHandler: (() => void) | null = null;
   
+  // BUG FIX: Frame prewarming system to prevent visual glitches
+  private prewarmCache: Map<string, {
+    image: HTMLImageElement;
+    textureReady: boolean;
+    timestamp: number;
+  }> = new Map();
+  private currentFrameIdA: string = '';
+  private currentFrameIdB: string = '';
+  private pendingFrameSwap: { urlA: string; urlB: string; frameIdA: string; frameIdB: string } | null = null;
+  
   // Maestro parameter store
   private parameterStore: Map<string, number | number[] | boolean | string> = new Map();
   private activeRamps: Map<string, {
@@ -197,6 +207,64 @@ export class RendererManager {
     }
   }
   
+  /**
+   * BUG FIX: Prewarm next frame before transition starts
+   * This prevents visual glitches by ensuring frames are decoded & GPU-ready
+   */
+  async prewarmFrame(imageUrl: string, frameId: string): Promise<void> {
+    // Skip if already prewarmed
+    if (this.prewarmCache.has(frameId)) {
+      return;
+    }
+    
+    try {
+      console.log(`[RendererManager] 🔥 Prewarming frame: ${frameId}`);
+      const startTime = performance.now();
+      
+      // Load and decode image
+      const img = await this.loadImage(imageUrl);
+      
+      // Mark as prewarmed (texture upload happens in render loop)
+      this.prewarmCache.set(frameId, {
+        image: img,
+        textureReady: false,
+        timestamp: Date.now(),
+      });
+      
+      const duration = performance.now() - startTime;
+      console.log(`[RendererManager] ✅ Frame prewarmed in ${duration.toFixed(1)}ms: ${frameId}`);
+    } catch (error) {
+      console.error(`[RendererManager] ❌ Failed to prewarm frame ${frameId}:`, error);
+    }
+  }
+  
+  /**
+   * BUG FIX: Check if frame is ready for display (prewarmed + texture uploaded)
+   */
+  isFrameReady(frameId: string): boolean {
+    const cached = this.prewarmCache.get(frameId);
+    return cached !== undefined && cached.textureReady;
+  }
+  
+  /**
+   * BUG FIX: Clean up old prewarmed frames (keep last 5)
+   */
+  private prunePrewarmCache(): void {
+    const MAX_PREWARM_CACHE = 5;
+    if (this.prewarmCache.size <= MAX_PREWARM_CACHE) return;
+    
+    // Sort by timestamp (oldest first)
+    const entries = Array.from(this.prewarmCache.entries())
+      .sort((a, b) => a[1].timestamp - b[1].timestamp);
+    
+    // Remove oldest entries
+    const toRemove = entries.slice(0, entries.length - MAX_PREWARM_CACHE);
+    toRemove.forEach(([frameId]) => {
+      this.prewarmCache.delete(frameId);
+      console.log(`[RendererManager] 🗑️ Pruned old prewarm: ${frameId}`);
+    });
+  }
+
   async render(
     imageUrlA: string,
     imageUrlB: string,
@@ -215,15 +283,58 @@ export class RendererManager {
     // Update parameter animations (ramps and pulses)
     this.updateParameterAnimations();
     
+    // BUG FIX: Generate frame IDs from URLs (for atomic swap tracking)
+    const frameIdA = imageUrlA.split('/').pop() || imageUrlA;
+    const frameIdB = imageUrlB.split('/').pop() || imageUrlB;
+    
+    // BUG FIX: Detect frame change (atomic swap needed)
+    const frameAChanged = frameIdA !== this.currentFrameIdA;
+    const frameBChanged = frameIdB !== this.currentFrameIdB;
+    
     try {
-      const imgA = await this.loadImage(imageUrlA);
-      const imgB = await this.loadImage(imageUrlB);
+      // BUG FIX: Use prewarmed images if available, otherwise load just-in-time
+      let imgA: HTMLImageElement;
+      let imgB: HTMLImageElement;
       
+      const prewarmA = this.prewarmCache.get(frameIdA);
+      const prewarmB = this.prewarmCache.get(frameIdB);
+      
+      if (prewarmA) {
+        imgA = prewarmA.image;
+      } else {
+        console.warn(`[RendererManager] ⚠️ Frame A not prewarmed, loading JIT: ${frameIdA}`);
+        imgA = await this.loadImage(imageUrlA);
+      }
+      
+      if (prewarmB) {
+        imgB = prewarmB.image;
+      } else {
+        console.warn(`[RendererManager] ⚠️ Frame B not prewarmed, loading JIT: ${frameIdB}`);
+        imgB = await this.loadImage(imageUrlB);
+      }
+      
+      // BUG FIX: Upload textures and mark as ready
       this.uploadTexture(this.imageTextureA, imgA);
       this.uploadTexture(this.imageTextureB, imgB);
       
+      if (prewarmA) prewarmA.textureReady = true;
+      if (prewarmB) prewarmB.textureReady = true;
+      
       this.imageDataA = imgA;
       this.imageDataB = imgB;
+      
+      // BUG FIX: Update current frame IDs (atomic swap complete)
+      if (frameAChanged) {
+        console.log(`[RendererManager] 🔄 Frame A swapped: ${this.currentFrameIdA} → ${frameIdA}`);
+        this.currentFrameIdA = frameIdA;
+      }
+      if (frameBChanged) {
+        console.log(`[RendererManager] 🔄 Frame B swapped: ${this.currentFrameIdB} → ${frameIdB}`);
+        this.currentFrameIdB = frameIdB;
+      }
+      
+      // BUG FIX: Cleanup old prewarmed frames
+      this.prunePrewarmCache();
       
       const context: RenderContext = {
         gl: this.gl,
