@@ -231,6 +231,16 @@ export class MemStorage implements IStorage {
       perceptualHash: insertSession.perceptualHash ?? null,
       poolStatus: insertSession.poolStatus ?? null,
       lastUsedAt: insertSession.lastUsedAt ?? null,
+      // Image Catalogue Manager fields
+      isLibrary: insertSession.isLibrary ?? false,
+      orientation: insertSession.orientation ?? null,
+      aspectRatio: insertSession.aspectRatio ?? null,
+      catalogueTier: insertSession.catalogueTier ?? null,
+      width: insertSession.width ?? null,
+      height: insertSession.height ?? null,
+      safeArea: insertSession.safeArea ?? null,
+      focalPoints: insertSession.focalPoints ?? null,
+      sidefillPalette: insertSession.sidefillPalette ?? null,
       createdAt: new Date(),
     };
     this.sessions.set(id, session);
@@ -347,6 +357,8 @@ export class MemStorage implements IStorage {
       stripeCustomerId: insertUser.stripeCustomerId || null,
       stripeSubscriptionId: insertUser.stripeSubscriptionId || null,
       isActive: true,
+      preferredOrientation: insertUser.preferredOrientation || null,
+      controllerState: insertUser.controllerState || null,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -363,6 +375,8 @@ export class MemStorage implements IStorage {
         firstName: userData.firstName ?? existing.firstName,
         lastName: userData.lastName ?? existing.lastName,
         profileImageUrl: userData.profileImageUrl ?? existing.profileImageUrl,
+        preferredOrientation: userData.preferredOrientation ?? existing.preferredOrientation,
+        controllerState: userData.controllerState ?? existing.controllerState,
         updatedAt: new Date(),
       };
       this.users.set(existing.id, updated);
@@ -379,6 +393,8 @@ export class MemStorage implements IStorage {
       stripeCustomerId: userData.stripeCustomerId || null,
       stripeSubscriptionId: userData.stripeSubscriptionId || null,
       isActive: userData.isActive ?? true,
+      preferredOrientation: userData.preferredOrientation || null,
+      controllerState: userData.controllerState || null,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -577,6 +593,84 @@ export class MemStorage implements IStorage {
       })
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .slice(0, limit);
+  }
+
+  // Monthly Credit System (MemStorage stubs)
+  async initializeUserCredits(userId: string, tier: string): Promise<UserCredits> {
+    const tierKey = normalizeTierName(tier);
+    const baseQuota = SUBSCRIPTION_TIERS[tierKey].dailyLimit * 30;
+    const now = new Date();
+    const cycleStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const cycleEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+    
+    return {
+      userId,
+      balance: baseQuota,
+      rolloverBalance: 0,
+      baseQuota,
+      billingCycleStart: cycleStart,
+      billingCycleEnd: cycleEnd,
+      timezone: 'UTC',
+      lastUpdated: new Date(),
+    };
+  }
+
+  async getCreditsContext(userId: string): Promise<{
+    balance: number;
+    rolloverBalance: number;
+    baseQuota: number;
+    cycleStart: Date;
+    cycleEnd: Date;
+    daysRemaining: number;
+  }> {
+    const user = await this.getUser(userId);
+    const tier = user?.subscriptionTier || 'free';
+    const tierKey = normalizeTierName(tier);
+    const baseQuota = SUBSCRIPTION_TIERS[tierKey].dailyLimit * 30;
+    const now = new Date();
+    const cycleStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const cycleEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+    const daysRemaining = Math.max(0, Math.ceil((cycleEnd.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
+    
+    return {
+      balance: baseQuota,
+      rolloverBalance: 0,
+      baseQuota,
+      cycleStart,
+      cycleEnd,
+      daysRemaining,
+    };
+  }
+
+  async deductCredit(userId: string, amount: number, metadata?: Record<string, any>): Promise<{ success: boolean; newBalance: number }> {
+    return { success: true, newBalance: 100 };
+  }
+
+  async refundCredit(userId: string, amount: number, reason: string, metadata?: Record<string, any>): Promise<{ success: boolean; newBalance: number }> {
+    return { success: true, newBalance: 100 };
+  }
+
+  async getCreditHistory(userId: string, limit: number = 50): Promise<CreditLedger[]> {
+    return [];
+  }
+
+  // Image Catalogue Manager (MemStorage stubs)
+  async getCatalogCoverage(userId: string, orientation?: string): Promise<{
+    totalLibrary: number;
+    unseenCount: number;
+    unseenRatio: number;
+    distinctStyles: number;
+  }> {
+    return {
+      totalLibrary: 0,
+      unseenCount: 0,
+      unseenRatio: 0,
+      distinctStyles: 0,
+    };
+  }
+
+  async getLibraryArtwork(userId: string, orientation?: string, styles?: string[], limit: number = 20): Promise<ArtSession[]> {
+    return [];
   }
 }
 
@@ -899,10 +993,12 @@ export class PostgresStorage implements IStorage {
       .onConflictDoUpdate({
         target: users.id,
         set: {
-          email: userData.email,
-          firstName: userData.firstName,
-          lastName: userData.lastName,
-          profileImageUrl: userData.profileImageUrl,
+          email: sql`COALESCE(${userData.email}, ${users.email})`,
+          firstName: sql`COALESCE(${userData.firstName}, ${users.firstName})`,
+          lastName: sql`COALESCE(${userData.lastName}, ${users.lastName})`,
+          profileImageUrl: sql`COALESCE(${userData.profileImageUrl}, ${users.profileImageUrl})`,
+          preferredOrientation: sql`COALESCE(${userData.preferredOrientation}, ${users.preferredOrientation})`,
+          controllerState: sql`COALESCE(${userData.controllerState}, ${users.controllerState})`,
           updatedAt: new Date(),
         },
       })
@@ -990,6 +1086,263 @@ export class PostgresStorage implements IStorage {
       count,
       limit,
     };
+  }
+
+  // ============================================================================
+  // Monthly Credit System
+  // ============================================================================
+
+  async initializeUserCredits(userId: string, tier: string): Promise<UserCredits> {
+    const tierKey = normalizeTierName(tier);
+    const baseQuota = SUBSCRIPTION_TIERS[tierKey].dailyLimit * 30; // Convert daily to monthly
+    
+    const now = new Date();
+    const cycleStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const cycleEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+    
+    const existing = await this.db
+      .select()
+      .from(userCredits)
+      .where(eq(userCredits.userId, userId))
+      .limit(1);
+    
+    if (existing.length > 0) {
+      return existing[0];
+    }
+    
+    const [created] = await this.db
+      .insert(userCredits)
+      .values({
+        userId,
+        balance: baseQuota,
+        rolloverBalance: 0,
+        baseQuota,
+        billingCycleStart: cycleStart,
+        billingCycleEnd: cycleEnd,
+        timezone: 'UTC',
+      })
+      .returning();
+    
+    await this.db.insert(creditLedger).values({
+      userId,
+      eventType: 'grant',
+      amount: baseQuota,
+      balanceAfter: baseQuota,
+      description: 'Initial credit grant',
+      metadata: JSON.stringify({ tier: tierKey }),
+    });
+    
+    return created;
+  }
+
+  async getCreditsContext(userId: string): Promise<{
+    balance: number;
+    rolloverBalance: number;
+    baseQuota: number;
+    cycleStart: Date;
+    cycleEnd: Date;
+    daysRemaining: number;
+  }> {
+    const credits = await this.db
+      .select()
+      .from(userCredits)
+      .where(eq(userCredits.userId, userId))
+      .limit(1);
+    
+    if (credits.length === 0) {
+      const user = await this.getUser(userId);
+      const tier = user?.subscriptionTier || 'free';
+      const initialized = await this.initializeUserCredits(userId, tier);
+      credits.push(initialized);
+    }
+    
+    const credit = credits[0];
+    const now = new Date();
+    const daysRemaining = Math.max(0, Math.ceil((credit.billingCycleEnd.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
+    
+    return {
+      balance: credit.balance,
+      rolloverBalance: credit.rolloverBalance,
+      baseQuota: credit.baseQuota,
+      cycleStart: credit.billingCycleStart,
+      cycleEnd: credit.billingCycleEnd,
+      daysRemaining,
+    };
+  }
+
+  async deductCredit(userId: string, amount: number, metadata?: Record<string, any>): Promise<{ success: boolean; newBalance: number }> {
+    return await this.db.transaction(async (tx) => {
+      const idempotencyKey = metadata?.artworkId ? `artwork-${metadata.artworkId}-deduct` : undefined;
+      
+      if (idempotencyKey) {
+        const existing = await tx
+          .select()
+          .from(creditLedger)
+          .where(eq(creditLedger.idempotencyKey, idempotencyKey))
+          .limit(1);
+        
+        if (existing.length > 0) {
+          return { success: true, newBalance: existing[0].balanceAfter };
+        }
+      }
+      
+      const [credits] = await tx
+        .select()
+        .from(userCredits)
+        .where(eq(userCredits.userId, userId))
+        .limit(1);
+      
+      if (!credits) {
+        throw new Error('User credits not initialized');
+      }
+      
+      if (credits.balance < amount) {
+        return { success: false, newBalance: credits.balance };
+      }
+      
+      const newBalance = credits.balance - amount;
+      
+      await tx
+        .update(userCredits)
+        .set({ balance: newBalance, lastUpdated: new Date() })
+        .where(eq(userCredits.userId, userId));
+      
+      await tx.insert(creditLedger).values({
+        userId,
+        eventType: 'deduct',
+        amount: -amount,
+        balanceAfter: newBalance,
+        description: metadata?.description || 'Credit deduction',
+        metadata: metadata ? JSON.stringify(metadata) : null,
+        idempotencyKey,
+      });
+      
+      return { success: true, newBalance };
+    });
+  }
+
+  async refundCredit(userId: string, amount: number, reason: string, metadata?: Record<string, any>): Promise<{ success: boolean; newBalance: number }> {
+    return await this.db.transaction(async (tx) => {
+      const [credits] = await tx
+        .select()
+        .from(userCredits)
+        .where(eq(userCredits.userId, userId))
+        .limit(1);
+      
+      if (!credits) {
+        throw new Error('User credits not initialized');
+      }
+      
+      const newBalance = credits.balance + amount;
+      
+      await tx
+        .update(userCredits)
+        .set({ balance: newBalance, lastUpdated: new Date() })
+        .where(eq(userCredits.userId, userId));
+      
+      await tx.insert(creditLedger).values({
+        userId,
+        eventType: 'refund',
+        amount: amount,
+        balanceAfter: newBalance,
+        description: reason,
+        metadata: metadata ? JSON.stringify(metadata) : null,
+      });
+      
+      return { success: true, newBalance };
+    });
+  }
+
+  async getCreditHistory(userId: string, limit: number = 50): Promise<CreditLedger[]> {
+    return await this.db
+      .select()
+      .from(creditLedger)
+      .where(eq(creditLedger.userId, userId))
+      .orderBy(desc(creditLedger.createdAt))
+      .limit(limit);
+  }
+
+  // ============================================================================
+  // Image Catalogue Manager
+  // ============================================================================
+
+  async getCatalogCoverage(userId: string, orientation?: string): Promise<{
+    totalLibrary: number;
+    unseenCount: number;
+    unseenRatio: number;
+    distinctStyles: number;
+  }> {
+    let libraryQuery = this.db
+      .select({ id: artSessions.id })
+      .from(artSessions)
+      .where(eq(artSessions.isLibrary, true));
+    
+    if (orientation) {
+      libraryQuery = this.db
+        .select({ id: artSessions.id })
+        .from(artSessions)
+        .where(and(
+          eq(artSessions.isLibrary, true),
+          eq(artSessions.orientation, orientation)
+        ));
+    }
+    
+    const libraryArt = await libraryQuery;
+    const totalLibrary = libraryArt.length;
+    
+    const viewedArt = await this.db
+      .select({ artworkId: userArtImpressions.artworkId })
+      .from(userArtImpressions)
+      .where(eq(userArtImpressions.userId, userId));
+    
+    const viewedIds = new Set(viewedArt.map(v => v.artworkId));
+    const unseenCount = libraryArt.filter(art => !viewedIds.has(art.id)).length;
+    const unseenRatio = totalLibrary > 0 ? unseenCount / totalLibrary : 0;
+    
+    const stylesQuery = this.db
+      .selectDistinct({ motif: sql<string>`unnest(motifs)` })
+      .from(artSessions)
+      .where(eq(artSessions.isLibrary, true));
+    
+    const styles = await stylesQuery;
+    const distinctStyles = styles.filter(s => s.motif).length;
+    
+    return {
+      totalLibrary,
+      unseenCount,
+      unseenRatio,
+      distinctStyles,
+    };
+  }
+
+  async getLibraryArtwork(userId: string, orientation?: string, styles?: string[], limit: number = 20): Promise<ArtSession[]> {
+    const viewedArt = await this.db
+      .select({ artworkId: userArtImpressions.artworkId })
+      .from(userArtImpressions)
+      .where(eq(userArtImpressions.userId, userId));
+    
+    const viewedIds = viewedArt.map(v => v.artworkId);
+    
+    let whereConditions = [eq(artSessions.isLibrary, true)];
+    
+    if (orientation) {
+      whereConditions.push(eq(artSessions.orientation, orientation));
+    }
+    
+    if (viewedIds.length > 0) {
+      whereConditions.push(sql`${artSessions.id} NOT IN (${sql.join(viewedIds.map(id => sql`${id}`), sql`, `)})`);
+    }
+    
+    if (styles && styles.length > 0) {
+      whereConditions.push(sql`${artSessions.motifs} && ARRAY[${sql.join(styles.map(s => sql`${s}`), sql`, `)}]::text[]`);
+    }
+    
+    return await this.db
+      .select()
+      .from(artSessions)
+      .where(and(...whereConditions))
+      .orderBy(sql`RANDOM()`)
+      .limit(limit);
   }
 
   // Storage Metrics
