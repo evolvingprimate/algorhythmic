@@ -59,6 +59,14 @@ import { EffectLogger } from "@/lib/effectLogger";
 import { EngineRegistry } from "@/lib/renderers";
 import type { AudioAnalysis, ArtVote, ArtPreference, MusicIdentification } from "@shared/schema";
 
+// BUG FIX: Setup step enum for sequential modal flow (prevents overlapping modals)
+enum SetupStep {
+  IDLE = 'IDLE',
+  STYLE = 'STYLE',
+  AUDIO = 'AUDIO',
+  COMPLETE = 'COMPLETE',
+}
+
 export default function Display() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentImage, setCurrentImage] = useState<string | null>(null);
@@ -69,10 +77,13 @@ export default function Display() {
   const [volume, setVolume] = useState([80]);
   const [selectedStyles, setSelectedStyles] = useState<string[]>([]);
   const [dynamicMode, setDynamicMode] = useState<boolean>(false);
-  const [showStyleSelector, setShowStyleSelector] = useState(false);
-  const [showAudioSourceSelector, setShowAudioSourceSelector] = useState(false);
+  // BUG FIX: Use SetupStep enum instead of boolean flags to prevent overlapping modals
+  const [setupStep, setSetupStep] = useState<SetupStep>(SetupStep.IDLE);
   const [setupComplete, setSetupComplete] = useState(false); // Track if first-time setup is done
-  const [impressionVersion, setImpressionVersion] = useState(0); // Increment to force fresh artwork fetch
+  
+  // BUG FIX: Use ref instead of state for impressionVersion (immediate access across all code)
+  const impressionVersionRef = useRef(0);
+  const [impressionVersionTrigger, setImpressionVersionTrigger] = useState(0); // Trigger re-renders
   const [currentPrompt, setCurrentPrompt] = useState("");
   const [currentAudioAnalysis, setCurrentAudioAnalysis] = useState<AudioAnalysis | null>(null);
   const [currentArtworkId, setCurrentArtworkId] = useState<string | null>(null);
@@ -208,6 +219,7 @@ export default function Display() {
   // Fetch UNSEEN artwork only - Freshness Pipeline ensures never seeing repeats
   // GATED: Only load artworks after first-time setup is complete
   // CRITICAL: staleTime=0 forces fresh fetch on mount, cache invalidation on impressions
+  // BUG FIX: Include impressionVersion in queryKey for proper cache invalidation
   const { data: unseenResponse } = useQuery<{
     artworks: any[];
     poolSize: number;
@@ -215,7 +227,7 @@ export default function Display() {
     storageCount?: number;
     needsGeneration: boolean;
   }>({
-    queryKey: ["/api/artworks/next", sessionId.current],
+    queryKey: ["/api/artworks/next", sessionId.current, impressionVersionTrigger],
     queryFn: async () => {
       const res = await fetch(`/api/artworks/next?sessionId=${sessionId.current}`, {
         credentials: "include",
@@ -281,7 +293,7 @@ export default function Display() {
         description: "Couldn't load your saved preferences. You can select new ones now.",
         variant: "default",
       });
-      setShowStyleSelector(true);
+      setSetupStep(SetupStep.STYLE);
       setSetupComplete(false);
       return;
     }
@@ -290,7 +302,7 @@ export default function Display() {
     if (!preferences || !preferences.styles?.length) {
       // No preferences saved - show wizard for first-time user
       console.log('[Display] First-time user detected - showing style selector wizard');
-      setShowStyleSelector(true);
+      setSetupStep(SetupStep.STYLE);
       setSetupComplete(false);
       return;
     }
@@ -467,6 +479,12 @@ export default function Display() {
         for (let i = 0; i < orderedArtworks.length && attemptCount < MAX_VALIDATION_ATTEMPTS; i++) {
           const artwork = orderedArtworks[i];
           attemptCount++;
+          
+          // BUG FIX: Skip artworks we've already recorded impressions for (already seen)
+          if (impressionRecorder.hasRecorded(artwork.id)) {
+            console.log(`[Display] ⏭️ Skipping artwork ${artwork.id} - already recorded impression`);
+            continue;
+          }
           
           console.log(`[Display] Attempt ${attemptCount}/${MAX_VALIDATION_ATTEMPTS}: Validating ${artwork.imageUrl.substring(0, 60)}...`);
           
@@ -725,6 +743,12 @@ export default function Display() {
     maxBatchSize: 200,
     flushDelayMs: 2000,
     sessionId: sessionId.current, // For cache invalidation
+    // BUG FIX: Increment impressionVersion after successful flush to force fresh artwork fetch
+    onFlush: () => {
+      impressionVersionRef.current += 1;
+      setImpressionVersionTrigger(impressionVersionRef.current);
+      console.log(`[Display] 🔄 Impression flush complete - version now ${impressionVersionRef.current}`);
+    },
   });
 
   // Generate art mutation
@@ -832,8 +856,9 @@ export default function Display() {
           createdAt: new Date().toISOString(),
         };
         
+        // BUG FIX: Use 3-part queryKey with impressionVersionRef
         queryClient.setQueryData(
-          ["/api/artworks/next", sessionId.current],
+          ["/api/artworks/next", sessionId.current, impressionVersionRef.current],
           (old: any) => ({
             artworks: [
               newArtwork,
@@ -859,12 +884,17 @@ export default function Display() {
         console.log('[FlickerFix] Pinned fresh artwork:', newArtwork.id);
       }
       
+      // BUG FIX: Increment impressionVersion to force fresh artwork fetch
+      impressionVersionRef.current += 1;
+      setImpressionVersionTrigger(impressionVersionRef.current);
+      
       // PEER-REVIEWED FIX #2: Invalidate with refetchType: "active" + 250ms debounce (React Query v5)
       // React Query v5 requires refetchType: "active" to refetch mounted queries
       // 250ms debounce gives DB time to sync before refetch
+      // BUG FIX: Include impressionVersion in invalidation key (incremented above)
       setTimeout(() => {
         queryClient.invalidateQueries({ 
-          queryKey: ["/api/artworks/next", sessionId.current],
+          queryKey: ["/api/artworks/next", sessionId.current, impressionVersionRef.current],
           refetchType: "active",
         });
       }, 250);
@@ -963,7 +993,10 @@ export default function Display() {
       });
       // Invalidate both gallery (saved only) and unseen artworks (freshness pipeline)
       queryClient.invalidateQueries({ queryKey: ["/api/gallery"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/artworks/next"] });
+      // BUG FIX: Use 3-part queryKey with impressionVersionRef
+      queryClient.invalidateQueries({ 
+        queryKey: ["/api/artworks/next", sessionId.current, impressionVersionRef.current] 
+      });
     },
     onError: (error: Error) => {
       toast({
@@ -1428,13 +1461,15 @@ export default function Display() {
   };
 
   const handleStartListening = () => {
+    // BUG FIX: Use SetupStep enum for sequential flow
     // ALWAYS show style selector first, even if user has saved preferences
     // This lets them review/change their choices before starting
-    setShowStyleSelector(true);
+    setSetupStep(SetupStep.STYLE);
   };
 
   const handleAudioSourceConfirm = async (deviceId: string | undefined) => {
-    setShowAudioSourceSelector(false);
+    // BUG FIX: Advance to COMPLETE step (modal auto-closes via enum check)
+    setSetupStep(SetupStep.COMPLETE);
 
     try {
       if (!audioAnalyzerRef.current) {
@@ -1485,6 +1520,9 @@ export default function Display() {
     setSelectedStyles(styles);
     setDynamicMode(isDynamicMode);
     savePreferencesMutation.mutate({ styles, dynamicMode: isDynamicMode });
+    
+    // BUG FIX: Advance to AUDIO step after style selection
+    setSetupStep(SetupStep.AUDIO);
     
     // Mark setup as complete after first-time user saves preferences
     if (!setupComplete) {
@@ -1608,7 +1646,7 @@ export default function Display() {
       </div>
 
       {/* Loading Spinner Overlay - shown during validation/auto-generation (hidden during wizard) */}
-      {isValidatingImages && !showStyleSelector && !showAudioSourceSelector && (
+      {isValidatingImages && setupStep !== SetupStep.STYLE && setupStep !== SetupStep.AUDIO && (
         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-background/95 backdrop-blur-sm">
           <div className="flex flex-col items-center gap-6">
             <div className="animate-spin rounded-full h-16 w-16 border-4 border-primary border-t-transparent"></div>
@@ -1778,7 +1816,7 @@ export default function Display() {
             <Button 
               variant="outline" 
               size="icon"
-              onClick={() => setShowStyleSelector(true)}
+              onClick={() => setSetupStep(SetupStep.STYLE)}
               data-testid="button-open-style-selector"
             >
               <Settings className="h-5 w-5" />
@@ -1966,24 +2004,24 @@ export default function Display() {
         </div>
       )}
 
-      {/* Style Selector Modal */}
-      {showStyleSelector && (
+      {/* Style Selector Modal - BUG FIX: Sequential flow via SetupStep enum */}
+      {setupStep === SetupStep.STYLE && (
         <StyleSelector
           selectedStyles={selectedStyles}
           dynamicMode={dynamicMode}
           onStylesChange={handleStylesChange}
           onClose={() => {
-            setShowStyleSelector(false);
-            // After style selection, show audio source selector
-            setShowAudioSourceSelector(true);
+            // BUG FIX: Return to IDLE instead of manually advancing to AUDIO
+            // handleStylesChange will advance to AUDIO when user confirms
+            setSetupStep(SetupStep.IDLE);
           }}
         />
       )}
 
-      {/* Audio Source Selector Modal */}
+      {/* Audio Source Selector Modal - BUG FIX: Sequential flow via SetupStep enum */}
       <AudioSourceSelector
-        open={showAudioSourceSelector}
-        onClose={() => setShowAudioSourceSelector(false)}
+        open={setupStep === SetupStep.AUDIO}
+        onClose={() => setSetupStep(SetupStep.IDLE)}
         onConfirm={handleAudioSourceConfirm}
       />
 

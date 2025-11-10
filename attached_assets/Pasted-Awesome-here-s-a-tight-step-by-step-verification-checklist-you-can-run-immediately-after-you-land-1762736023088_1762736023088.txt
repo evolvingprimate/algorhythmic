@@ -1,0 +1,325 @@
+Awesome — here’s a tight, step-by-step verification checklist you can run immediately after you land the two fixes. It’s organized so you can stop the moment anything fails.
+
+---
+
+# ✅ Post-Fix Verification Checklist
+
+## 0) Prereqs (once)
+
+* Open **DevTools** (Console + Network) in your display page.
+* Clear browser cache: **Cmd/Ctrl+Shift+R**.
+* Have DB access for quick spot checks.
+
+---
+
+## 1) Local build sanity
+
+**Commands**
+
+```bash
+# from repo root
+npm run build
+npm run dev
+```
+
+**Pass if**
+
+* Build completes with no new TypeScript errors.
+* Dev server starts clean (no red stack traces).
+
+---
+
+## 2) Bug #1 – Frame Repetition (React Query key)
+
+**Goal:** Invalidation uses the **exact** query key to fetch fresh frames (no old → new → old flicker).
+
+**What to verify in code (quick skim)**
+
+* `client/src/pages/display.tsx`
+
+  * `useQuery` key includes **both**:
+
+    ```
+    ["/api/artworks/next", sessionIdRef.current, impressionVersionRef.current]
+    ```
+  * All invalidations use the **same** full key:
+
+    ```
+    queryClient.invalidateQueries({
+      queryKey: ["/api/artworks/next", sessionIdRef.current, impressionVersionRef.current],
+      refetchType: "active",
+    })
+    ```
+
+**Manual test**
+
+1. Load `/display` → wait for initial images.
+2. Open **Network** tab → filter `artworks/next`.
+3. Click **Generate Art**.
+4. Watch:
+
+   * **Expected sequence** (within ~0.5–2s after generation completes):
+
+     * One **GET** to `/api/artworks/next?sessionId=...&impressionVersion=...`
+     * **Response** contains the new artwork **first**.
+   * **Console** shows:
+
+     * `[FlickerFix] Pinned fresh artwork: <id>`
+     * Optional: `[FlickerFix] Server now has pinned artwork - dropping pin early`
+
+**Fail if**
+
+* No GET after generation → invalidation key mismatch (or missing `refetchType:"active"`).
+* Old frame replaces pinned one before refetch returns → missing pin or wrong merge order.
+
+---
+
+## 3) Bug #2 – Double-Input (sequential modals)
+
+**Goal:** Style → Audio → Complete (no overlapping modals).
+
+**What to verify in code**
+
+* State machine present (or equivalent sequential guard):
+
+  ```ts
+  enum SetupStep { IDLE, STYLE, AUDIO, COMPLETE }
+  const [setupStep, setSetupStep] = useState(SetupStep.IDLE)
+  // handleStyleConfirm -> setSetupStep(SetupStep.AUDIO)
+  // handleAudioConfirm -> setSetupStep(SetupStep.COMPLETE)
+  ```
+* No code path sets **both** modals open at once.
+
+**Manual test**
+
+1. Click **Create/Generate** from a clean page load.
+2. Confirm:
+
+   * Only **Style** modal opens.
+   * On confirm, **Audio** opens; Style closes.
+   * On confirm, both close and generation proceeds.
+
+**Fail if**
+
+* You can see both modals simultaneously.
+* Clicking outside causes both to re-open → add guards around dismissal handlers.
+
+---
+
+## 4) Telemetry & logs (client)
+
+**Goal:** Success/failure counters and sampled logs work; no console spam.
+
+**What to look for in Console**
+
+* Success (10% sampled):
+
+  ```
+  [Metrics] client_batch_flush_success=1 total=XX
+  ```
+* Failure (always):
+
+  ```
+  [Metrics] client_batch_flush_failure=1 rate=0.100
+  ```
+* No divide-by-zero: when `flushSuccess===0`, you should see `rate=n/a`.
+
+**Fail if**
+
+* Success logs flood every flush (sampling not applied).
+* Failure logs missing when you simulate a network error (see §8).
+
+---
+
+## 5) Batch impressions & cache invalidation
+
+**Goal:** After a batch flush, unseen pool updates immediately.
+
+**Steps**
+
+1. Load `/display`, wait ~10s.
+2. **Network** → ensure a **single** `POST /api/artworks/batch-impressions` (not N singles).
+3. After the 200 response, look for:
+
+   * A **single** `invalidateQueries` → **one** GET to `/api/artworks/next?...` with **full** key params.
+4. Console:
+
+   * `[Display] 📦 Queued X impressions`
+   * `[ImpressionRecorder] ✅ Flushed X impressions`
+
+**Fail if**
+
+* Multiple POSTs for impressions (chunking not working or no batching).
+* No GET after flush (missed invalidation).
+* GET uses a different key (missing session/impressionVersion).
+
+---
+
+## 6) Multi-tab concurrency (same user session)
+
+**Goal:** No duplicate frames; single impression per artwork.
+
+**Steps**
+
+1. Tab A: open `/display` → wait for load.
+2. Duplicate to **Tab B** (same session).
+3. In Tab A: **Generate Art**; wait for fresh display.
+4. In Tab B: within ~5s, new artwork should appear (via refetch/SSE/WebSocket).
+5. Console (both tabs):
+
+   * **No** repeated `[FlickerFix] Skipping duplicate frame` spam.
+6. DB check (optional):
+
+   ```sql
+   SELECT COUNT(*) 
+   FROM user_art_impressions 
+   WHERE user_id=$USER AND artwork_id=$NEW_ID;
+   -- Expect: 1
+   ```
+
+**Fail if**
+
+* Two impressions for same artwork/user.
+* Artwork inserted twice into MorphEngine (duplicates).
+
+---
+
+## 7) Slow-network resilience (throttled)
+
+**Goal:** Batches and beacons land even under poor network.
+
+**Steps**
+
+1. Enable **Network Throttle**: “Slow 3G”.
+2. Reload `/display`; wait up to 60s.
+3. Confirm:
+
+   * List renders eventually.
+   * `POST /batch-impressions` completes (may retry).
+4. Close tab **within 2s** of load.
+5. Check server logs:
+
+   * `POST /api/artworks/batch-impressions` arriving shortly after close (beacon or keepalive).
+
+**Fail if**
+
+* No POSTs after close (beacon + keepalive not firing).
+* Repeated retries without success (check CORS/headers for beacon).
+
+---
+
+## 8) Failure simulation (quick)
+
+**Goal:** Ensure client logs failures and recovers.
+
+**Steps**
+
+1. Temporarily block the batch endpoint in DevTools (**Network → Local Overrides** or break server).
+2. Trigger a batch (reload page).
+3. Console should show **failure** log with rate.
+4. Restore endpoint; next flush should succeed and log success.
+
+**Fail if**
+
+* Failures do not log.
+* Hook wedges (never resets `isFlushingRef`); subsequent flushes don’t run.
+
+---
+
+## 9) Large batch chunking (optional)
+
+**Goal:** Chunks ≤200 per request; multiple batches succeed.
+
+**Steps**
+
+* Seed DB with 250 unseen artworks for the user (or temporarily mock queue).
+* Load `/display`.
+* **Network**:
+
+  * 2 POSTs: one ~200 IDs, one ~50 IDs.
+  * Both 200 OK.
+* DB:
+
+  ```sql
+  SELECT COUNT(*) 
+  FROM user_art_impressions 
+  WHERE user_id=$USER AND created_at > NOW() - INTERVAL '15 minutes';
+  -- Expect: +250 new rows (or upserts with updated viewed_at)
+  ```
+
+**Fail if**
+
+* Single POST with 413/large payload.
+* Fewer than expected impressions recorded.
+
+---
+
+## 10) SQL spot checks (fast)
+
+**Legacy untracked should be 0 after a full cycle**
+
+```sql
+SELECT COUNT(*) AS legacy_untracked
+FROM art_sessions a
+LEFT JOIN user_art_impressions i ON i.artwork_id = a.id
+WHERE i.id IS NULL;
+-- Expect: 0
+```
+
+**Cooldown refresh semantics**
+
+```sql
+SELECT artwork_id, MIN(viewed_at) AS first, MAX(viewed_at) AS last
+FROM user_art_impressions
+WHERE user_id = $USER
+GROUP BY artwork_id
+HAVING COUNT(*) > 1
+ORDER BY last DESC
+LIMIT 5;
+-- Expect: last > first (timestamps update on repeat views)
+```
+
+---
+
+## 11) Edge/caching sanity
+
+**Goal:** New bundle actually loads.
+
+**Steps**
+
+* **Cmd/Ctrl+Shift+R** on `/display`.
+* **Network** on initial HTML:
+
+  * `Cache-Control: no-cache, no-store, must-revalidate`
+  * `Pragma: no-cache`, `Expires: 0`
+* Verify fresh JS bundle hash (or `?v=` param) changes after rebuilds.
+
+---
+
+## 12) Acceptance criteria (quick checklist)
+
+* [ ] No flicker; fresh artwork remains visible through refetch.
+* [ ] Exactly one GET after each invalidation (full key match).
+* [ ] Only one modal at a time; Style → Audio → Complete.
+* [ ] One batch POST per load (chunked as needed), no N singles.
+* [ ] Multi-tab: one impression per artwork; no duplicate frames.
+* [ ] Beacon/keepalive delivers impressions on tab close.
+* [ ] Console metrics: sampled successes, all failures logged.
+* [ ] SQL: **legacy_untracked = 0**.
+
+---
+
+## 13) Quick rollback check (safety)
+
+If something regresses:
+
+```bash
+git revert <last-commit> --no-edit
+# auto-restart on Replit should bring old behavior back
+```
+
+* Verify legacy path still records individual impressions and displays pool.
+
+---
+
+If you want, paste your updated `invalidateQueries(...)` and the modal state block here, and I’ll sanity-check the exact lines for key alignment and race guards before you run this.

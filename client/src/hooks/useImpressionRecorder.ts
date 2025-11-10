@@ -5,6 +5,7 @@ interface UseImpressionRecorderOptions {
   maxBatchSize?: number;
   flushDelayMs?: number;
   sessionId?: string; // For cache invalidation
+  onFlush?: () => void; // Called after successful flush
 }
 
 /**
@@ -16,7 +17,7 @@ interface UseImpressionRecorderOptions {
  * - Immediate first-frame flush for hero impression
  */
 export function useImpressionRecorder(options: UseImpressionRecorderOptions = {}) {
-  const { maxBatchSize = 200, flushDelayMs = 2000, sessionId } = options;
+  const { maxBatchSize = 200, flushDelayMs = 2000, sessionId, onFlush } = options;
   
   // Queue of pending impression IDs
   const queueRef = useRef<Set<string>>(new Set());
@@ -108,9 +109,14 @@ export function useImpressionRecorder(options: UseImpressionRecorderOptions = {}
       // ⭐ OPTIMIZED: Single cache invalidation after all chunks (not per chunk)
       if (anyChunkSucceeded && sessionId) {
         queryClient.invalidateQueries({
-          queryKey: ["/api/artworks/next", sessionId],
+          queryKey: ["/api/artworks/next", sessionId, undefined],  // Use undefined as wildcard for third segment
           refetchType: "active",
         });
+      }
+      
+      // ⭐ BUG FIX: Call onFlush callback after successful flush
+      if (anyChunkSucceeded && onFlush) {
+        onFlush();
       }
     } finally {
       // ⭐ SAFETY: Always reset flush flag, even on error
@@ -234,5 +240,6 @@ export function useImpressionRecorder(options: UseImpressionRecorderOptions = {}
     flush,
     getPendingCount: () => queueRef.current.size,
     getRecordedCount: () => recordedRef.current.size,
+    hasRecorded: (id: string) => recordedRef.current.has(id),
   };
 }

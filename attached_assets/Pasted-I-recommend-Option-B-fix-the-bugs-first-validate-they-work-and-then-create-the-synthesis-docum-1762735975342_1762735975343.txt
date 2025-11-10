@@ -1,0 +1,148 @@
+I recommend **Option B**—fix the bugs first, validate they work, and then create the synthesis document. Here's why:
+
+- **Practical Priority**: The frame repetition and double-input bugs are core UX blockers (e.g., fresh art not showing reliably, users getting frustrated with modal overlaps). Fixing them now gives immediate value and lets you test in a real environment. Documentation is great for long-term reference, but it's better with "before/after" evidence from fixed code.
+- **Efficiency**: Bug fixes are quick (50-65 min total per your estimate) and build momentum. The synthesis doc will be more accurate with validated fixes included (e.g., "✅ FIXED with this code snippet").
+- **Risk Reduction**: Validating fixes ensures no regressions before documenting. If something breaks (e.g., React Query edge case), we catch it early.
+
+Let's jump into **fixing the bugs** (I'll provide exact code based on your codebase snippets from earlier messages). We'll start with frame repetition (React Query mismatch), then double-input (modal flow). After each, I'll give validation steps.
+
+### Bug #1: Frame Repetition Fix (React Query Cache Key Mismatch)
+**Root Cause**: The `useQuery` key includes `sessionId` and `impressionVersion` (or similar dynamic state), but `invalidateQueries` uses a partial key—React Query v5 doesn't refetch active queries without an exact match.
+
+**Fix Time**: ~30 min  
+**Files to Modify**: `client/src/pages/display.tsx` (around lines 772-809 for mutation.onSuccess, and the useQuery definition).  
+
+**Step-by-Step Implementation**:
+1. **Add Impression Version Tracking**: Use a ref or state to track a version that increments on impressions (ensures cache busting).  
+   ```tsx
+   // At top of component (near sessionId ref)
+   const impressionVersionRef = useRef(0);
+   ```
+
+2. **Update useQuery Key**: Include the version.  
+   ```tsx
+   const unseenResponse = useQuery({
+     queryKey: ["/api/artworks/next", sessionId.current, impressionVersionRef.current], // Add version
+     queryFn: async () => {
+       const res = await fetch(`/api/artworks/next?sessionId=${sessionId.current}`);
+       return await res.json();
+     },
+     enabled: isAuthenticated && setupComplete,
+     staleTime: 0,
+     refetchOnMount: true,
+   });
+   ```
+
+3. **Increment Version & Invalidate Exactly in onSuccess**:  
+   ```tsx
+   onSuccess: (data, variables) => {
+     // ... existing history management + refetchUsageStats ...
+     
+     if (data.session) {
+       // ... existing optimistic setQueryData ...
+       
+       // Increment version to bust cache
+       impressionVersionRef.current += 1;
+       
+       // Exact invalidation with version
+       queryClient.invalidateQueries({
+         queryKey: ["/api/artworks/next", sessionId.current, impressionVersionRef.current],
+         refetchType: "active", // Critical for v5
+       });
+     }
+   },
+   ```
+
+4. **Also Increment in Impression Recording**: If impressions happen elsewhere (e.g., in smart sync or ArtFrame), increment there too.  
+   ```tsx
+   // Example in ArtFrame useEffect or smart sync
+   useEffect(() => {
+     if (!recordedImpressions.current.has(artwork.id)) {
+       // ... mutateAsync ...
+       impressionVersionRef.current += 1; // Bust cache on view
+     }
+   }, [artwork.id]);
+   ```
+
+**Validation Steps**:
+1. Deploy/restart workflow.  
+2. Load `/display`, generate art.  
+3. Check console: No stale frames; fresh art shows immediately.  
+4. Refresh page 3x: Storage: 0, no repetition.  
+5. Network tab: Confirm GET `/api/artworks/next` refetches with new data post-invalidation.  
+6. Test failure: If repetition persists, log `queryKey` in useQuery and invalidate—ensure they match.
+
+### Bug #2: Double-Input Setup (Parallel Modals)
+**Root Cause**: `handleCreateArtNow` opens style and audio selectors simultaneously, allowing double-input (e.g., user submits both, causing race conditions in generation).
+
+**Fix Time**: ~20 min  
+**Files to Modify**: `client/src/pages/display.tsx` (around the handleCreateArtNow function and modal renders).  
+
+**Step-by-Step Implementation**:
+1. **Define State Machine Enum**:  
+   ```tsx
+   enum SetupStep {
+     IDLE = 'idle',
+     STYLE = 'style',
+     AUDIO = 'audio',
+     COMPLETE = 'complete',
+   }
+   const [setupStep, setSetupStep] = useState<SetupStep>(SetupStep.IDLE);
+   ```
+
+2. **Update Handle Function to Sequential**:  
+   ```tsx
+   const handleCreateArtNow = () => {
+     if (setupStep === SetupStep.IDLE) {
+       setSetupStep(SetupStep.STYLE); // Start with style
+     }
+   };
+   ```
+
+3. **Modify Modal Renders & Confirm Handlers**: Render modals conditionally based on step.  
+   ```tsx
+   // In JSX:
+   {setupStep === SetupStep.STYLE && (
+     <StyleSelectorModal
+       onConfirm={() => {
+         // Save styles...
+         setSetupStep(SetupStep.AUDIO); // Advance to audio
+       }}
+       onCancel={() => setSetupStep(SetupStep.IDLE)}
+     />
+   )}
+   {setupStep === SetupStep.AUDIO && (
+     <AudioSourceSelectorModal
+       onConfirm={() => {
+         // Save audio...
+         setSetupStep(SetupStep.COMPLETE); // Done, trigger generation if needed
+       }}
+       onCancel={() => setSetupStep(SetupStep.IDLE)}
+     />
+   )}
+   ```
+
+4. **Optional: Auto-Trigger Generation on Complete**  
+   ```tsx
+   useEffect(() => {
+     if (setupStep === SetupStep.COMPLETE) {
+       generateArtMutation.mutate({ /* params */ });
+       setSetupStep(SetupStep.IDLE); // Reset
+     }
+   }, [setupStep]);
+   ```
+
+**Validation Steps**:
+1. Deploy/restart.  
+2. Click "Generate Art": Only style modal opens first.  
+3. Confirm style: Audio modal opens (no overlap).  
+4. Confirm audio: Generation starts without double-input.  
+5. Cancel mid-way: Resets to idle, no partial submits.  
+6. Test spam clicks: State machine prevents multiples.
+
+### **After Fixes: Validate & Document**
+- **Total Time**: ~1 hour.  
+- **Full Test**: Run your E2E suite (multi-tab, slow 3G, etc.) to confirm no regressions.  
+- **Then Create Synthesis Doc**: Update with "✅ FIXED" sections, including before/after code diffs, file paths (e.g., `display.tsx:427`), and Replit notes (e.g., auto-restart confirms changes). Paste into Grok/ChatGPT for final validation.
+
+If you hit snags during fixes (e.g., type errors), share logs/snippets—I'll debug. Once done, we can build the doc in Build mode. Let's crush these bugs! 🚀

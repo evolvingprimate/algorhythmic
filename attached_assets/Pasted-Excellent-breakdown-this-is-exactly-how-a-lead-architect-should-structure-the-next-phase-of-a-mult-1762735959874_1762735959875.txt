@@ -1,0 +1,66 @@
+Excellent breakdown — this is exactly how a lead architect should structure the next phase of a multi-AI review cycle.
+
+Your plan adds the one thing the previous reviews lacked: **source-level specificity.**
+You’re right — once those two bugs are fixed and validated, you’ll have a clean baseline to document from.
+
+Here’s my recommendation and rationale 👇
+
+---
+
+### ✅ **Recommended Path: Option B — Fix First, Document Second**
+
+**Why:**
+
+* **Factual grounding:** your synthesis doc will include *verified* before/after code blocks, not assumptions.
+* **Fewer rewrites:** you won’t need to revise the document once the fixes are confirmed working.
+* **Better demos:** the “✅ FIXED” tags make the report investor-friendly and credible.
+
+**Suggested Workflow:**
+
+1. **Bug 1 – Frame Repetition (React Query)**
+
+   * Edit `client/src/pages/display.tsx` ≈ line 427
+   * Update invalidate key → `[“/api/artworks/next”, sessionIdRef.current, impressionVersionRef.current]`
+   * Re-run `npm run dev` → watch the Network tab for fresh fetches after each impression.
+   * Confirm console logs show only one `[Display] 📦 Queued X impressions`.
+
+2. **Bug 2 – Double-Input Modal**
+
+   * Edit same file (setup section).
+   * Replace parallel modal triggers with the sequential state-machine block you outlined.
+   * Validate by stepping through setup: **Style → Audio → Complete** (no overlap).
+   * Confirm React DevTools shows one active modal at a time.
+
+3. **Quick QA**
+
+   * Open three browser tabs, generate artwork in each.
+   * Expect: zero duplicate frames, synchronized fresh art, no double-modal popups.
+   * Log sample: `[FlickerFix] Skipping duplicate frame` should disappear entirely.
+
+4. **Then Build the Doc**
+
+   * Once validated, I’ll generate `docs/AI_REVIEW_SYNTHESIS.md`
+     including:
+
+     * ✅ Fixed status and commit hashes
+     * ASCII flow diagrams
+     * Cross-AI consensus table
+     * Implementation timeline
+     * Open debates section
+
+---
+
+### ⏱️ Time Budget
+
+| Task                    | Est.   | Output                            |
+| ----------------------- | ------ | --------------------------------- |
+| Frame Repetition fix    | 30 min | Fresh cache refresh               |
+| Double-Input Modal fix  | 20 min | Sequential UX                     |
+| QA validation           | 15 min | Clean telemetry                   |
+| Doc creation (Option B) | 30 min | `AI_REVIEW_SYNTHESIS.md` complete |
+
+≈ **95 minutes total** for a fully verified, publish-ready synthesis.
+
+---
+
+Would you like me to prep the **step-by-step verification checklist** (commands, expected console output, and QA validation steps) so that once you implement the fixes you can confirm they’re successful before we generate the synthesis document?

@@ -1,0 +1,120 @@
+Excellent — clear decision.
+Here’s your prioritized to-do list so we can **fix what’s hurting first** and still keep track of the enhancements for later.
+
+---
+
+# 📋 **AlgoRhythmic Development To-Do List**
+
+## 🔥 **Immediate (Blocking Bugs)**
+
+**Priority: Critical – fix before any new features**
+
+1. **🪞 Frame Repetition / Old Frames Still Showing**
+
+   * **File:** `client/src/pages/display.tsx`
+   * **Root cause:** React Query cache invalidation key missing `impressionVersion`.
+   * **Fix:**
+
+     ```ts
+     queryClient.invalidateQueries({
+       queryKey: ["/api/artworks/next", sessionIdRef.current, impressionVersionRef.current],
+       refetchType: "active",
+     });
+     ```
+   * **Validate:**
+
+     * Generate new artwork → no flicker or old frame reappearance.
+     * Only one `GET /api/artworks/next?...` after each invalidation.
+
+2. **🎛️ Double-Input / Modal Duplication**
+
+   * **File:** `client/src/pages/display.tsx`
+   * **Root cause:** Style + Audio modals triggered simultaneously.
+   * **Fix:** Sequential modal state machine.
+
+     ```ts
+     enum SetupStep { IDLE, STYLE, AUDIO, COMPLETE }
+     const [setupStep, setSetupStep] = useState(SetupStep.IDLE);
+     const handleStyleConfirm = () => setSetupStep(SetupStep.AUDIO);
+     ```
+   * **Validate:**
+
+     * Only one modal visible at a time.
+     * Flow: **Style → Audio → Complete.**
+
+3. **📊 Add Telemetry Logging (optional for debugging)**
+
+   * Log when `invalidateQueries()` fires and when a modal step advances.
+   * Helps confirm both fixes are behaving as expected.
+
+---
+
+## ⚙️ **Wanted (Next Sprint)**
+
+**Priority: High – start once critical bugs are gone**
+
+4. **🎨 Predictive Pre-Generation**
+
+   * Simple heuristic: reuse last style & mood to start rendering next frame while current one fades.
+   * Goal: zero perceived lag.
+
+5. **🔒 Privacy Enhancements**
+
+   * Hash `userId` in logs.
+   * Add lightweight consent notice in settings.
+
+6. **⚡ Redis Caching**
+
+   * Cache `/api/artworks/next` responses (TTL = 7 days).
+   * Expect ~30 % DB load reduction.
+
+7. **🛡️ Circuit Breaker for DALL-E**
+
+   * Detect API timeouts/errors.
+   * Fallback to “pooled art” or placeholder frame.
+
+---
+
+## 🌈 **Nice-to-Have (Future Enhancements)**
+
+**Priority: Medium – after stability + core UX improvements**
+
+8. **📱 Mobile/Tablet QA**
+
+   * Real user testing on iPads/phones.
+   * Validate touch gestures + performance.
+
+9. **📈 “Art DNA” Dashboard**
+
+   * Aggregate user art stats + style trends.
+
+10. **🎭 Impression Replay Mode**
+
+* Curated playback of past generated art (opt-in).
+
+---
+
+## 💤 **Deferred Until Growth**
+
+**Priority: Low – wait until measurable scale**
+
+11. **🏗️ Scale Architecture**
+
+* Sharding / message queues (trigger: 10 K users or 100 M rows).
+
+12. **🧠 ML Prediction / A-B Testing**
+
+* Train local models only after ≥ 5 K users + 30 days of history.
+
+---
+
+## ✅ **Next Action**
+
+* [ ] Fix frame repetition (verify cache key, test 3 tabs)
+* [ ] Fix double-input modal logic (sequential flow)
+* [ ] Run post-fix verification checklist (12 steps from earlier)
+* [ ] Once verified → generate `docs/AI_REVIEW_SYNTHESIS.md` with “✅ FIXED” tags
+
+---
+
+Would you like me to pin this list as a **queryable task register** (so later you can ask, “what’s next in immediate tasks?” or “show all deferred items”) — or keep it as a static markdown snippet for now?

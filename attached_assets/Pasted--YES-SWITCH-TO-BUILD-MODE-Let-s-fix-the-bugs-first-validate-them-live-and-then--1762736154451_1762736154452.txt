@@ -1,0 +1,165 @@
+**YES — SWITCH TO BUILD MODE**
+
+Let’s **fix the bugs first**, **validate them live**, and **then** create the synthesis document with **"✅ FIXED"** proof.
+
+---
+
+### **BUILD MODE: EXECUTING OPTION B**
+
+#### **Step 1: Fix Frame Repetition Bug**  
+**File:** `client/src/pages/display.tsx`  
+**Target Lines:** ~427–435 (invalidateQueries), ~200–250 (useQuery), ~770–810 (onSuccess)
+
+```ts
+// === ADD NEAR TOP (with sessionId ref) ===
+const impressionVersionRef = useRef(0);
+```
+
+```ts
+// === UPDATE useQuery KEY ===
+const unseenResponse = useQuery({
+  queryKey: ["/api/artworks/next", sessionId.current, impressionVersionRef.current],
+  queryFn: async () => {
+    const res = await fetch(`/api/artworks/next?sessionId=${sessionId.current}`);
+    return await res.json();
+  },
+  enabled: isAuthenticated && setupComplete,
+  staleTime: 0,
+  refetchOnMount: true,
+});
+```
+
+```ts
+// === UPDATE onSuccess (after optimistic update) ===
+onSuccess: (data) => {
+  // ... existing code ...
+
+  if (data.session) {
+    // ... existing setQueryData ...
+
+    // INCREMENT VERSION TO BUST CACHE
+    impressionVersionRef.current += 1;
+
+    // EXACT INVALIDATION
+    queryClient.invalidateQueries({
+      queryKey: ["/api/artworks/next", sessionId.current, impressionVersionRef.current],
+      refetchType: "active"
+    });
+  }
+},
+```
+
+```ts
+// === INCREMENT ON IMPRESSION RECORD (in ArtFrame or sync) ===
+useEffect(() => {
+  if (!recordedImpressions.current.has(artwork.id)) {
+    recordedImpressions.current.add(artwork.id);
+    recordImpressionMutation.mutateAsync(artwork.id);
+    impressionVersionRef.current += 1; // ← BUST CACHE
+  }
+}, [artwork.id]);
+```
+
+**Validation (Run Now):**
+```bash
+# 1. Save file → Replit auto-restart
+# 2. Open /display
+# 3. Generate art
+# 4. Check Network tab: GET /api/artworks/next → Fresh: 1, Storage: 0
+# 5. Refresh 3x → No old frames
+# 6. Open 2 tabs → No duplicates
+```
+
+---
+
+#### **Step 2: Fix Double-Input Bug**  
+**File:** `client/src/pages/display.tsx`  
+**Target:** `handleCreateArtNow`, modal renders
+
+```ts
+// === ADD ENUM ===
+enum SetupStep {
+  IDLE = 'idle',
+  STYLE = 'style',
+  AUDIO = 'audio',
+  COMPLETE = 'complete',
+}
+const [setupStep, setSetupStep] = use hState<SetupStep>(SetupStep.IDLE);
+```
+
+```ts
+// === REPLACE handleCreateArtNow ===
+const handleCreateArtNow = () => {
+  if (setupStep === SetupStep.IDLE) {
+    setSetupStep(SetupStep.STYLE);
+  }
+};
+```
+
+```ts
+// === REPLACE MODAL RENDERS ===
+{setupStep === SetupStep.STYLE && (
+  <StyleSelectorModal
+    onConfirm={(styles) => {
+      // Save styles
+      setSetupStep(SetupStep.AUDIO);
+    }}
+    onCancel={() => setSetupStep(SetupStep.IDLE)}
+  />
+)}
+{setupStep === SetupStep.AUDIO && (
+  <AudioSourceSelectorModal
+    onConfirm={() => {
+      setSetupStep(SetupStep.COMPLETE);
+    }}
+    onCancel={() => setSetupStep(SetupStep.IDLE)}
+  />
+)}
+```
+
+```ts
+// === AUTO-TRIGGER GENERATION ===
+useEffect(() => {
+  if (setupStep === SetupStep.COMPLETE) {
+    generateArtMutation.mutate({ /* params */ });
+    setSetupStep(SetupStep.IDLE);
+  }
+}, [setupStep]);
+```
+
+**Validation:**
+```bash
+# 1. Click "Create Art Now"
+# 2. Only style modal opens
+# 3. Confirm → Audio modal opens
+# 4. Confirm → Generation starts
+# 5. Spam click → No double modals
+```
+
+---
+
+### **BUILD MODE: NEXT — CREATE SYNTHESIS DOC**
+
+Once both bugs are **confirmed fixed**, I will:
+
+1. **Create `docs/AI_REVIEW_SYNTHESIS.md`**
+2. **Include before/after code** with exact line numbers
+3. **Add "✅ FIXED"** badges
+4. **Merge Grok + ChatGPT + Architect**
+5. **Include ASCII diagrams, ROI, triggers**
+
+---
+
+**YOUR ACTION NOW:**
+
+1. **Apply the two code fixes above**  
+2. **Save → Replit auto-restart**  
+3. **Test both bugs**  
+4. **Reply with:**
+   - ✅ Frame bug fixed  
+   - ✅ Double-input fixed  
+   - Or paste error/logs
+
+Then I’ll **build the synthesis doc in 30 minutes**.
+
+**We’re 60 minutes from victory.** Let’s go.
