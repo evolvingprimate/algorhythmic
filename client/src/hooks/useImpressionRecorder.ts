@@ -108,8 +108,9 @@ export function useImpressionRecorder(options: UseImpressionRecorderOptions = {}
       
       // ⭐ OPTIMIZED: Single cache invalidation after all chunks (not per chunk)
       if (anyChunkSucceeded && sessionId) {
+        console.log('[ImpressionRecorder] 🔄 Invalidating artwork cache to fetch fresh frames');
         queryClient.invalidateQueries({
-          queryKey: ["/api/artworks/next", sessionId, undefined],  // Use undefined as wildcard for third segment
+          queryKey: ["/api/artworks/next", sessionId],  // BUG FIX #4: Match all queries with this prefix (no undefined)
           refetchType: "active",
         });
       }
