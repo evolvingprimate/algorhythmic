@@ -58,6 +58,7 @@ import { parseDNAFromSession } from "@/lib/dna";
 import { EffectLogger } from "@/lib/effectLogger";
 import { EngineRegistry } from "@/lib/renderers";
 import { FrameValidator } from "@/lib/FrameValidator";
+import { DynamicModeController } from "@/components/DynamicModeController";
 import type { AudioAnalysis, ArtVote, ArtPreference, MusicIdentification } from "@shared/schema";
 
 // BUG FIX: Setup step enum for sequential modal flow (prevents overlapping modals)
@@ -2160,6 +2161,35 @@ export default function Display() {
           config={effectsConfig}
           onChange={setEffectsConfig}
           onClose={() => setShowEffectsMenu(false)}
+        />
+      )}
+
+      {/* Dynamic Mode Controller - Handles catalog bridges on style/track changes */}
+      {dynamicMode && setupComplete && (
+        <DynamicModeController
+          morphEngine={morphEngineRef.current}
+          styleTags={selectedStyles}
+          currentTrackId={currentMusicInfo ? `${currentMusicInfo.title}::${currentMusicInfo.artist}` : undefined}
+          sessionId={sessionId.current}
+          audioMeta={currentAudioAnalysis || undefined}
+          onTransitionStart={() => {
+            console.log('[Display] Catalog bridge transition starting...');
+          }}
+          onCatalogBridge={(artwork) => {
+            console.log('[Display] Catalog bridge loaded:', artwork.id);
+            // Record telemetry for catalog bridge
+            effectLoggerRef.current.logBridgeRender('catalog', artwork.id);
+          }}
+          onProceduralBridge={() => {
+            console.log('[Display] Procedural bridge (no catalog match)');
+            // Record telemetry for procedural bridge
+            effectLoggerRef.current.logBridgeRender('procedural', null);
+          }}
+          onTransitionComplete={(type, latency) => {
+            console.log(`[Display] Transition complete: ${type} (${latency}ms)`);
+            // Record telemetry
+            effectLoggerRef.current.logTransition(type, latency);
+          }}
         />
       )}
     </div>

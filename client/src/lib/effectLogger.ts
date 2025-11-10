@@ -145,4 +145,16 @@ export class EffectLogger {
       },
     };
   }
+
+  // Telemetry for catalog bridge rendering
+  logBridgeRender(type: 'catalog' | 'procedural', artworkId: string | null) {
+    console.log(`[EffectLogger] Bridge render logged: ${type}, artwork: ${artworkId}`);
+    // Could extend to POST to telemetry endpoint in the future
+  }
+
+  // Telemetry for style transition completion
+  logTransition(type: 'catalog' | 'procedural', latency: number) {
+    console.log(`[EffectLogger] Transition logged: ${type}, latency: ${latency}ms`);
+    // Could extend to POST to telemetry endpoint in the future
+  }
 }
