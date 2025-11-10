@@ -2164,8 +2164,8 @@ export default function Display() {
         />
       )}
 
-      {/* Dynamic Mode Controller - Handles catalog bridges on style/track changes */}
-      {dynamicMode && setupComplete && (
+      {/* Dynamic Mode Controller - Handles catalog bridges on ALL style/track changes */}
+      {setupComplete && (
         <DynamicModeController
           morphEngine={morphEngineRef.current}
           styleTags={selectedStyles}
