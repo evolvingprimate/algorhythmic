@@ -256,8 +256,10 @@ export function StyleSelector({ selectedStyles, dynamicMode = false, onStylesCha
   };
 
   const handleSave = () => {
+    // BUG FIX #3: Don't call onClose() here - wizard state machine handles modal hiding
+    // When onStylesChange calls setSetupStep(AUDIO), the style modal naturally hides
+    // because it only renders when setupStep === STYLE
     onStylesChange(localSelection, localDynamicMode);
-    onClose();
   };
 
   return (
