@@ -933,6 +933,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/admin/catalogue-health", async (req, res) => {
+    try {
+      const { CatalogueManager } = await import("./services/catalogue-manager");
+      const { PostgresStorage } = await import("./storage");
+      
+      if (!(storage instanceof PostgresStorage)) {
+        return res.status(503).json({ message: "Catalogue requires PostgreSQL database" });
+      }
+      
+      const catalogueManager = new CatalogueManager(storage);
+      const report = await catalogueManager.getHealthReport();
+      
+      res.json({
+        timestamp: new Date().toISOString(),
+        ...report,
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: "Error fetching catalogue health: " + error.message });
+    }
+  });
+
   const httpServer = createServer(app);
 
   // WebSocket server for real-time audio coordination

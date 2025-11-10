@@ -824,6 +824,50 @@ export class PostgresStorage implements IStorage {
       .where(eq(artSessions.id, artId));
   }
 
+  async updateArtSessionMetadata(
+    artId: string,
+    metadata: {
+      focalPoints?: any[];
+      safeArea?: any;
+      sidefillPalette?: string[];
+    }
+  ): Promise<ArtSession> {
+    const updated = await this.db
+      .update(artSessions)
+      .set({
+        focalPoints: metadata.focalPoints ? JSON.stringify(metadata.focalPoints) : undefined,
+        safeArea: metadata.safeArea ? JSON.stringify(metadata.safeArea) : undefined,
+        sidefillPalette: metadata.sidefillPalette ? JSON.stringify(metadata.sidefillPalette) : undefined,
+      })
+      .where(eq(artSessions.id, artId))
+      .returning();
+    
+    if (!updated[0]) {
+      throw new Error("Art session not found");
+    }
+    
+    return updated[0];
+  }
+
+  async getLibraryArtworksNeedingEnrichment(
+    limit: number = 100,
+    skipExisting: boolean = true
+  ): Promise<ArtSession[]> {
+    const conditions = [eq(artSessions.isLibrary, true)];
+    
+    // Skip artworks that already have metadata
+    if (skipExisting) {
+      conditions.push(isNull(artSessions.focalPoints));
+    }
+    
+    return await this.db
+      .select()
+      .from(artSessions)
+      .where(and(...conditions))
+      .orderBy(desc(artSessions.createdAt))
+      .limit(limit);
+  }
+
   // User Art Impressions (Freshness Pipeline)
   async recordImpression(userId: string, artworkId: string, isBridge: boolean = false): Promise<void> {
     // CRITICAL: UPSERT to update viewedAt timestamp on repeat views
@@ -957,6 +1001,84 @@ export class PostgresStorage implements IStorage {
     }
     
     return results;
+  }
+
+  async getUserArtImpressions(userId: string): Promise<any[]> {
+    return await this.db
+      .select()
+      .from(userArtImpressions)
+      .where(eq(userArtImpressions.userId, userId));
+  }
+
+  async getCatalogueStats(): Promise<{
+    total: number;
+    byOrientation: { landscape: number; portrait: number; square: number };
+    needsEnrichment: number;
+  }> {
+    // Total library artworks
+    const totalResult = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(artSessions)
+      .where(eq(artSessions.isLibrary, true));
+    
+    const total = Number(totalResult[0]?.count ?? 0);
+
+    // By orientation
+    const landscapeResult = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(artSessions)
+      .where(and(eq(artSessions.isLibrary, true), eq(artSessions.orientation, "landscape")));
+    
+    const portraitResult = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(artSessions)
+      .where(and(eq(artSessions.isLibrary, true), eq(artSessions.orientation, "portrait")));
+    
+    const squareResult = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(artSessions)
+      .where(and(eq(artSessions.isLibrary, true), eq(artSessions.orientation, "square")));
+
+    // Needs enrichment
+    const needsEnrichmentResult = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(artSessions)
+      .where(and(eq(artSessions.isLibrary, true), isNull(artSessions.focalPoints)));
+
+    return {
+      total,
+      byOrientation: {
+        landscape: Number(landscapeResult[0]?.count ?? 0),
+        portrait: Number(portraitResult[0]?.count ?? 0),
+        square: Number(squareResult[0]?.count ?? 0),
+      },
+      needsEnrichment: Number(needsEnrichmentResult[0]?.count ?? 0),
+    };
+  }
+
+  async getLibraryArtworkCount(orientation: string): Promise<number> {
+    const result = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(artSessions)
+      .where(and(eq(artSessions.isLibrary, true), eq(artSessions.orientation, orientation)));
+    
+    return Number(result[0]?.count ?? 0);
+  }
+
+  async getUserViewedLibraryCount(userId: string, orientation: string): Promise<number> {
+    const result = await this.db
+      .select({ count: sql<number>`count(DISTINCT ${userArtImpressions.artworkId})` })
+      .from(userArtImpressions)
+      .innerJoin(artSessions, eq(userArtImpressions.artworkId, artSessions.id))
+      .where(
+        and(
+          eq(userArtImpressions.userId, userId),
+          eq(artSessions.isLibrary, true),
+          eq(artSessions.orientation, orientation)
+        )
+      );
+    
+    return Number(result[0]?.count ?? 0);
   }
 
   // Users
