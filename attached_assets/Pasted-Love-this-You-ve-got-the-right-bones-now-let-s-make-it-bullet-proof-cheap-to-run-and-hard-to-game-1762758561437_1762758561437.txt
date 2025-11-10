@@ -1,0 +1,197 @@
+Love this. You’ve got the right bones—now let’s make it bullet-proof, cheap to run, and hard to game. Here’s a tight peer-review with concrete upgrades you can drop in.
+
+# TL;DR (what I’d change)
+
+* Add **one canonical balance** (derived from a ledger) + **strict transactional deduction** to prevent double-spend.
+* Replace static 40/30/20/10 weights with a **controller** (PID-like) that targets a *forecasted monthly burn*; add **hysteresis** and **session caps**.
+* Introduce **bandit routing** (safe epsilon-greedy) so “fresh vs library” learns from user feedback, not just budget.
+* Keep 3× rollover cap, but add **soft decay** and **tier-aware exceptions** (e.g., annual prepay).
+* Ship **graceful fallbacks** and **auto-refunds** on failed generations.
+* Instrument **credit forecast**, **fresh/library mix SLO**, and **per-user variance**; tune using weekly experiments.
+
+---
+
+# 1) Data model & integrity (lock this down)
+
+**A. Ledger-first source of truth**
+
+* Treat `credit_ledger` as the **only** truth; `user_credits` is a cache/snapshot.
+* Add constraints:
+
+  * `CHECK (amount <> 0)`, `CHECK (eventType IN (...))`
+  * FK from ledger.userId → users.id
+* Indexes:
+
+  * `credit_ledger (userId, timestamp DESC)`
+  * `user_credits (billingCycleEnd)` for reconciliation
+* Periodic **rebuild** of `usedThisCycle` from ledger for drift detection.
+
+**B. Atomic deduction (prevent double-spend)**
+
+* Use a single DB transaction with **SELECT … FOR UPDATE** on `user_credits`.
+* Recompute `availableCredits` inside the transaction from snapshot **and** the last ledger entry’s balance. If insufficient → hard fail.
+* Insert ledger row **first**, then update snapshot, **then** enqueue generation. If queueing fails → roll back or write a compensating “refund” entry.
+
+**C. Idempotency**
+
+* Every generation request must carry a `requestId`. Keep a unique constraint `(userId, requestId)` in the ledger to avoid double charges on retries.
+
+**D. Downgrade rules**
+
+* On tier change, clamp `rolloverBalance` (you already do). Also write a `downgrade` ledger event for auditability.
+
+---
+
+# 2) Titration brain (make it adaptive, not brittle)
+
+**A. Replace fixed weights with a controller**
+Aim to keep users close to *even burn*: `targetDaily = (baseQuota + rollover) / daysInCycleRemaining`.
+
+* Compute **surplus**: `S = creditsRemaining - targetDaily * daysRemaining`.
+* Map to a probability via a **smooth, bounded** function:
+
+```ts
+function pFromSurplus(S: number, k = 0.002, floor = 0.1, ceil = 0.9) {
+  // logistic centered at 0 surplus
+  const p = 1 / (1 + Math.exp(-k * S));
+  return Math.min(ceil, Math.max(floor, p));
+}
+```
+
+**B. Add hysteresis & session caps**
+
+* **Hysteresis:** cache last decision bucket (Fresh vs Library). Only flip if `|Δp| > 0.15` or every N frames. Reduces “flicker.”
+* **Session ceiling:** `maxFreshThisSession = max(3, floor(creditsRemaining * 0.25))`.
+* **Early-session boost:** `freshnessDecay = exp(-sessionFramesViewed/20)` is good—keep it as a multiplier on top of p.
+
+**C. Contextual nudges (cheap, powerful)**
+Multiply p by:
+
+* `conserveMode ? 0.5 : 1`
+* `(0.8 + 0.4 * libraryPenalty)` (your library penalty stays, 0.8–1.2 band)
+* `orientationPenalty` if orientation-exact frames are scarce (bias to fresh).
+
+**D. Learning from feedback (safe bandit)**
+
+* Maintain a simple **reward**: `+1` for “kept on screen ≥ T sec” or user like; `0` otherwise.
+* Run **epsilon-greedy** between {Fresh, Library} with `ε` small (0.05). Update empirical means per user-segment (tier × genre × mood).
+* Fold the bandit’s preference into p as a 10–15% nudge.
+
+---
+
+# 3) Library dependency & guardrails
+
+**A. Minimum viable pantry**
+Before turning on titration globally, ensure **coverage thresholds** per (genre × mood × orientation):
+
+* ≥ 60 frames unseen per user (or global unseen% > 30%)
+* ≥ 5 distinct styles
+* If unmet → **force fresh** (and log a “coverage miss” metric)
+
+**B. Orientation-aware fallback**
+
+* Exact orientation → pick from pool.
+* If no match:
+
+  * Try square-master crop using **saliency safe_area**.
+  * Else landscape + **tasteful side-fills** (palette-anchored).
+* Log fallback path as a dimension in analytics.
+
+---
+
+# 4) UX: transparency that doesn’t nag
+
+* Keep your **subtle badge**. Add a **hover forecast**:
+
+  * “Est. 6–9 fresh images/day to finish the month on pace.”
+* **Session meter** (tiny): shows today’s fresh/library mix (e.g., 3 fresh | 8 library).
+* **Conservation toggle**: when user turns it on, pop a one-liner: “Fresh generation frequency reduced ~50%.”
+* **Auto mode** default; expose **“Always Fresh for 15 mins”** (consumes a small burst, great for demos).
+
+---
+
+# 5) Edge cases you’ll be glad you handled
+
+* **Concurrent sessions**: enforce transactional deduction; also use **pg_advisory_lock(userId)** while deciding + charging to avoid time-of-check/time-of-use races.
+* **Generation failure**: automatic **refund** ledger entry; immediate library fallback.
+* **Queue congestion**: if generation ETA exceeds X sec, short-circuit to library and **enqueue in background** (do *not* charge until the frame actually arrives or is displayed ≥ T sec).
+* **Offline / spotty network**: keep a small **local LRU cache** (unseen recent frames).
+* **Timezones**: store billing windows in user tz; normalize at reconciliation boundaries.
+* **Unlimited tier**: bypass titration; still log fresh/library and show a “∞” badge.
+* **Fraud / abuse**: basic rate limiting + anomaly detection (e.g., scripted rapid “fresh” toggles).
+
+---
+
+# 6) Monitoring & SLOs (make tuning easy)
+
+**Core dashboards**
+
+* **Fresh% by tier** (target bands: Basic 40–60%, Premium 70–90%)
+* **Budget tracking**: median surplus S over time
+* **Credit run-outs** before EOM (% of users)
+* **Coverage misses** (forced fresh due to empty pantry)
+* **Variance**: per-user stddev of daily fresh count (keep it low—consistency feels premium)
+
+**Alerts**
+
+* Surplus S median < −1 day’s budget for 24h (users will run out)
+* Generation failure rate > 3% for 15 min
+* Refunds > charges in any hour (bug or abuse)
+
+---
+
+# 7) Reconciliation & rollover policy (keep 3×, add polish)
+
+* 3× cap is sane. Add **soft decay** above 2× (e.g., decay 10% of excess per cycle) to discourage limitless hoarding without punishing occasional low-use months.
+* **Annual prepay exception**: allow up to **6× cap** for annual subscribers (marketing win).
+* Ledger entry on rollover with **both**: raw unused and clamped amount.
+
+---
+
+# 8) Cost routing (save $$ without artifacts)
+
+* Keep your tier mixing. Add **quality gates**:
+
+  * If session is in a **wow window** (first 3 frames or user just liked an image) → prefer premium model.
+  * If background / low-energy track + strong library match → route to SD.
+* Cache **prompt→image hash** to avoid re-paying for near-duplicates across users when a style becomes hot.
+
+---
+
+# 9) Code-level nits (small, important)
+
+* Add `UNIQUE (userId, timestamp, eventType, requestId)` to `credit_ledger` (nullable `requestId` for non-generation events).
+* Store **balance in ledger** but treat it as a **snapshot**; do not trust it blindly—recompute occasionally to detect drift.
+* Wrap `deductCredit()` + `queueFreshGeneration()` with **sagas** (compensating action = refund).
+* Track **sessionFreshCount** server-side (don’t trust client only).
+
+---
+
+# 10) Alternative models (if you want to experiment)
+
+* **PID Controller**: Treat surplus S as error; adjust p with proportional (now), integral (month drift), derivative (recent trend) terms. Very stable.
+* **Constrained bandit**: Upper Confidence Bound (UCB) to pick Fresh vs Library under a **budget constraint** (p acts as a hard cap).
+* **Quantile policy**: Force each user toward the **50th percentile** daily burn; deviate upward in surplus, downward in deficit.
+
+---
+
+## Answers to your review questions
+
+* **Weights optimal?** Static weights will drift. Use **logistic surplus** + **hysteresis** + **session caps**; keep your factors as *multipliers*.
+* **Rollover cap?** **3× is good.** Consider soft decay above 2× and a higher cap for annual tiers.
+* **UX transparency?** Subtle is right. Add **hover forecast** and a tiny **session mix** chip.
+* **Algorithm complexity?** The controller adds ~10 lines but hugely improves stability; worth it. Bandit nudge is optional but nice.
+* **Library dependency?** Soft-launch titration **after** pantry reaches minimum coverage thresholds per (genre × mood × orientation).
+* **Edge cases missed?** Add **concurrency locks**, **refunds**, **queue-delay short-circuit**, **idempotency**.
+* **Performance impact?** Index ledger by `(userId, timestamp)`; compute balances via a **windowed materialized view** or nightly job; keep hot path on snapshot with occasional reconciliation.
+* **Better models?** PID or constrained UCB (above). Start with the logistic controller—fast, stable, explainable.
+
+---
+
+If you want, I can draft:
+
+* A **transaction-safe `deductCredit()`** (SQL + TypeScript) with idempotency.
+* The **controller function** (with hysteresis + session caps) wired into your `orchestrateFallback`.
+* A **metrics spec** (names, labels, alert thresholds) for Grafana/Prometheus.
+
+Say the word and I’ll drop those in.

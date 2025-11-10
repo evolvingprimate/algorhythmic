@@ -1,0 +1,313 @@
+Got it. I read Grok’s review and merged it with the controller/bandit, integrity, and ops hardening I proposed earlier. Below is a **tight, Architect-ready spec**: what to keep, what to change, and exact acceptance criteria + code scaffolds so nothing gets missed.
+
+---
+
+# ✅ What to Keep From Grok (endorsed)
+
+* Monthly credit system with **3× rollover cap**.
+* Multi-factor titration (budget, freshness decay, credit health, library health).
+* Graceful degradation to **library-only** when low.
+* **Phased rollout** and clear UX (subtle credit badge + conserve toggle).
+* Cost routing (premium vs. cheap model) based on probability.
+
+# 🔁 What to Change / Upgrade (our deltas)
+
+1. **Weights → Controller**
+   Replace fixed 40/30/20/10 (or 35/35/20/10) with a **logistic surplus controller** that targets even burn across the cycle. Keep Grok’s factors as *multipliers* (nudges), not base weights.
+
+2. **Integrity & Concurrency**
+
+   * Ledger is **source of truth**; snapshot is a cache.
+   * **Atomic deduction** with `SELECT … FOR UPDATE` and **idempotency** (`requestId`).
+   * Compensating **refund** on failure, queue-latency short-circuit to library.
+
+3. **Coverage Guardrail**
+
+   * Do **not** lean on “library health” alone: enforce **minimum pantry coverage** per (genre × mood × orientation). If not met → force fresh (and log “coverage miss”).
+
+4. **Hysteresis & Session Caps**
+
+   * Add **hysteresis** (reduce flip-flop between Fresh/Library).
+   * **Session ceiling** scaled to remaining credits.
+
+5. **Learning Nudge (Optional, safe)**
+
+   * Add **epsilon-greedy bandit** (tiny weight) using implicit dwell/likes as reward.
+
+6. **Privacy**
+
+   * Session tracking is **opt-in**; store only aggregate counts + hashed userId in logs.
+
+---
+
+# 📐 Must-Implement Checklist (Architect)
+
+### Data & Schema
+
+* [ ] **Tables**
+
+  * `user_credits(userId PK, baseMonthlyQuota, billingCycleStart, billingCycleEnd, rolloverBalance, usedThisCycle, lastTopUpAt)`
+  * `credit_ledger(id PK, userId FK, timestamp default now, eventType ENUM, amount INT, balance INT, requestId NULLABLE, details JSONB)`
+* [ ] **Constraints & Indexes**
+
+  * `CHECK (amount <> 0)`
+  * `UNIQUE (userId, eventType, requestId)` where `requestId` NOT NULL (prevents double charge)
+  * Indexes: `(userId, timestamp DESC)`, `(billingCycleEnd)`
+* [ ] **Rollover job** clamps to `3× base` and writes a `rollover` ledger row with **both raw and clamped amounts** in `details`.
+
+### Credit Deduction (Atomic)
+
+* [ ] `deductCredit(userId, requestId)` uses a single transaction:
+
+  1. `SELECT … FOR UPDATE` snapshot row.
+  2. Recompute `available = base + rollover - usedThisCycle` (or derive from last ledger balance).
+  3. If insufficient → fail.
+  4. Insert ledger `{eventType: 'generation', amount: -1, requestId, balance: newBalance}`.
+  5. Update snapshot `usedThisCycle += 1`.
+* [ ] On any downstream failure (queue error, model error, timeout) → **refund**:
+
+  * Insert ledger `{eventType: 'refund', amount: +1, requestId, balance: prev+1}` and decrement snapshot.
+
+### Titration Controller (replace fixed weights)
+
+* [ ] Implement **surplus-based probability** with nudges:
+
+```ts
+type Ctx = {
+  creditsRemaining: number,
+  daysRemaining: number,
+  baseMonthlyQuota: number,
+  sessionFramesViewed: number,
+  libraryHealthScore: number, // 0..1
+  conserveMode: boolean,
+  orientationExactPool: number, // count for target orientation & tags
+};
+
+function pFromSurplus(S: number, k = 0.002, floor = 0.1, ceil = 0.9) {
+  const p = 1 / (1 + Math.exp(-k * S));
+  return Math.max(floor, Math.min(ceil, p));
+}
+
+function freshProbability(ctx: Ctx): number {
+  const dailyTarget = Math.max(1, Math.floor((ctx.baseMonthlyQuota) / Math.max(ctx.daysRemaining, 1)));
+  const targetTotal = dailyTarget * ctx.daysRemaining;
+  const S = ctx.creditsRemaining - targetTotal; // surplus (>0) or deficit (<0)
+
+  let p = pFromSurplus(S); // controller core
+
+  // Nudges (multiplicative)
+  const freshnessDecay = Math.exp(-ctx.sessionFramesViewed / 20);        // early-session pop
+  const libraryPenalty = 1 - ctx.libraryHealthScore;                     // 0..1
+  const orientationPenalty = ctx.orientationExactPool > 10 ? 1.0 : 1.15; // boost fresh if pool is thin
+  const conserve = ctx.conserveMode ? 0.5 : 1.0;
+
+  p *= (0.8 + 0.4 * freshnessDecay)      // 0.8..1.2
+     * (0.9 + 0.2 * libraryPenalty)      // 0.9..1.1
+     * orientationPenalty                // 1.0 or 1.15
+     * conserve;
+
+  return Math.max(0.1, Math.min(0.9, p));
+}
+```
+
+* [ ] **Low-credit hard cap**
+  If `creditsRemaining < 0.2 * baseMonthlyQuota`:
+
+  * `maxFreshThisSession = max(3, floor(creditsRemaining * 0.5))`
+  * If reached → return `0.0` (library-only).
+
+* [ ] **Hysteresis & session caps**
+
+```ts
+function applyHysteresis(p: number, lastDecision: 'FRESH'|'LIB', lastP: number) {
+  const delta = Math.abs(p - lastP);
+  if (delta < 0.15) return lastDecision === 'FRESH' ? Math.max(p, 0.55) : Math.min(p, 0.45);
+  return p;
+}
+```
+
+* [ ] Maintain `sessionFreshCount` server-side (Redis) across multi-device; never trust client.
+
+### Orchestrator (with saga + refund)
+
+* [ ] Coverage guardrail: if **pantry coverage** for (genre×mood×orientation) < thresholds (e.g., ≥5 styles AND ≥60 unseen/user) → **force fresh**.
+* [ ] Orchestrate:
+
+```ts
+async function orchestrateFallback(req) {
+  const bridge = await catalogMatcher.findBridge(req);
+  if (bridge) return bridge;
+
+  const ctx = await getCreditsContext(req.userId); // from snapshot + Redis cache
+  let p = freshProbability(ctx);
+  p = applyHysteresis(p, ctx.lastDecision, ctx.lastP);
+
+  // Bandit nudge (optional)
+  const banditBias = await bandit.getBias(req.userId, req.styleTags); // -0.05..+0.05
+  p = Math.min(0.9, Math.max(0.1, p + banditBias));
+
+  const chooseFresh = Math.random() < p;
+
+  if (chooseFresh) {
+    const requestId = uuid();
+    await deductCredit(req.userId, requestId);  // atomic charge
+    try {
+      const art = await queueFreshGeneration({ ...req, requestId });
+      return art;
+    } catch (e) {
+      await refundCredit(req.userId, requestId); // compensating action
+      return await libraryService.getMatchingFrame(fallbackQuery(req));
+    }
+  } else {
+    return await libraryService.getMatchingFrame(fallbackQuery(req));
+  }
+}
+```
+
+* [ ] **Queue latency guard**: if fresh ETA > X sec, return **library now**, keep fresh queued in background; **charge only when displayed ≥ T sec** (or on delivery if that’s simpler initially).
+
+### Library Selection & Orientation
+
+* [ ] Exact orientation first; else:
+
+  * Square-master smart crop (saliency safe-area).
+  * Then landscape + **palette-anchored side-fills** (no stretch).
+* [ ] Log fallback path for analytics.
+
+### Rollover & Downgrade
+
+* [ ] Daily reconciliation advances window, clamps `rollover` to `3× base`, logs `rollover` event with `{unused, added, clamped}`.
+* [ ] Downgrade clamps rollover to new cap; log `downgrade` with `{fromTier,toTier,preClamp,postClamp}`.
+
+### Caching & Scale
+
+* [ ] Redis cache `creditsRemaining` (TTL 5m) and invalidate on ledger writes.
+* [ ] Advisory lock or `pg_advisory_xact_lock(userId)` around **decision+charge** to avoid TOCTOU races under high concurrency.
+
+### Metrics & Alerts
+
+* [ ] **Metrics**
+
+  * `fresh_rate{tier}`; target bands: Basic **40–60%**, Premium **70–90%**
+  * `budget_surplus_days` (S / dailyTarget)
+  * `coverage_miss_count{genre,mood,orientation}`
+  * `refund_rate`, `queue_eta_p95`
+  * `credit_runout_before_eom%`
+  * `per_user_daily_variance` (keep low)
+* [ ] **Alerts**
+
+  * Surplus median < −1 day for 24h
+  * Generation failure > 3% for 15m
+  * Refunds > charges for any 60m window
+  * Coverage miss rate > 10% in any tag bucket
+
+### UX (precise)
+
+* [ ] Badge with hover **forecast**: “On pace at ~6–9 fresh/day.”
+* [ ] Tiny **session mix** chip (e.g., “3 fresh · 8 library”).
+* [ ] **Conserve** toggle halves p (already applied).
+* [ ] **Unlimited tier** shows “∞”; titration bypassed but still logged.
+
+### Privacy
+
+* [ ] **Opt-in** session tracking; store counts + timestamps only. Hash userId in logs.
+
+---
+
+# 🔧 SQL / Drizzle Migration Snippets (sketch)
+
+```sql
+-- credit_ledger
+CREATE TYPE credit_event AS ENUM ('generation','refund','rollover','refill','downgrade','defer');
+
+CREATE TABLE credit_ledger (
+  id BIGSERIAL PRIMARY KEY,
+  user_id VARCHAR NOT NULL REFERENCES users(id),
+  timestamp TIMESTAMPTZ NOT NULL DEFAULT now(),
+  event_type credit_event NOT NULL,
+  amount INT NOT NULL CHECK (amount <> 0),
+  balance INT NOT NULL,
+  request_id VARCHAR NULL,
+  details JSONB DEFAULT '{}'::jsonb
+);
+CREATE INDEX idx_ledger_user_ts ON credit_ledger(user_id, timestamp DESC);
+CREATE UNIQUE INDEX ux_ledger_user_event_req
+  ON credit_ledger(user_id, event_type, request_id)
+  WHERE request_id IS NOT NULL;
+
+-- snapshot
+CREATE TABLE user_credits (
+  user_id VARCHAR PRIMARY KEY REFERENCES users(id),
+  base_monthly_quota INT NOT NULL,
+  billing_cycle_start TIMESTAMPTZ NOT NULL,
+  billing_cycle_end TIMESTAMPTZ NOT NULL,
+  rollover_balance INT NOT NULL DEFAULT 0,
+  used_this_cycle INT NOT NULL DEFAULT 0,
+  last_top_up_at TIMESTAMPTZ NULL
+);
+CREATE INDEX idx_credits_cycle_end ON user_credits(billing_cycle_end);
+```
+
+**Atomic deduction (TypeScript/Drizzle-like, pseudo):**
+
+```ts
+await db.transaction(async (tx) => {
+  const snap = await tx.query.userCredits.findFirst({ where: eq(userId, input.userId), for: 'update' });
+  const lastBalance = await tx.select({balance: sql`balance`})
+    .from(credit_ledger)
+    .where(eq(userId, input.userId))
+    .orderBy(desc(timestamp))
+    .limit(1);
+
+  const available = (snap.baseMonthlyQuota + snap.rolloverBalance) - snap.usedThisCycle;
+  if (available < 1) throw new Error('INSUFFICIENT_CREDITS');
+
+  await tx.insert(credit_ledger).values({
+    userId: input.userId, eventType: 'generation', amount: -1,
+    requestId: input.requestId, balance: (lastBalance?.[0]?.balance ?? available) - 1
+  });
+
+  await tx.update(user_credits)
+    .set({ usedThisCycle: snap.usedThisCycle + 1 })
+    .where(eq(user_credits.userId, input.userId));
+});
+```
+
+---
+
+# 🧪 Rollout Plan (gates)
+
+1. **Week 1 (Foundation)**
+
+   * Schema + atomic deduction + refunds + basic controller (no bandit).
+   * MV Library coverage check enabled with **high** thresholds to protect visuals.
+2. **Week 2 (Smart Titration)**
+
+   * Hysteresis + session caps + queue-latency short-circuit.
+   * Orientation scarcity nudge + coverage miss metrics.
+3. **Week 3 (Refinement)**
+
+   * Bandit nudge (ε=0.05), conserve toggle, cost routing QoS.
+   * A/B controller vs. fixed-weights baseline for validation.
+
+---
+
+# 📎 Answers to Grok’s specific notes (point-by-point)
+
+* **Weights**: We supersede with controller + nudges. More stable; fewer cliff edges.
+* **3× Cap**: Keep. Optional **burst window** is fine but guard with **off-peak only** and rate limiting.
+* **UX**: Subtle badge + hover forecast + session mix chip. Avoid anxiety bars.
+* **Complexity**: Controller adds ~10 lines; larger gain in stability vs. static weights.
+* **Library First?**: Soft-launch titration **with** coverage guardrail. If a bucket is thin → force fresh + log miss.
+* **Edge Cases**: Added concurrency locks, queue-latency short-circuit, idempotency, group/team accounts (`teamId`), partial gen auto-refund.
+* **Performance**: Redis cache + invalidation on ledger writes; read replicas if needed.
+
+---
+
+If you want, I can drop in:
+
+* A **ready-to-paste controller module** (TS) + unit tests (edge cases & hysteresis),
+* A **saga wrapper** for `queueFreshGeneration()` with automatic refunds,
+* A **Grafana dashboard JSON** (fresh%, surplus, coverage misses, refunds, ETA p95).
+
+Tell me which artifact you want first and I’ll produce it now.

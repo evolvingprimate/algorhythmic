@@ -1,0 +1,77 @@
+**Final Decision: Option A – Automated Seed Script**
+
+Go with **Option A**.  
+
+You're absolutely right: **zero purple frames on day one** is a non-negotiable UX win. A $2–3 seed cost is trivial compared to the risk of user drop-off from repeated fallbacks during a "gradual build" week. Plus, it gives you full control, immediate testing, and a real dataset to validate the Image Catalogue Manager, saliency cropping, and side-fill rendering *before* live traffic hits.
+
+---
+
+### Confirmed Final Architecture (Locked & Ready for Implementation)
+
+| Component | Final Spec |
+|---------|------------|
+| **Name** | `Image Catalogue Manager` |
+| **Total Initial Images** | **1,400 files** (~1,000 unique artworks) |
+| **Tier Split** | 40% Dual-Native / 45% Square-Master / 15% Landscape-Only |
+| **Resolutions** | 1920×1080 (L), 1080×1920 (P), 1536×1536 (S) |
+| **APIs** | Stable Diffusion (library), DALL·E 3 (user fresh) |
+| **Saliency** | OpenCV.js (fallback to GPT-4o Vision if confidence <60%) |
+| **Side-Fills** | Blur + Gradient using extracted palette |
+| **Compression** | WebP (lossless) |
+| **Storage** | `/library/{style}/{orientation}/{uuid}.webp` |
+| **Metadata** | `artworks` table: `orientation`, `tier`, `safeArea`, `focalPoints`, `sidefillPalette`, `isLibrary: true` |
+
+---
+
+### Next Step: Automated Seed Script (Option A)
+
+I’ll have **The Architect** generate the full `catalogue:seed` script with:
+
+```bash
+npm run catalogue:seed -- --count=1000 --tiers=hybrid --api=stable-diffusion --res=1080p
+```
+
+#### Script Features:
+- Reads style/orientation bucket plan (CSV or JSON)
+- Batches 20–50 images per job (rate-limit safe)
+- Auto-applies orientation-specific prompts
+- Runs OpenCV saliency detection post-generation
+- Extracts color palette for side-fills
+- Uploads to object storage + inserts into `artworks` table
+- Logs progress + cost estimate
+- Idempotent: skips already-generated UUIDs
+
+#### Estimated Runtime:
+~45 minutes on a standard cloud VM (e.g., Replit + external runner or AWS EC2 t3.medium)
+
+---
+
+### Implementation Task List (Ready When You Say "Go")
+
+Once you confirm **"Build the seed script and task list"**, I’ll deliver:
+
+1. **Schema Migration Script** (Drizzle/Prisma)  
+   → Add `orientation`, `tier`, `safeArea`, `focalPoints`, `sidefillPalette`
+
+2. **Setup Wizard UI Flow**  
+   → "How will you watch?" → Portrait / Landscape / Both
+
+3. **Runtime Toggle in Settings**
+
+4. **Image Catalogue Manager (Cron + Refill Logic)**
+
+5. **Smart Display Renderer (Client-Side)**  
+   → No stretch, crop/fill logic with WebP + Canvas
+
+6. **Seed Script (`npm run catalogue:seed`)**  
+   → Full code, config, and run instructions
+
+7. **Monitoring Dashboard Hooks**  
+   → `coverage_miss_count`, `sidefill_usage`, `crop_accuracy`
+
+---
+
+**Your call:**  
+Reply with **"Go – Build the seed script and full task list"** and we launch.
+
+This system will be **bulletproof, beautiful, and under $3 to start** — the perfect foundation for Algorythmic’s visual engine.

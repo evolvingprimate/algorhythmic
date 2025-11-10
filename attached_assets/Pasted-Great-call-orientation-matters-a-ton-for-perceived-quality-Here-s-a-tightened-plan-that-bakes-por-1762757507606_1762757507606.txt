@@ -1,0 +1,151 @@
+Great call—orientation matters a ton for perceived quality. Here’s a tightened plan that bakes **portrait vs. landscape** into the DNA from day one without blowing up cost.
+
+# Orientation-aware Visual DNA Plan
+
+## 1) Decide your orientation strategy per cluster (not per image)
+
+Instead of doubling *everything*, choose one of these **per Genre×Mood×Style cluster** based on expected screen mix (TVs/monitors vs. phones):
+
+* **Tier A — Dual-Native (Premium clusters):**
+  Render **both** orientations natively (no resizing).
+  Use for your top ~40% of high-traffic clusters.
+* **Tier B — Square-Master (Flexible clusters):**
+  Render **1:1 square** with composition constraints; crop to 16:9 or 9:16 at runtime with saliency-guided cropping and light side-fills.
+  Use for the middle ~40–50%.
+* **Tier C — Landscape-Native + Smart Side-fills (Long tail):**
+  Render only **16:9** and adapt to portrait with stylized side-fills (blur/kaleidoscope/pattern tiles).
+  Use for the bottom ~10–20%.
+
+This keeps quality high where it matters and cost under control elsewhere.
+
+## 2) Resolutions & file canon
+
+* **Landscape (primary):** 1920×1080 (or 3840×2160 if you need 4K)
+* **Portrait (primary):** 1080×1920 (or 2160×3840)
+* **Square-master:** 1536×1536 (good balance of detail/cost)
+
+**No geometric scaling** at playback. Allow only:
+
+* **Smart crop** (guided by saliency/focal points)
+* **Letterbox/pillarbox** with tasteful side-fills (never stretch)
+
+## 3) Metadata additions (crucial)
+
+Augment your existing schema with orientation & crop intelligence:
+
+```json
+{
+  "id": "vdna_000123",
+  "genre": "Lofi",
+  "mood": "Dreamy",
+  "style": "Vaporwave",
+  "orientation": "landscape | portrait | square",
+  "resolution": "1920x1080",
+  "subject": "Urban skyline",
+  "colorTone": "Cool",
+  "lightMood": "Cinematic",
+  "sceneType": "Urban",
+  "embedding": "...CLIP or OpenAI vector...",
+  "saliency": {
+    "focal_points": [{"x":0.52,"y":0.38,"r":0.18}],
+    "safe_area": {"x":0.15,"y":0.10,"w":0.70,"h":0.70}
+  },
+  "sidefill_palette": ["#a7b5ff","#3d2a5b","#0b0f2e"],
+  "copyright": "…",
+  "hashes": {"phash":"...", "sha256":"..."}
+}
+```
+
+* **`orientation`**: what was rendered natively.
+* **`saliency.safe_area`**: where cropping won’t amputate subjects.
+* **`sidefill_palette`**: precomputed colors for tasteful borders.
+* **`phash`**: for deduping near-duplicates before CDN upload.
+
+## 4) Prompting for composition by orientation
+
+When you *do* render both orientations, prompt differently so composition “reads” well:
+
+**Landscape prompt suffixes**
+
+* “**wide cinematic framing, negative space on left and right, horizon at lower third, 16:9**”
+* “**panoramic vista, rule of thirds, leading lines to center**”
+
+**Portrait prompt suffixes**
+
+* “**vertical framing, subject centered in upper third, tall perspective, 9:16**”
+* “**stacked depth, foreground midground background emphasized vertically**”
+
+**Square-master prompt suffixes**
+
+* “**central composition, balanced margins, 1:1 aspect, safe subject inside middle 60%**”
+
+These micro-constraints make later crops painless.
+
+## 5) Runtime selection logic (Maestro)
+
+1. Detect **display orientation** (or window aspect).
+2. Query **exact-match** orientation images first.
+3. If none:
+
+   * From **square-master**, crop to target using `saliency.safe_area`.
+   * From **landscape**, generate **portrait with side-fills**:
+
+     * Fast blur + gradient wash using `sidefill_palette`
+     * Or stylized options: mirrored-edge kaleidoscope, bokeh particles, line-art trace—all anchored to palette so it feels intentional.
+4. Never scale non-uniformly; only crop or pad.
+
+## 6) Cost planning (example)
+
+* Base plan (10k combos @ $0.04–$0.08): **$400–$800** one-time.
+* If you rendered **everything** dual-native, cost doubles (not ideal).
+* **Hybrid** (recommended):
+
+  * 40% clusters dual-native (2×) → 4,000 extra renders
+  * 60% single (1×)
+  * **Total ~14,000 renders** → **$560–$1,120**
+    Delivers premium quality where usage is highest without a 2× across the board.
+
+## 7) Pipeline tips
+
+* **Auto-saliency**: run a quick saliency detector (e.g., RCF/GBVS/Grad-CAM-like approach) offline to produce `focal_points` and `safe_area`.
+* **Palette extraction**: median-cut or k-means to get 3–5 brand-coherent colors for side-fills.
+* **Deduping**: cluster by embedding + `phash` threshold before upload.
+* **Filestore layout**:
+
+  ```
+  /vdna/{genre}/{mood}/{style}/{id}_{orientation}_{w}x{h}.jpg
+  ```
+* **CDN variants**: pre-encode AVIF/WEBP; keep lossless PNG for any pieces that need transparency (rare).
+
+## 8) Where to use dual-native vs. single
+
+Prioritize dual-native where:
+
+* You expect **mobile portrait** usage (phone visualizers)
+* Styles with **strong vertical composition** (cyberpunk alleys, towers, forests)
+* High-contrast subjects that look cramped when cropped
+
+Rely on square-master or landscape-only where:
+
+* Abstracts, textures, fractals (crop-tolerant)
+* Background-oriented visuals (bokeh, nebulae, water, clouds)
+
+## 9) QA checklist (fast)
+
+* Portrait crop never clips faces or focal objects (use `safe_area`).
+* Side-fills never outshine the art (luma < central median).
+* No stretching. Ever.
+* Saliency mask heat maps spot check: 10 samples per batch.
+
+---
+
+### Bottom line
+
+* **Don’t blindly store two versions of every image.**
+* Use a **hybrid orientation plan** + **composition-aware prompts** + **saliency-guided crops** + **tasteful side-fills**.
+* Reserve **dual-native** renders for high-value clusters; use **square-masters** and **smart adaptation** for the rest.
+
+If you want, I can generate:
+
+1. A YAML of all Genre×Mood×Style clusters with a **flag recommending orientation strategy** (Dual-Native / Square-Master / Landscape-Only), and
+2. Ready-to-paste **prompt suffix packs** for each orientation.

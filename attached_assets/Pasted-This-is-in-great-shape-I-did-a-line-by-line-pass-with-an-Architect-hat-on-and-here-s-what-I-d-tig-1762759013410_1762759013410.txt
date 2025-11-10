@@ -1,0 +1,254 @@
+This is in great shape. I did a line-by-line pass with an “Architect hat” on and here’s what I’d tighten so Claude doesn’t miss anything in implementation. I focused on correctness, race-proofing, naming consistency, and testability.
+
+# High-impact fixes (do these)
+
+1. **Name consistency & types**
+
+* Use `timestamptz` everywhere; avoid plain `timestamp`.
+* Standardize on `baseMonthlyQuota` (not `baseQuota` in snippets).
+* Make `eventType` an **ENUM** (`'generation','refund','rollover','refill','downgrade','defer'`) to prevent typos.
+* Make `requestId` **globally unique per user**, not `(userId,eventType,requestId)`. You’ll sometimes issue a `refund` with the same `requestId`—that should be allowed, so:
+
+  * `UNIQUE (userId, requestId)` **NULLS NOT DISTINCT** (or keep `requestId` non-null for generation/refund pairs and generate a new id for non-paired events).
+
+2. **Trigger math (snapshot correctness)**
+
+* The “trigger-updated snapshot” must **branch on eventType**:
+
+  * `generation`: `usedThisCycle += 1`
+  * `refund`: `usedThisCycle -= 1` (floor at 0)
+  * `refill`: no change to used; adjust `rolloverBalance += amount` (if that’s your semantics)
+  * `rollover`: zero `usedThisCycle`, set new cycle bounds; do **not** change used in the trigger for historical rows
+  * `downgrade`: clamp `rolloverBalance`
+* Clamp `usedThisCycle >= 0` and `rolloverBalance >= 0` in trigger to avoid drift from backfills.
+
+3. **Atomic deduction ordering**
+
+* In the saga, you **insert ledger first, then update snapshot**, but also compute `available` off the **locked snapshot**. Add a **re-compute** of `available` using the **last ledger balance** to avoid TOCTOU when backfills run. Easiest: store a `materialized_balance` in `user_credits` and bump it in the trigger so you don’t need to scan the ledger on the hot path.
+
+4. **Queue latency short-circuit = don’t charge yet**
+
+* Your current flow charges before queueing, then refunds on failure. For “ETA too long” you said “charge only when displayed ≥ T sec.” That conflicts.
+* Fix: add a **two-step charge**:
+
+  * **Authorization hold**: write a ledger row `eventType='generation'`, `amount = 0`, `details.status='auth_hold'`, no `usedThisCycle` increment.
+  * When the fresh frame **is actually shown** (or rendered successfully), write the real `generation, amount=-1` (trigger increments used) and mark the hold as `released`. If it times out → write a `refund` (or a `void` of the hold).
+    *(If you want simpler now: keep current charge-then-refund but **do not** charge when you short-circuit to library due to long ETA.)*
+
+5. **Coverage guardrails need a ratio check on unseen**
+
+* You have thresholds, good. Add **per-user unseen ratio** *and* **global unseen ratio**:
+
+  * Force fresh if `min(user_unseen_ratio, global_unseen_ratio) < 0.30` for the requested (genre×mood×orientation).
+* Log `coverage_miss{bucket}` with **bucket cardinality** so you can spot thin areas fast.
+
+6. **Redis keys keyed by *userId*, not just sessionId**
+
+* Multi-device sessions: keep `session:{userId}` aggregates and **merge** per-tab session counters to prevent exceeding the session cap via multiple clients.
+
+7. **Emergency brake calc clarity**
+
+* Replace `creditsRemaining < 20% × baseQuota` with exact code (rounding matters):
+
+  ```ts
+  const critical = creditsRemaining <= Math.floor(baseMonthlyQuota * 0.2);
+  ```
+* And define session cap deterministically:
+
+  ```ts
+  const maxFreshThisSession = Math.max(3, Math.floor(creditsRemaining * 0.5));
+  ```
+
+8. **Orientation scarcity signal**
+
+* You use a boolean `orientationScarce`. Make it numeric:
+
+  ```ts
+  const orientationScarcity = Math.min(1, 10 / (orientationExactPool || 1)); // 1..10→1..∞
+  p *= (1 + 0.05 * orientationScarcity); // gentle, bounded lift
+  ```
+
+  Keeps behavior smooth as pools thin out.
+
+9. **Team/Family accounts**
+
+* Add `teamId` to both tables; tie reconciling to either user or team plan:
+
+  * Pool credits at team level; snapshot keeps both `teamCredits` and `userCredits` if you offer sub-allocations later.
+
+10. **Privacy & PII**
+
+* Hash user ids in metrics and logs (`hashids` or HMAC) and ensure **opt-in** for session telemetry. Add a 90-day retention policy for ledger **details** (not the ledger rows themselves).
+
+---
+
+# Small but sharp correctness nits
+
+* Use `timestamptz` and store **user’s IANA timezone** in a `users` table. Compute cycle boundaries in that tz to avoid DST weirdness.
+* Rollover job: write **both** `unused_raw` and `rollover_applied` in `details`, and **always** insert a ledger row even if `unused=0` for auditable month boundaries.
+* Backfills: if you ever insert historical ledger entries, mark them with `details.backfill=true` and **skip** snapshot triggers (or run a one-time reconciliation job) to avoid double counting.
+* Add `CHECK (balance >= 0)` to ledger writes (balance is a snapshot; this catches logic errors).
+* Add a soft decay **only** to the portion above 2× base (you did that; good). Document the rule in code comments with an example.
+
+---
+
+# Controller & hysteresis (final form)
+
+```ts
+function pFromSurplus(S: number, k = 0.0025, floor = 0.1, ceil = 0.9) {
+  const p = 1 / (1 + Math.exp(-k * S));
+  return Math.max(floor, Math.min(ceil, p));
+}
+
+function freshProbability(ctx: {
+  creditsRemaining: number;
+  daysRemaining: number;
+  baseMonthlyQuota: number;
+  sessionFramesViewed: number;
+  libraryHealth: number;         // 0..1
+  conserveMode: boolean;
+  orientationExactPool: number;  // int
+  lastDecision?: 'FRESH'|'LIB';
+  lastP?: number;
+}) {
+  const dailyTarget = Math.max(1, Math.floor(ctx.baseMonthlyQuota / Math.max(ctx.daysRemaining, 1)));
+  const S = ctx.creditsRemaining - dailyTarget * ctx.daysRemaining;
+
+  let p = pFromSurplus(S);
+
+  // Nudges
+  const freshness = Math.exp(-ctx.sessionFramesViewed / 20);         // 1 → ~0.006
+  const libPenalty = (1 - ctx.libraryHealth);                        // 0..1
+  const conserve = ctx.conserveMode ? 0.5 : 1.0;
+  const scarcity = Math.min(1, 10 / Math.max(ctx.orientationExactPool, 1));
+
+  p *= (0.8 + 0.4 * freshness);          // 0.8..1.2
+  p *= (0.9 + 0.2 * libPenalty);         // 0.9..1.1
+  p *= (1 + 0.05 * scarcity);            // 1.0..1.5 mild
+  p *= conserve;
+
+  // Hysteresis
+  if (ctx.lastP !== undefined && ctx.lastDecision) {
+    const delta = Math.abs(p - ctx.lastP);
+    if (delta < 0.15) {
+      p = ctx.lastDecision === 'FRESH' ? Math.max(p, 0.55) : Math.min(p, 0.45);
+    }
+  }
+
+  // Critical low hard stop
+  if (ctx.creditsRemaining <= Math.floor(ctx.baseMonthlyQuota * 0.2)) {
+    const maxFreshThisSession = Math.max(3, Math.floor(ctx.creditsRemaining * 0.5));
+    if ((globalThis.sessionFreshCount ?? 0) >= maxFreshThisSession) return 0.0;
+  }
+
+  return Math.max(0.1, Math.min(0.9, p));
+}
+```
+
+---
+
+# Pantry coverage thresholds (make them data-driven)
+
+Define **per-bucket** policy rows in a table so you can tune without redeploy:
+
+| bucket (genre×mood×orientation) | min_styles | min_unseen_per_user | min_global_unseen_ratio |
+| ------------------------------- | ---------: | ------------------: | ----------------------: |
+| default                         |          5 |                  60 |                    0.30 |
+| free_tier                       |          3 |                  40 |                    0.25 |
+| premium                         |          5 |                  80 |                    0.40 |
+
+If any fails → **force fresh**, log `coverage_miss{bucket}` and enqueue background autogeneration for that bucket (billed to **ops**, not user).
+
+---
+
+# Monitoring: add two more golden signals
+
+* **Ledger-snapshot drift** already listed; also track **Trigger error count** from DB logs (if triggers abort, you’ll silently drift).
+* **Per-user variance of daily fresh** (rolling 7-day stddev). If this spikes, users perceive randomness/unfairness even if mean is fine.
+
+---
+
+# Acceptance tests (Claude can run these)
+
+1. **No double spend under concurrency**
+
+   * 10 parallel `orchestrateFallback` calls for same user with 1 credit left.
+   * Expect exactly one `generation (−1)` and 9 library.
+2. **Refund on generate failure**
+
+   * Force model error. Expect a `refund (+1)` with same `requestId` and library fallback.
+3. **Latency short-circuit**
+
+   * Simulate ETA > threshold → library now, fresh later; ensure **no charge** until fresh is displayed (or ensure refund if pre-charged path used).
+4. **Coverage miss**
+
+   * Empty a bucket; expect force fresh, `coverage_miss` metric, and autogen enqueue (ops-billed).
+5. **Rollover math**
+
+   * With unused=150, rollover=500, base=200 (cap=600):
+
+     * Soft decay above 400 → 500 + 150 = 650 → 250 over 2× → 250×0.9=225 → 400 + 225 = 625 → **clamped to 600**. Verify details.
+6. **Hysteresis**
+
+   * Oscillate inputs near boundary; decisions should not flip more than once per 10 frames.
+7. **Multi-device**
+
+   * Two clients, same user: session cap should apply to the **aggregate**, not per tab.
+
+---
+
+# Tiny SQL tweaks
+
+* Add:
+
+  ```sql
+  ALTER TABLE credit_ledger
+    ADD CONSTRAINT chk_balance_nonneg CHECK (balance >= 0);
+  ```
+* Partial unique:
+
+  ```sql
+  CREATE UNIQUE INDEX ux_user_request
+  ON credit_ledger(user_id, request_id)
+  WHERE request_id IS NOT NULL;
+  ```
+* Use `GENERATED ALWAYS AS IDENTITY` instead of `bigserial` if on modern Postgres.
+
+---
+
+# Implementation task list (for the Architect)
+
+1. **DB layer**
+
+   * Migrations (tables, ENUM, indexes, constraints).
+   * AFTER INSERT trigger on `credit_ledger` to update `user_credits` (branch by `eventType`, clamp floors).
+   * Reconciliation job with soft-decay + cap; writes explicit ledger rows.
+
+2. **Services**
+
+   * `CreditsService.getContext(userId)` (with Redis cache + invalidation).
+   * `CreditsService.authorize(userId, requestId)` (optional hold) and `commitCharge`/`voidHold`.
+   * `PantryService.getCoverage(bucket)` + autogen enqueue (ops-billed).
+
+3. **Titration**
+
+   * Controller + hysteresis + orientation scarcity; server-side session counters keyed by **userId**.
+
+4. **Orchestrator**
+
+   * Coverage guard → controller → bandit nudge (Phase 3) → saga with refunds.
+   * Queue ETA short-circuit path (no charge until shown OR auto-refund on timeout).
+
+5. **UI**
+
+   * Badge + hover forecast, session mix chip, conserve toggle.
+   * Silent mode for free tier.
+
+6. **Observability**
+
+   * Metrics + alerts described (PromQL/Grafana panels).
+   * Audit log with hashed ids; 90-day retention on details.
+
+---
+
+If you want, I can generate the **exact SQL triggers** and a **TypeScript controller module** with unit tests to drop into the repo.

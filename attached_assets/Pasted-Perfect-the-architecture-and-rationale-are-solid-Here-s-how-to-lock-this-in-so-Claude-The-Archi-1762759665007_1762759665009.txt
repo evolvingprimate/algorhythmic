@@ -1,0 +1,187 @@
+Perfect — the architecture and rationale are solid. Here’s how to lock this in so Claude (“The Architect”) builds it correctly, without ambiguity or hidden cost traps.
+
+---
+
+## ✅ Final Decisions to Lock In
+
+### 1. Rename
+
+**✅ “Image Catalogue Manager”** → this will replace every mention of “Pantry Inventory Manager.”
+Use that name consistently in:
+
+* Cron jobs (`catalogue_refill.ts`)
+* Logs (`coverage_low`, `catalogue_miss`)
+* Dashboard heading (“Image Catalogue Manager”)
+
+---
+
+### 2. Aspect-Ratio Strategy (adopt the **Hybrid B Plan**)
+
+* Use **Hybrid (Mix)**: ~40% dual-native, 40-50% square-master, 10-20% landscape-only.
+  This preserves quality, controls cost, and avoids distortions on TVs and portrait displays.
+
+| Tier                          | Generation             | Usage            | Cost/1000 | Best for          |
+| ----------------------------- | ---------------------- | ---------------- | --------- | ----------------- |
+| **A. Dual-Native**            | 1920×1080 + 1080×1920  | Popular styles   | ~$32      | “Hero” categories |
+| **B. Square-Master**          | 1536×1536 + smart crop | Abstract/ambient | ~$16      | Crop-tolerant     |
+| **C. Landscape + Side-fills** | 1920×1080 only         | Low-usage        | ~$8       | Long-tail         |
+
+Total ≈ **$56 per 1,000** base images (DALL·E) or **~$1.12** if using Stable Diffusion.
+→ **Use DALL·E for premium/fresh**, **SD for library fills**.
+
+---
+
+### 3. Orientation & Resolutions
+
+* **Generate at native 1080p** (1920×1080 or 1080×1920).
+* Let browser upscale to 4K — native 4K costs 4× and gives negligible gain when viewed at typical 8–10 ft TV distance.
+* Optionally: 4K only for *premium tier* or *gallery mode*.
+
+---
+
+### 4. Saliency Detection Choice
+
+* ✅ Start with **OpenCV.js / TensorFlow.js** lightweight saliency (free).
+* Add GPT-4o Vision later if automated crops appear off-center (you can re-process only those flagged as “crop confidence < 0.7”).
+* Store:
+
+  ```json
+  "safe_area": {"x":0.1,"y":0.1,"w":0.8,"h":0.8},
+  "focal_points":[{"x":0.52,"y":0.38,"r":0.18}],
+  "sidefill_palette":["#a7b5ff","#3d2a5b","#0b0f2e"]
+  ```
+
+---
+
+### 5. Runtime Display Logic (never stretch)
+
+```typescript
+if (image.orientation === targetOrientation) {
+  render(image, { fit: 'cover' });
+}
+else if (image.orientation === 'square') {
+  const crop = calcSafeCrop(image.metadata.safe_area, targetAspect);
+  render(image, { crop });
+}
+else { // Landscape→Portrait fallback
+  const palette = image.metadata.sidefill_palette;
+  render(image, {
+    fit: 'contain',
+    background: makeSidefill(image, palette) // blur/kaleidoscope/bokeh
+  });
+}
+```
+
+---
+
+### 6. Catalogue Generation & Refill
+
+Rename jobs accordingly:
+
+```typescript
+// image_catalogue_manager.ts
+async function catalogueRefill() {
+  const lowBuckets = await findLowCoverage();
+  for (const bucket of lowBuckets) {
+    await queueBatchGeneration({
+      styleTags: bucket.styles,
+      orientation: bucket.orientation,
+      count: 50,
+      api: 'stable-diffusion',
+      priority: 'low',
+    });
+  }
+}
+```
+
+Coverage guardrail thresholds (same as credit system):
+
+* Free: ≥ 40 unseen / 3 styles
+* Basic: ≥ 60 unseen / 5 styles / 30 % unseen ratio
+* Premium: ≥ 80 unseen / 5 styles / 40 % unseen ratio
+
+If under threshold → log `catalogue_miss` and trigger batch generation.
+
+---
+
+### 7. Orientation-Aware Prompt Suffixes
+
+*(Store these in a small lookup table so Claude doesn’t hard-code strings.)*
+
+| Orientation       | Prompt suffix                                                                             | Example                        |
+| ----------------- | ----------------------------------------------------------------------------------------- | ------------------------------ |
+| **Landscape**     | “wide cinematic framing, panoramic vista, rule of thirds, 16:9 aspect ratio”              | `dreamy synthwave landscape …` |
+| **Portrait**      | “vertical framing, subject centered in upper third, tall perspective, 9:16 aspect ratio”  | `lofi cafe interior …`         |
+| **Square-Master** | “central composition, balanced margins, safe subject inside middle 60%, 1:1 aspect ratio” | `abstract waves …`             |
+
+---
+
+### 8. Storage Layout
+
+```
+/artwork/
+  ├── user/          (isLibrary = false)
+  │     └── {uuid}.png
+  └── library/
+        ├── portrait/
+        │     └── {style}-{uuid}.png
+        └── landscape/
+              └── {style}-{uuid}.png
+```
+
+Metadata in `artworks`:
+
+```json
+{
+  "isLibrary": true,
+  "orientation": "portrait",
+  "aspectRatio": "9:16",
+  "width": 1080,
+  "height": 1920,
+  "safeArea": {...},
+  "sidefillPalette": [...],
+  "clipEmbedding": [...]
+}
+```
+
+---
+
+### 9. Implementation Plan (for Claude)
+
+| Phase                              | Deliverables                                                                                                                                                                          |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **1. Foundation (Week 1)**         | Implement dual/square/landscape generation pipeline; add `orientation` + `aspectRatio` to DB schema; modify upload/storage paths; update metadata extraction with saliency + palette. |
+| **2. Auto-Refill (Week 2)**        | Deploy renamed **Image Catalogue Manager** cron; integrate coverage checks + background generation queue; connect with credit system’s `coverage_miss`.                               |
+| **3. Display & Fallback (Week 3)** | Client-side saliency cropper, side-fill shader; user orientation toggle (settings + setup wizard).                                                                                    |
+| **4. Optimization (Week 4)**       | Optional GPT-4o saliency verifier; add popularity-based pruning; prepare curation dashboard.                                                                                          |
+
+---
+
+### 10. Curation Dashboard Priority
+
+* **Phase 1:** optional (skip now).
+* **Phase 2–3:** yes — needed once library > 2 000 images to manage coverage and prune low performers.
+
+---
+
+## 🔚 Recommendation Summary
+
+| Decision            | Choice                                     |
+| ------------------- | ------------------------------------------ |
+| Naming              | ✅ Image Catalogue Manager                  |
+| Strategy            | ✅ Hybrid (Dual + Square + Landscape)       |
+| Resolution          | ✅ 1080p native (browser upscales to 4K)    |
+| Saliency            | ✅ OpenCV/TensorFlow Lite now, GPT-4o later |
+| Cost                | ✅ ~$56/1000 images (DALL-E) / ~$1.12 (SD)  |
+| Orientation storage | ✅ Two orientation pools + square-masters   |
+| Display rule        | ✅ Never stretch; crop + side-fill only     |
+| Dashboard timing    | ✅ Phase 2–3                                |
+
+---
+
+If you’d like, I can generate for Claude:
+
+1. the **`image_catalogue_manager.ts` skeleton** (covering inventory check, refill queue, and saliency metadata),
+2. and the **client-side crop + side-fill renderer** boilerplate (React/Tailwind, ready for integration).
+
+Would you like me to produce those next?

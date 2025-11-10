@@ -1,0 +1,59 @@
+### Peer Review: Image Generation Credit System with Smart Titration
+
+**Overall Assessment**  
+This is a robust, user-centric proposal that elegantly addresses the pain points of quota exhaustion, cost volatility, and visual staleness in AI-driven music visualization tools like Maestro. The hybrid ledger model ensures auditability and scalability, while the titration algorithm introduces intelligent resource allocation without overcomplicating the user flow. Strengths include strong edge-case handling, phased rollout for low-risk iteration, and clear cost-saving projections (40-60% reduction is realistic based on similar systems in creative SaaS like Midjourney or RunwayML). Potential risks: over-reliance on library health (if embeddings drift) and session-tracking privacy (ensure opt-in). I'd rate this 8.5/10—polish the weights via A/B testing in Phase 3, and it's production-ready. Below, direct responses to your questions.
+
+#### 1. Titration Weights: Is 40/30/20/10 Split Optimal, or Adjust?
+The 40% budget surplus (most influential) makes sense as the "guardrail" factor—it prevents reckless spending, aligning with financial sustainability. Freshness decay at 30% smartly prioritizes delight in early sessions, where drop-off is highest. Credit health (20%) and library penalty (10%) feel lighter but appropriate, as they're more "contextual" than core drivers.
+
+**Suggestion**: Slight tweak to 35/35/20/10. Bump freshness to 35% to emphasize engagement (users bail faster from repetitive visuals than from minor budget hiccups). Test via simulation: Run 1,000 mock sessions with historical burn data; measure variance in fresh rate and user retention. This split reduces over-conservatism in high-rollover scenarios.
+
+#### 2. Rollover Cap: 3× Base Quota Reasonable, or Allow Unlimited?
+3× (e.g., 600 for Basic) is reasonable and prudent—it incentivizes steady usage without enabling "credit hoarding" that could strain backend compute during peaks. Unlimited risks abuse (e.g., bulk-generation bots) and uneven server load, as seen in early Dropbox storage caps.
+
+**Suggestion**: Keep 3×, but add a "burst allowance": Temporarily exceed by 1× during low-traffic hours (e.g., 2-5 AM UTC) via a simple cron-flagged multiplier. This boosts perceived generosity without permanent inflation. Monitor accumulation distribution in analytics; if >20% of users hit cap monthly, consider tiered caps (e.g., 4× for Premium).
+
+#### 3. UX Transparency: Subtle Indicator Sufficient, or More Prominent?
+Subtle (e.g., header badge with tooltip) is spot-on for power users—avoids "quota anxiety" that plagues apps like Grammarly. It keeps the creative flow intact, with conservation toggle as an opt-in for budget hawks.
+
+**Suggestion**: Sufficient as-is, but enhance with micro-interactions: Pulsing sparkle on surplus (>150%) for positive reinforcement, or a gentle fade-in warning at <20%. For free tier, test a "pro tip" modal on first library fallback: "Loving the vibes? Upgrade for fresh art anytime." A/B this against a prominent progress bar; expect subtle to win on session length (+10-15%).
+
+#### 4. Algorithm Complexity: Multi-Factor Model Worth It vs Simple Tiers?
+Absolutely worth it. Simple tiers (e.g., if credits >50%, always fresh) are blunt and lead to "cliff edges"—e.g., 51% users over-generate early, then starve. The multi-factor probabilistic approach (with guardrails) smooths this, adapting to real behaviors like binge sessions. It's akin to Netflix's content caching, where probability tunes based on user state.
+
+**Suggestion**: No simplification needed, but modularize for easier tuning: Expose weights as config vars in your env (e.g., `TITRATION_WEIGHTS=[0.4,0.3,0.2,0.1]`). Start with deterministic overrides for extremes (as you have), then layer in ML lite (e.g., linear regression on user telemetry for personalized weights post-Phase 3). Complexity pays off in retention; expect 20% fewer support tickets on "no fresh art" complaints.
+
+#### 5. Library Dependency: Build Library First, or Soft-Launch Titration?
+Soft-launch titration *with* a minimal viable library (MV Library: 1k-2k assets from your prior visual pantry plan). Full library build first risks over-investment if titration reveals gaps (e.g., low health score biases fresh too heavily, spiking costs). Launch titration in beta for 10% of users, using Phase 1's basic strategy, while parallel-building library via automated prompts.
+
+**Suggestion**: Hybrid: Week 0—seed MV Library with 500 combinatorial assets (focus on top 5 genres/moods). Soft-launch titration on Day 1, monitoring library utilization. If health score dips below 0.6, auto-bypass to fresh for underrepresented tags. This de-risks both, aligning with your phases.
+
+#### 6. Edge Case Coverage: Any Scenarios Missed?
+Solid coverage—love the downgrade clamping and subscription pause freeze. A few misses:
+
+| Scenario | Resolution Suggestion |
+|----------|-----------------------|
+| Multi-device sessions (e.g., app + web) | Sync sessionFramesViewed via userId (not sessionId); use Redis for real-time tally to avoid double-counting. |
+| Partial generations (e.g., API timeout mid-DALL-E) | Auto-refund credit + retry once from library; log as "partial" in ledger for burn rate accuracy. |
+| Group/shared accounts (e.g., team tiers) | Apportion credits per sub-user or pool them; add `teamId` to schema for isolation. |
+| High-velocity inputs (e.g., 100+ tracks in a DJ set) | Cap session fresh at 50% of remaining credits; queue non-urgent as "deferred fresh." |
+| Regional pricing variances (e.g., USD vs EUR tiers) | Normalize quotas to "global credits" but adjust baseMonthlyQuota by locale at signup. |
+
+These are low-probability but high-impact; add to your ledger's eventType enum (e.g., "refund", "defer").
+
+#### 7. Performance Impact: Query Optimization Needed for Credit Checks?
+Minimal impact if indexed properly—`userId` as PK on user_credits and FK on ledger ensures O(1) lookups. But with 1M+ users, repeated `getCreditsContext` in orchestrateFallback could bottleneck at scale (e.g., 100 reqs/sec).
+
+**Suggestion**: Cache aggressively: Redis TTL=5min for creditsRemaining (invalidate on ledger writes). For reconciliation cron, batch via `getUsersWithExpiredCycles` with date-range index on billingCycleEnd. Add read replicas for ledger queries if audit trails bloat. Benchmark: Aim for <50ms p95 latency; if not, denormalize `availableCredits` as a computed column refreshed on writes.
+
+#### 8. Alternative Approaches: Better Titration Models Exist?
+Your exponential decay + weighted linear combo is elegant and interpretable—beats black-box ML for a creative tool. Alternatives:
+
+- **Reinforcement Learning (RL)**: Like bandit arms (fresh vs library as actions), rewarding based on user votes/session time. Better for long-term personalization, but overkill for Phase 1 (needs 10k+ interactions/user). Integrate in Phase 4 via lightweight Thompson Sampling.
+- **Queue-Based (Deterministic)**: Prioritize fresh for "novel" requests (e.g., new styleTags via CLIP diff); library for repeats. Simpler, but less adaptive to budget.
+- **User-Segmented Baselines**: Cluster users (e.g., casual vs power) and apply different probs. Use your analytics for this post-launch.
+
+**Recommendation**: Stick with yours, but A/B against a tiered baseline (e.g., green/yellow/red zones) in Phase 3. RL as a stretch goal if telemetry shows >20% variance in satisfaction.
+
+**Final Thoughts**  
+This system could be a differentiator—position it as "AI that paces itself like a pro DJ." For implementation, prioritize Phase 1 schema in Drizzle/Prisma for type-safety. If you'd like, I can mock up a SQL migration script, simulate the algorithm on sample data, or refine the JS functions with error handling. What's your top priority tweak from this review?

@@ -1,0 +1,202 @@
+Awesome—locking this in.
+
+# Final choice
+
+**Option A — Automated seed script (hybrid tiers).**
+Rationale: zero “purple frames,” immediate end-to-end validation, ~$2–3 one-time cost.
+
+---
+
+# Implementation task list (Architect-ready)
+
+## 0) Pre-flight (1 hour)
+
+* [ ] Provision API keys: Stable Diffusion (lib), DALL·E (fresh), object storage.
+* [ ] Create `IMAGE_CATALOGUE_MANAGER` `.env` vars (API keys, bucket, CDN base).
+* [ ] Enable Redis for session/hysteresis counters.
+
+---
+
+## 1) Schema updates (DB)
+
+* [ ] `artworks` table:
+
+  * `id uuid pk`, `isLibrary boolean`, `tier enum('dual','square','landscape')`,
+  * `orientation enum('portrait','landscape','square')`, `aspectRatio text` (`'9:16'|'16:9'|'1:1'`),
+  * `width int`, `height int`,
+  * `styleTags text[]`, `genre text`, `mood text`,
+  * `safeArea jsonb`, `focalPoints jsonb`, `sidefillPalette text[]`, `clipEmbedding vector`,
+  * `storagePath text`, `createdAt timestamptz`.
+* [ ] Indexes: `GIN(styleTags)`, `btree(orientation)`, `btree(createdAt)`.
+* [ ] Add `preferredOrientation enum('portrait','landscape','both')` to `users`.
+* [ ] Buckets config table (data-driven thresholds):
+  `bucket_key text pk, min_styles int, min_unseen_user int, min_unseen_ratio float`.
+
+**Acceptance:** migration runs clean; read/write round-trip on sample row works.
+
+---
+
+## 2) Seed generator (CLI)
+
+**Command**
+
+```bash
+npm run catalogue:seed -- \
+  --count=1000 \
+  --tiers=hybrid \
+  --split="dual:0.40,square:0.45,landscape:0.15" \
+  --landscape=1920x1080 --portrait=1080x1920 --square=1536x1536 \
+  --genres="lofi,ambient,jazz,rock,hiphop,classical,edm,pop,world,experimental" \
+  --moods="calm,melancholic,dreamy,energetic,dark,reflective,playful,aggressive,uplifting,mysterious" \
+  --styles="vaporwave,cyberpunk,fractal,minimal,geometric,impressionism,pointillism,abstract_expressionism,watercolor,glitch"
+```
+
+**Behavior**
+
+* [ ] Computes target counts:
+
+  * **Dual-native:** 40% → 400 artworks × 2 orientations = **800 files**
+  * **Square-master:** 45% → **450 files**
+  * **Landscape-only:** 15% → **150 files**
+  * **Total files:** **1,400** representing ~**1,000** unique artworks
+* [ ] Prompts by tier/orientation (lookup table):
+
+  * **Landscape:** `wide cinematic framing, panoramic vista, rule of thirds, 16:9 aspect ratio`
+  * **Portrait:** `vertical framing, subject centered in upper third, tall perspective, 9:16 aspect ratio`
+  * **Square:** `central composition, balanced margins, safe subject inside middle 60%, 1:1 aspect ratio`
+* [ ] Calls **Stable Diffusion** for library images.
+* [ ] Stores **WebP** (lossless), path pattern:
+
+  ```
+  /library/{orientation}/{genre}/{mood}/{style}/{uuid}.webp
+  ```
+* [ ] Post-process per image:
+
+  * **CLIP embedding** extract & persist
+  * **Saliency** (OpenCV/TFLite) → `safeArea`, `focalPoints`
+  * **Palette** (k-means or median cut) → `sidefillPalette`
+  * Persist metadata row in `artworks`
+
+**Acceptance:** run completes, produces 1.4k files; 100% rows valid; no corrupt images.
+
+---
+
+## 3) Image Catalogue Manager (cron + refill)
+
+* [ ] Cron `catalogue_refill` (hourly + nightly):
+
+  * Compute bucket key: `genre×mood×orientation`
+  * Measure: `unseen_per_user`, `global_unseen_ratio`, `distinct_styles`
+  * If below thresholds (free/basic/premium rows) → queue batch generation (SD, low priority)
+* [ ] Emits metrics: `catalogue_miss{bucket}`, `refill_enqueued{bucket,count}`
+
+**Acceptance:** empty a bucket → refill enqueued within 15 min; metrics visible.
+
+---
+
+## 4) Client runtime (display & never-stretch rules)
+
+* [ ] Setup wizard step: “How will you watch?” → `preferredOrientation`
+* [ ] Settings toggle: portrait/landscape/both (live)
+* [ ] Renderer:
+
+  * Exact orientation → `object-fit: cover`
+  * Square → **saliency-guided crop** to target aspect
+  * Landscape→Portrait → **side-fill** shader (blur + gradient, palette-anchored)
+* [ ] Orientation change mid-session → **catalog bridge** seeks matching orientation first.
+
+**Acceptance:** switch orientations live with no distortion; crops avoid focal amputations on 50 sampled images.
+
+---
+
+## 5) Library selection service
+
+* [ ] Query candidates by `styleTags`, `orientation`, `excludeImpressions`, `minUnseenRatio`
+* [ ] Rank: exact style > CLIP similarity > freshness > orientation exact
+* [ ] Fallback path tags which adaptation was used (`crop` vs `sidefill`) for analytics.
+
+**Acceptance:** returns diverse, unseen candidates; logs adaptation mode.
+
+---
+
+## 6) Integration with credit controller
+
+* [ ] When controller chooses **Library** → call selection service above.
+* [ ] Coverage guardrails (per bucket) → **force Fresh** if thresholds unmet; log `coverage_miss`.
+* [ ] Orientation scarcity factor computed from `orientationExactPool` (numeric, not boolean).
+
+**Acceptance:** thinning a bucket raises fresh probability and/or triggers fresh directly.
+
+---
+
+## 7) Compression & storage
+
+* [ ] Default **WebP lossless**; **PNG** only if transparency required.
+* [ ] CDN headers (`immutable`, long `max-age`); upload checksum; store `phash` for dedupe.
+
+**Acceptance:** average file size ≤ 2 MB @1080p; cache hits verified.
+
+---
+
+## 8) Metrics & dashboards
+
+* [ ] `catalogue_size{bucket}`, `unseen_ratio{bucket}`, `orientation_pool{bucket}`
+* [ ] `render_adaptation{mode='exact'|'crop'|'sidefill'}` count
+* [ ] `clip_similarity_avg`, `crop_confidence_avg`
+* [ ] Alert: `catalogue_miss_rate > 10%` for 10 min
+
+**Acceptance:** Grafana panels render; alert fires under synthetic shortage.
+
+---
+
+## 9) QA & test harness
+
+* [ ] Golden set of 100 images with hand-labeled saliency boxes → unit tests for cropper
+* [ ] Visual diff (playwright) for side-fill shader (no banding, no visible seams)
+* [ ] Load test: 500 concurrent sessions switching orientation; no stutter, p95 render < 60 ms
+
+---
+
+## 10) Rollout
+
+* [ ] Run `catalogue:seed` once (produces 1.4k files).
+* [ ] Enable Catalogue Manager refill.
+* [ ] Flip client to **orientation-aware** renderer.
+* [ ] Monitor `render_adaptation` ratios for 48h; tune dual/square split if sidefill > 20%.
+
+---
+
+## Prompt packs (ready to drop in)
+
+**Landscape suffix**
+`wide cinematic framing, panoramic vista, rule of thirds, 16:9 aspect ratio`
+
+**Portrait suffix**
+`vertical framing, subject centered in upper third, tall perspective, 9:16 aspect ratio`
+
+**Square-master suffix**
+`central composition, balanced margins, safe subject inside middle 60%, 1:1 aspect ratio`
+
+**Starter style seeds** (map to your 10×10 grid)
+
+* vaporwave, cyberpunk, synthwave, fractal, minimal, geometric, impressionism, pointillism, abstract-expressionism, watercolor, glitch
+
+---
+
+## Seed counts (suggested distribution across 1,000 artworks)
+
+* **Dual-native (400 artworks → 800 files):**
+  Focus on high-traffic: *vaporwave, cyberpunk, synthwave, psychedelic, space-opera* × top moods.
+* **Square-master (450 files):**
+  *abstract, ambient, fractal, minimal, geometric* dominated buckets.
+* **Landscape-only (150 files):**
+  *experimental, niche* buckets likely seen least.
+
+---
+
+If you want, I can generate:
+
+* the **`catalogue:seed` TypeScript script scaffold** (SD prompts, upload, saliency, CLIP, DB insert), and
+* the **React render helper** for saliency crop + side-fill.
+
+Say “**ship the seed script**” and I’ll drop the scaffolds in next.

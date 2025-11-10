@@ -1,0 +1,46 @@
+### Feedback on Orientation & Aspect Ratio Strategy
+
+Excellent refinements here—the three-tier approach smartly tackles the distortion issue without ballooning costs, and it aligns well with the peer-reviewed fallback logic. Renaming "Pantry Inventory Manager" to "Image Catalogue Manager" is a clean win; it's more descriptive and professional. I'll assume we're updating all references (e.g., in code, docs, and crons) to that.
+
+On aspect ratios: You're spot-on that stretching 1024x1024 squares to 16:9 (landscape, e.g., TVs via AirPlay/Chromecast) or 9:16 (portrait, e.g., phones/tablets) would distort elements like subjects or compositions, leading to poor UX. The proposed solution—native generations where possible, smart crops/fills elsewhere—ensures crisp, adaptive visuals. It also ties neatly into the setup wizard/runtime toggle: User's `preferredOrientation` informs the Image Catalogue Manager's bucket checks and generation queues.
+
+#### My Recommendations
+Based on balancing quality, cost, scalability, and user scenarios (e.g., most watching on 1080p/4K TVs or casting, where landscape dominates, but portrait for mobile-first users), here's my take:
+
+1. **Tier Strategy: B) Hybrid (Mix All Three Tiers) – $56 for 1,000 Images**  
+   This is the sweet spot—premium quality for high-traffic styles (e.g., cyberpunk, vaporwave) without overcommitting budget. Dual-native for 40% ensures pixel-perfect fits on TVs/phones, while square-master crops handle flexibility cheaply. Landscape-only with artistic fills is a clever low-effort fallback for niches.  
+   - **Why not A (Premium Dual-Native)?** Too expensive upfront ($80 vs. $56), and not all styles need it—abstract or fractal art crops well without loss. Reserve DALL·E's native aspect for user-fresh requests where quality shines.  
+   - **Why not C (Budget Stable Diffusion)?** SD is great for cost ($1-2), but its quality can vary (e.g., artifacts in complex scenes). Use it selectively in Hybrid for Tier B/C to test, then scale if outputs pass curation. Start with DALL·E for the seed to set a high bar.  
+   - **Implementation Tip**: In the generation queue, add a `tier` param to prompts (e.g., for Tier A: append "native 16:9 landscape" or "native 9:16 portrait"). Track per-tier metrics in monitoring (e.g., distortion complaints or session engagement) to refine the mix over time.
+
+2. **Target Resolutions: 1080p Native, with Browser Upscale for 4K**  
+   Generate at 1080p equivalents (1920x1080 landscape, 1080x1920 portrait, 1536x1536 squares)—it's a practical standard that covers 90%+ of devices without huge file sizes/storage costs.  
+   - **Why not Full 4K Native?** Generation costs double (bigger images = more compute), and storage/CDN bills spike (4K PNGs are 4-10MB vs. 1-2MB for 1080p). Most users cast to 1080p TVs anyway; 4K upscaling via browser (e.g., CSS `image-rendering: auto` or WebGL) looks fine for non-photoreal styles. Reserve 4K for Premium tier user-fresh gens if requested.  
+   - **Upscale Handling**: Client-side, detect device resolution (e.g., via `window.devicePixelRatio`). If >2 (4K-ish), apply lightweight sharpening filter post-load. For casting/AirPlay, metadata can hint "upscale-friendly" images.  
+   - **Bonus**: Compress all to WebP (lossy 80% quality) for 50% smaller files—saves bandwidth without visible loss.
+
+3. **Saliency Detection: Simpler Computer Vision (OpenCV.js – Free)**  
+   Go with OpenCV for starters—it's accurate enough for focal point detection (e.g., edges/faces via contours) and runs server-side during generation (no extra API calls).  
+   - **Why not GPT-4o Vision?** The $0.01/image adds up ($10 for 1,000-image seed), and it's overkill for non-photoreal art. Use it only if OpenCV flops in testing (e.g., for surreal styles where "focal points" are abstract).  
+   - **Why not Skip?** Cropping without saliency risks chopping key elements (e.g., a centered figure in a square). Even basic OpenCV ensures "safe areas" in metadata.  
+   - **Implementation Tip**: Post-generation, run a Node.js script with opencv4nodejs: Extract {focal_points: array of coords}, store in artworks table JSONB. Client uses it for dynamic crops (e.g., via Canvas API).
+
+#### Updated Implementation Flow with These Choices
+To make this concrete for the Architect/Claude in Replit:
+
+- **Phase 1 Seed Script**: Hybrid mix—400 dual-native (DALL·E, popular styles), 400 square-master (DALL·E/SD mix), 200 landscape-only (SD). Use prompts with orientation-specific phrasing. Total cost: ~$56.  
+  ```bash
+  npm run catalogue:seed --count=1000 --tiers=hybrid --api=mixed --res=1080p
+  ```
+  - Auto-run Level 1 curation (validate dims, diversity).  
+  - Extract saliency with OpenCV hook.
+
+- **Image Catalogue Manager (Formerly Pantry)**: Hourly cron checks buckets (e.g., "cyberpunk + portrait + 9:16"). If low, queue Tier B/C gens via SD for refill.
+
+- **Selection & Display**: In `getLibraryFrame`, prioritize native matches. Fallback to crop/fill using metadata. No stretching—ever.
+
+- **Curation Dashboard**: Defer to Phase 2/3. Phase 1 focuses on auto-checks; manual tools can wait until you have real usage data to prune.
+
+This setup ensures no distortion, adapts to TVs/phones/casts, and keeps things cost-effective. For the initial pantry seed, I'd go with **Automated script**—it's flexible, and you can tweak params (e.g., add your API keys). If you share your preferred generator (DALL·E/Midjourney/SD), I can draft the full script code.
+
+Thoughts on these recs? Or want me to prototype the saliency extraction function in TS?
