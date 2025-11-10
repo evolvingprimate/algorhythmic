@@ -94,6 +94,23 @@ export class ImageAnalyzer {
   ): Promise<ImageAnalysisResult> {
     await this.ensureReady();
 
+    // BUG FIX: Early return if OpenCV failed to load (graceful degradation)
+    if (!this.cvReady || typeof cv === 'undefined') {
+      console.warn('[ImageAnalyzer] OpenCV not ready, returning default analysis');
+      return {
+        inlierCount: 0,
+        totalMatches: 0,
+        inlierRatio: 0,
+        homography: null,
+        avgReprojectionError: 0,
+        coverageHeatmap: Array(64).fill(0),
+        coverageScore: 0,
+        edgeOverlap: 0,
+        histogramDistance: 0.5, // Neutral distance
+        hasForeground: false,
+      };
+    }
+
     const {
       targetRes = 512,
       maxFeatures = 500,
