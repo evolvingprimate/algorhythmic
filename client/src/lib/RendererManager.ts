@@ -31,6 +31,15 @@ export class RendererManager {
   private currentFrameIdB: string = '';
   private pendingFrameSwap: { urlA: string; urlB: string; frameIdA: string; frameIdB: string } | null = null;
   
+  // BUG FIX: Prewarming telemetry for performance monitoring
+  private prewarmTelemetry = {
+    cacheHits: 0,
+    cacheMisses: 0,
+    totalPrewarms: 0,
+    avgLatency: 0, // Moving average in ms
+    lastReportTime: Date.now(),
+  };
+  
   // Maestro parameter store
   private parameterStore: Map<string, number | number[] | boolean | string> = new Map();
   private activeRamps: Map<string, {
@@ -232,7 +241,17 @@ export class RendererManager {
       });
       
       const duration = performance.now() - startTime;
+      
+      // BUG FIX: Track telemetry
+      this.prewarmTelemetry.totalPrewarms++;
+      // Moving average: new_avg = (old_avg * (n-1) + new_value) / n
+      const n = this.prewarmTelemetry.totalPrewarms;
+      this.prewarmTelemetry.avgLatency = (this.prewarmTelemetry.avgLatency * (n - 1) + duration) / n;
+      
       console.log(`[RendererManager] ✅ Frame prewarmed in ${duration.toFixed(1)}ms: ${frameId}`);
+      
+      // Report telemetry every 30 seconds
+      this.reportPrewarmTelemetry();
     } catch (error) {
       console.error(`[RendererManager] ❌ Failed to prewarm frame ${frameId}:`, error);
     }
@@ -244,6 +263,27 @@ export class RendererManager {
   isFrameReady(frameId: string): boolean {
     const cached = this.prewarmCache.get(frameId);
     return cached !== undefined && cached.textureReady;
+  }
+  
+  /**
+   * BUG FIX: Report prewarming telemetry (every 30 seconds)
+   */
+  private reportPrewarmTelemetry(): void {
+    const now = Date.now();
+    const elapsed = now - this.prewarmTelemetry.lastReportTime;
+    
+    // Report every 30 seconds
+    if (elapsed < 30000) return;
+    
+    const total = this.prewarmTelemetry.cacheHits + this.prewarmTelemetry.cacheMisses;
+    const hitRate = total > 0 ? (this.prewarmTelemetry.cacheHits / total * 100).toFixed(1) : '0.0';
+    
+    console.log(`[RendererManager] 📊 Prewarm Stats (30s): Hit Rate ${hitRate}% (${this.prewarmTelemetry.cacheHits}/${total}), Avg Latency ${this.prewarmTelemetry.avgLatency.toFixed(1)}ms, Total Prewarmed ${this.prewarmTelemetry.totalPrewarms}`);
+    
+    // Reset counters for next interval
+    this.prewarmTelemetry.cacheHits = 0;
+    this.prewarmTelemetry.cacheMisses = 0;
+    this.prewarmTelemetry.lastReportTime = now;
   }
   
   /**
@@ -301,16 +341,24 @@ export class RendererManager {
       
       if (prewarmA) {
         imgA = prewarmA.image;
+        // BUG FIX: Track cache hit
+        if (frameAChanged) this.prewarmTelemetry.cacheHits++;
       } else {
         console.warn(`[RendererManager] ⚠️ Frame A not prewarmed, loading JIT: ${frameIdA}`);
         imgA = await this.loadImage(imageUrlA);
+        // BUG FIX: Track cache miss
+        if (frameAChanged) this.prewarmTelemetry.cacheMisses++;
       }
       
       if (prewarmB) {
         imgB = prewarmB.image;
+        // BUG FIX: Track cache hit
+        if (frameBChanged) this.prewarmTelemetry.cacheHits++;
       } else {
         console.warn(`[RendererManager] ⚠️ Frame B not prewarmed, loading JIT: ${frameIdB}`);
         imgB = await this.loadImage(imageUrlB);
+        // BUG FIX: Track cache miss
+        if (frameBChanged) this.prewarmTelemetry.cacheMisses++;
       }
       
       // BUG FIX: Upload textures and mark as ready
