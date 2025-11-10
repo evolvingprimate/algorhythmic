@@ -12,6 +12,12 @@ export class RendererManager {
   private currentEngineKey: string = '';
   private pendingEngineKey: string | null = null;
   
+  // BUG FIX: Readiness tracking to prevent premature prewarm calls
+  private isReady: boolean = false;
+  private readyPromise: Promise<void>;
+  private resolveReady!: () => void;
+  private rejectReady!: (error: Error) => void;
+  
   private imageTextureA: WebGLTexture | null = null;
   private imageTextureB: WebGLTexture | null = null;
   private imageDataA: HTMLImageElement | null = null;
@@ -57,9 +63,16 @@ export class RendererManager {
   }> = new Map();
   
   constructor(containerId: string, initialEngine: string) {
+    // BUG FIX: Initialize readiness promise before any async operations
+    this.readyPromise = new Promise<void>((resolve, reject) => {
+      this.resolveReady = resolve;
+      this.rejectReady = reject;
+    });
+    
     this.container = document.getElementById(containerId);
     if (!this.container) {
       console.error(`[RendererManager] Container ${containerId} not found`);
+      this.rejectReady(new Error('Container not found'));
       return;
     }
     
@@ -95,11 +108,37 @@ export class RendererManager {
     this.createTextures();
     
     // Initialize with the initial engine asynchronously
-    this.switchEngine(initialEngine).catch((error) => {
-      console.error('[RendererManager] Failed to initialize initial engine:', error);
-    });
+    this.switchEngine(initialEngine)
+      .then(() => {
+        this.isReady = true;
+        this.resolveReady();
+        console.log('[RendererManager] ✅ Renderer ready');
+      })
+      .catch((error) => {
+        console.error('[RendererManager] Failed to initialize initial engine:', error);
+        this.rejectReady(error);
+      });
     
     console.log('[RendererManager] Initializing with engine:', initialEngine);
+  }
+  
+  /**
+   * BUG FIX: Wait for renderer to be ready before using it
+   * Returns a promise that resolves when initialization completes (with 5s timeout)
+   */
+  async whenReady(): Promise<void> {
+    const timeoutPromise = new Promise<void>((_, reject) => {
+      setTimeout(() => reject(new Error('[RendererManager] Init timeout (5s)')), 5000);
+    });
+    
+    try {
+      await Promise.race([this.readyPromise, timeoutPromise]);
+    } catch (error) {
+      console.warn('[RendererManager] whenReady() timeout/failed, forcing ready state');
+      // Graceful degradation - mark as ready anyway to allow JIT fallback
+      this.isReady = true;
+      throw error;
+    }
   }
   
   private resize(): void {
@@ -221,6 +260,12 @@ export class RendererManager {
    * This prevents visual glitches by ensuring frames are decoded & GPU-ready
    */
   async prewarmFrame(imageUrl: string, frameId: string): Promise<void> {
+    // BUG FIX: Skip if renderer not ready (prevents crash)
+    if (!this.isReady) {
+      console.warn(`[RendererManager] ⏸️ Not ready, skipping prewarm for: ${frameId}`);
+      return;
+    }
+    
     // Skip if already prewarmed
     if (this.prewarmCache.has(frameId)) {
       return;

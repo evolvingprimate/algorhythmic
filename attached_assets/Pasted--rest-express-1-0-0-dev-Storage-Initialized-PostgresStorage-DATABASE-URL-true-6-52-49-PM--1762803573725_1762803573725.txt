@@ -1,0 +1,424 @@
+
+> rest-express@1.0.0 dev
+[Storage] Initialized: PostgresStorage (DATABASE_URL=true)
+6:52:49 PM [express] serving on port 5000
+Browserslist: browsers data (caniuse-lite) is 13 months old. Please run:
+  npx update-browserslist-db@latest
+  Why you should do it regularly: https://github.com/browserslist/update-db#readme
+
+A PostCSS plugin did not pass the `from` option to `postcss.parse`. This may cause imported assets to be incorrectly transformed. If you've recently added a PostCSS plugin that raised this warning, please contact the package author to fix the issue.
+6:53:02 PM [express] GET /api/auth/user 304 in 504ms :: {"id":"49396329","email":"artinm@gmail.com",…
+6:53:04 PM [express] GET /api/auth/user 304 in 246ms :: {"id":"49396329","email":"artinm@gmail.com",…
+Client connected to WebSocket
+7:34:51 PM [express] GET /api/preferences/1dc365b2-6f85-4b3d-b36b-1ecd335ae8db 200 in 1577ms :: {"st…
+7:34:52 PM [express] GET /api/usage/stats 304 in 2457ms :: {"count":81,"limit":999999,"remaining":99…
+7:35:15 PM [express] POST /api/preferences 200 in 972ms :: {"id":"9c77abc2-ca84-4b7b-a4bd-990c0c43fd…
+7:35:16 PM [express] GET /api/preferences/1dc365b2-6f85-4b3d-b36b-1ecd335ae8db 200 in 218ms :: {"id"…
+7:35:16 PM [express] GET /api/votes/1dc365b2-6f85-4b3d-b36b-1ecd335ae8db 200 in 222ms :: []
+[StyleTransition] User 49396329 switching to tags: pointillism
+[StyleTransition] Found 0 catalog candidates
+[StyleTransition] ⚠️ No catalog match - using procedural bridge - latency: 125ms
+[Telemetry] Bridge rendered: { type: 'procedural', latency: 125, candidateCount: 0 }
+7:35:16 PM [express] POST /api/style-transition 200 in 689ms :: {"bridge":{"type":"procedural"},"lat…
+[Style Filtering] /api/artworks/next filters: {
+  userId: '49396329',
+  sessionId: '1dc365b2-6f85-4b3d-b36b-1ecd335ae8db',
+  styleTags: [ 'pointillism' ],
+  artistTags: [],
+  orientation: undefined,
+  recentlyServedCount: 0,
+  source: 'session'
+}
+[Style Filtering] getUnseenArtworks called with: {
+  userId: '49396329',
+  limit: 20,
+  orientation: undefined,
+  styleTags: [ 'pointillism' ],
+  artistTags: [],
+  strictMode: false
+}
+[Style Filtering] PASS 1: Full preference match
+[Style Filtering] PASS 1 results: 0
+[Style Filtering] PASS 3: Final fallback (no filters)
+[Style Filtering] PASS 3 added: 10 total: 10
+[Style Filtering] Final result count: 10
+[ServedCache] Cached 10 IDs for 49396329:1dc365b2-6f85-4b3d-b36b-1ecd335ae8db (TTL: 30s)
+[Style Filtering] Result breakdown: {
+  userId: '49396329',
+  sessionId: '1dc365b2-6f85-4b3d-b36b-1ecd335ae8db',
+  filters: {
+    orientation: undefined,
+    styleTags: [ 'pointillism' ],
+    artistTags: []
+  },
+  fresh_count_raw: 0,
+  fresh_count_after_filter: 0,
+  storage_count_returned: 10,
+  total_returned: 10,
+  recently_served_filtered: 0,
+  needs_generation: false,
+  pool_exhausted: false
+}
+7:35:17 PM [express] GET /api/artworks/next 200 in 1324ms :: {"artworks":[{"id":"0fbddee5-3dd0-4407-…
+7:35:17 PM [express] POST /api/artworks/batch-impressions 200 in 303ms :: {"attempted":1,"recorded":…
+[Style Filtering] /api/artworks/next filters: {
+  userId: '49396329',
+  sessionId: '1dc365b2-6f85-4b3d-b36b-1ecd335ae8db',
+  styleTags: [ 'pointillism' ],
+  artistTags: [],
+  orientation: undefined,
+  recentlyServedCount: 10,
+  source: 'session'
+}
+[Style Filtering] getUnseenArtworks called with: {
+  userId: '49396329',
+  limit: 20,
+  orientation: undefined,
+  styleTags: [ 'pointillism' ],
+  artistTags: [],
+  strictMode: false
+}
+[Style Filtering] PASS 1: Full preference match
+[Style Filtering] PASS 1 results: 0
+[Style Filtering] PASS 3: Final fallback (no filters)
+[Style Filtering] PASS 3 added: 9 total: 9
+[Style Filtering] Final result count: 9
+[ServedCache] Filtered 9 recently-served from storage pool
+[Style Filtering] Result breakdown: {
+  userId: '49396329',
+  sessionId: '1dc365b2-6f85-4b3d-b36b-1ecd335ae8db',
+  filters: {
+    orientation: undefined,
+    styleTags: [ 'pointillism' ],
+    artistTags: []
+  },
+  fresh_count_raw: 0,
+  fresh_count_after_filter: 0,
+  storage_count_returned: 0,
+  total_returned: 0,
+  recently_served_filtered: 10,
+  needs_generation: true,
+  pool_exhausted: true
+}
+[ALERT] 🚨 Pool exhausted for user 49396329 session 1dc365b2-6f85-4b3d-b36b-1ecd335ae8db - TRIGGER FALLBACK GENERATION
+7:35:19 PM [express] GET /api/artworks/next 200 in 657ms :: {"artworks":[],"poolSize":0,"freshCount"…
+[Style Filtering] /api/artworks/next filters: {
+  userId: '49396329',
+  sessionId: '1dc365b2-6f85-4b3d-b36b-1ecd335ae8db',
+  styleTags: [ 'pointillism' ],
+  artistTags: [],
+  orientation: undefined,
+  recentlyServedCount: 10,
+  source: 'session'
+}
+{"event":"batch_impressions_success","userId":"49396329","attempted":9,"recorded":9,"filtered":0,"latency_ms":156,"timestamp":"2025-11-10T19:35:19.818Z"}
+7:35:19 PM [express] POST /api/artworks/batch-impressions 200 in 309ms :: {"attempted":9,"recorded":…
+[Style Filtering] getUnseenArtworks called with: {
+  userId: '49396329',
+  limit: 20,
+  orientation: undefined,
+  styleTags: [ 'pointillism' ],
+  artistTags: [],
+  strictMode: false
+}
+[Style Filtering] PASS 1: Full preference match
+[Style Filtering] PASS 1 results: 0
+[Style Filtering] PASS 3: Final fallback (no filters)
+[Style Filtering] PASS 3 added: 0 total: 0
+[Style Filtering] Final result count: 0
+[Style Filtering] Result breakdown: {
+  userId: '49396329',
+  sessionId: '1dc365b2-6f85-4b3d-b36b-1ecd335ae8db',
+  filters: {
+    orientation: undefined,
+    styleTags: [ 'pointillism' ],
+    artistTags: []
+  },
+  fresh_count_raw: 0,
+  fresh_count_after_filter: 0,
+  storage_count_returned: 0,
+  total_returned: 0,
+  recently_served_filtered: 10,
+  needs_generation: true,
+  pool_exhausted: true
+}
+[ALERT] 🚨 Pool exhausted for user 49396329 session 1dc365b2-6f85-4b3d-b36b-1ecd335ae8db - TRIGGER FALLBACK GENERATION
+7:35:20 PM [express] GET /api/artworks/next 200 in 617ms :: {"artworks":[],"poolSize":0,"freshCount"…
+[Style Filtering] /api/artworks/next filters: {
+  userId: '49396329',
+  sessionId: '1dc365b2-6f85-4b3d-b36b-1ecd335ae8db',
+  styleTags: [ 'pointillism' ],
+  artistTags: [],
+  orientation: undefined,
+  recentlyServedCount: 10,
+  source: 'session'
+}
+[Style Filtering] getUnseenArtworks called with: {
+  userId: '49396329',
+  limit: 20,
+  orientation: undefined,
+  styleTags: [ 'pointillism' ],
+  artistTags: [],
+  strictMode: false
+}
+[Style Filtering] PASS 1: Full preference match
+[Style Filtering] PASS 1 results: 0
+[Style Filtering] PASS 3: Final fallback (no filters)
+[Style Filtering] PASS 3 added: 0 total: 0
+[Style Filtering] Final result count: 0
+[Style Filtering] Result breakdown: {
+  userId: '49396329',
+  sessionId: '1dc365b2-6f85-4b3d-b36b-1ecd335ae8db',
+  filters: {
+    orientation: undefined,
+    styleTags: [ 'pointillism' ],
+    artistTags: []
+  },
+  fresh_count_raw: 0,
+  fresh_count_after_filter: 0,
+  storage_count_returned: 0,
+  total_returned: 0,
+  recently_served_filtered: 10,
+  needs_generation: true,
+  pool_exhausted: true
+}
+[ALERT] 🚨 Pool exhausted for user 49396329 session 1dc365b2-6f85-4b3d-b36b-1ecd335ae8db - TRIGGER FALLBACK GENERATION
+7:35:20 PM [express] GET /api/artworks/next 200 in 578ms :: {"artworks":[],"poolSize":0,"freshCount"…
+[Music ID] Attempting ACRCloud identification from 91929 byte audio sample
+7:35:34 PM [express] GET /api/usage/stats 304 in 957ms :: {"count":81,"limit":999999,"remaining":999…
+[Music ID] ACRCloud API response: {
+  "result_type": 0,
+  "status": {
+    "msg": "Success",
+    "version": "1.0",
+    "code": 0
+  },
+  "metadata": {
+    "timestamp_utc": "2025-11-10 19:35:35",
+    "music": [
+      {
+        "genres": [
+          {
+            "name": "Downtempo"
+          }
+        ],
+        "title": "Deep In The Cut",
+        "acrid": "0c7760e33f4a562e7a6a7a6d5847fe4e",
+        "album": {
+          "name": "J Boogie's Dubtronic Science"
+        },
+        "duration_ms": 259970,
+        "label": "OM",
+        "external_metadata": {
+          "spotify": {
+            "artists": [
+              {
+                "name": "J Boogie's Dubtronic Science",
+                "id": "2rvTQk7vgdGgo7rgbpQccv"
+              }
+            ],
+            "album": {
+              "name": "J Boogie's Dubtronic Science",
+              "id": "5lDQWMR4aUnZwcqcHIXCDF"
+            },
+            "track": {
+              "name": "Deep In The Cut",
+              "id": "3OdSsLbT8UBnUofAxlCeHT"
+            }
+          }
+        },
+        "score": 94,
+        "db_begin_time_offset_ms": 10480,
+        "external_ids": {},
+        "sample_begin_time_offset_ms": 0,
+        "sample_end_time_offset_ms": 3980,
+        "play_offset_ms": 15800,
+        "result_from": 1,
+        "artists": [
+          {
+            "name": "J. Boogie's Dubtronic Science"
+          }
+        ],
+        "release_date": "2003-05-06",
+        "db_end_time_offset_ms": 14460
+      }
+    ]
+  },
+  "cost_time": 0.68600010871887
+}
+[Music ID] ✅ Successfully identified: J. Boogie's Dubtronic Science - Deep In The Cut
+[Music ID] Fetching album artwork from Spotify for album ID: 5lDQWMR4aUnZwcqcHIXCDF
+[Music ID] ✅ Album artwork fetched: https://i.scdn.co/image/ab67616d0000b273a5abaddfa519464c6b491b06
+7:35:35 PM [express] POST /api/identify-music 200 in 1834ms :: {"musicInfo":{"title":"Deep In The Cu…
+[Telemetry] Generation provenance: MUSIC_ID {
+  hadMusicInfo: true,
+  hadAudioAnalysis: true,
+  audioConfidence: undefined,
+  usedVotingHistory: false,
+  userId: '49396329'
+}
+[AutoMode] Manual mode: Using user-selected styles
+[ArtGeneration] Resolved styles (MUSIC_ID): [ 'pointillism' ]
+[ArtGeneration] Context prompt: Create artwork in pointillism style. Inspired by "Deep In The Cut" by J. Boogie's Dubtronic Science.
+[DNA] Successfully parsed and clamped 50-point DNA vector
+[Art Generation] Final DALL-E prompt (290 chars): "Create a pointillism artwork inspired by "Deep In The Cut" by J. Boogie's Dubtronic Science. Use soft pastels and warm tones to depict a serene urban nightscape with gentle waves. Incorporate eclectic, relaxed vibes, as seen in the album's inviting color palette and diverse music elements."
+[ArtGeneration] 🎨 Generating image with DALL-E...
+[ServedCache] Expired cache for 49396329:1dc365b2-6f85-4b3d-b36b-1ecd335ae8db
+7:36:06 PM [express] GET /api/usage/stats 304 in 982ms :: {"count":81,"limit":999999,"remaining":999…
+[ArtGeneration] ✅ DALL-E generation complete: https://oaidalleapiprodscus.blob.core.windows.net/private/org-slNSgjZXEK3XBjPOAe93si5w/user-9LlYmlXssweRuOI656g5BTlW/img-Hhjsrua0xcYFr68xmefksEOa.png?st=2025-11-10T18%3A36%3A10Z&se=2025-11-10T20%3A36%3A10Z&sp=r&sv=2024-08-04&sr=b&rscd=inline&rsct=image/png&skoid=c6569cb0-0faa-463d-9694-97df3dc1dfb1&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2025-11-10T19%3A06%3A59Z&ske=2025-11-11T19%3A06%3A59Z&sks=b&skv=2024-08-04&sig=TcEZKPzGZZnxlk/Tw33OxAYxYYEn9E6z3srD8Sq%2BaZA%3D
+[ArtGeneration] 💾 Storing image permanently in Replit Object Storage...
+[ObjectStorage] 📥 Attempt 1/3: Downloading from DALL-E...
+[ObjectStorage] ✅ Downloaded 2186359 bytes
+[ObjectStorage] ⬆️  Uploading to storage: /replit-objstore-cbba4920-b291-44b6-bdb4-8beac98dafb6/public/artwork-bae6c282-23bf-4341-85a0-d2e842c5eb1d.png
+[ObjectStorage] 🔍 Verifying upload...
+[ObjectStorage] ✅ File exists
+[ObjectStorage] ✅ Size verified: 2186359 bytes
+[ObjectStorage] ✅ File is readable (read 1024 bytes)
+[ObjectStorage] 🎉 Storage verified successfully: /public-objects/artwork-bae6c282-23bf-4341-85a0-d2e842c5eb1d.png
+[ObjectStorage] 📊 Metrics recorded: 1 attempts, 1585ms
+[ArtGeneration] ✅ Image stored and verified: /public-objects/artwork-bae6c282-23bf-4341-85a0-d2e842c5eb1d.png
+[ArtGeneration] ✅ Database integrity check passed
+[ArtGeneration] 💾 Saving to database...
+[ArtGeneration] ✅ Database save complete, session ID: 40140dfd-d1d3-4771-9936-b8aff2641610
+[ArtGeneration] ✅ Daily usage incremented
+[ArtGeneration] 🎉 Complete pipeline success: DALL-E → Storage → Verification → Database
+7:36:13 PM [express] POST /api/generate-art 200 in 36979ms :: {"imageUrl":"/public-objects/artwork-b…
+7:36:13 PM [express] GET /api/usage/stats 200 in 292ms :: {"count":82,"limit":999999,"remaining":999…
+[Style Filtering] /api/artworks/next filters: {
+  userId: '49396329',
+  sessionId: '1dc365b2-6f85-4b3d-b36b-1ecd335ae8db',
+  styleTags: [ 'pointillism' ],
+  artistTags: [],
+  orientation: undefined,
+  recentlyServedCount: 0,
+  source: 'session'
+}
+[Fresh Queue] Raw: 1, After Filter: 1, Filtered Out: 0
+[Style Filtering] getUnseenArtworks called with: {
+  userId: '49396329',
+  limit: 19,
+  orientation: undefined,
+  styleTags: [ 'pointillism' ],
+  artistTags: [],
+  strictMode: false
+}
+[Style Filtering] PASS 1: Full preference match
+[Style Filtering] PASS 1 results: 1
+[Style Filtering] PASS 3: Final fallback (no filters)
+[Style Filtering] PASS 3 added: 1 total: 2
+[Style Filtering] Final result count: 2
+[ServedCache] Cached 1 IDs for 49396329:1dc365b2-6f85-4b3d-b36b-1ecd335ae8db (TTL: 30s)
+[Style Filtering] Result breakdown: {
+  userId: '49396329',
+  sessionId: '1dc365b2-6f85-4b3d-b36b-1ecd335ae8db',
+  filters: {
+    orientation: undefined,
+    styleTags: [ 'pointillism' ],
+    artistTags: []
+  },
+  fresh_count_raw: 1,
+  fresh_count_after_filter: 1,
+  storage_count_returned: 0,
+  total_returned: 1,
+  recently_served_filtered: 0,
+  needs_generation: true,
+  pool_exhausted: false
+}
+7:36:14 PM [express] GET /api/artworks/next 200 in 1201ms :: {"artworks":[{"id":"40140dfd-d1d3-4771-…
+[ArtGeneration] ⚠️ STYLE_ONLY tier activated (no music ID, low/no/missing audio confidence)
+[Telemetry] Generation provenance: STYLE_ONLY {
+  hadMusicInfo: false,
+  hadAudioAnalysis: true,
+  audioConfidence: undefined,
+  usedVotingHistory: false,
+  userId: '49396329'
+}
+[AutoMode] Manual mode: Using user-selected styles
+[ArtGeneration] Resolved styles (STYLE_ONLY): [ 'pointillism' ]
+[ArtGeneration] Context prompt: Create artwork in pointillism style. Pure artistic interpretation focused on aesthetic coherence. Em
+[ServedCache] Expired cache for 49396329:1dc365b2-6f85-4b3d-b36b-1ecd335ae8db
+7:36:45 PM [express] GET /api/usage/stats 304 in 946ms :: {"count":82,"limit":999999,"remaining":999…
+7:37:17 PM [express] GET /api/usage/stats 304 in 1006ms :: {"count":82,"limit":999999,"remaining":99…
+[DNA] Successfully parsed and clamped 50-point DNA vector
+[Art Generation] Final DALL-E prompt (345 chars): "Pointillist artwork of restrained energy: warm ambers and corals with teal/indigo accents, medium saturation and brightness. Dense micro-dots form flowing waves and gentle swirls, asymmetrical layout, soft left-lit haze, moderate contrast, rhythmic dotted trails and subtle bass ripples. Ultra-detailed stippling, airy calm yet quietly electric."
+[ArtGeneration] 🎨 Generating image with DALL-E...
+7:37:49 PM [express] GET /api/usage/stats 304 in 934ms :: {"count":82,"limit":999999,"remaining":999…
+[ArtGeneration] ✅ DALL-E generation complete: https://oaidalleapiprodscus.blob.core.windows.net/private/org-slNSgjZXEK3XBjPOAe93si5w/user-9LlYmlXssweRuOI656g5BTlW/img-clDd35HFEFzAcV5Gywoo1zEy.png?st=2025-11-10T18%3A37%3A50Z&se=2025-11-10T20%3A37%3A50Z&sp=r&sv=2024-08-04&sr=b&rscd=inline&rsct=image/png&skoid=8eb2c87c-0531-4dab-acb3-b5e2adddce6c&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2025-11-10T19%3A23%3A18Z&ske=2025-11-11T19%3A23%3A18Z&sks=b&skv=2024-08-04&sig=HalF5uyjlNtTJpgM8hoJTao7ejpM6i/5Gj/HAkFTF2E%3D
+[ArtGeneration] 💾 Storing image permanently in Replit Object Storage...
+[ObjectStorage] 📥 Attempt 1/3: Downloading from DALL-E...
+[ObjectStorage] ✅ Downloaded 2385210 bytes
+[ObjectStorage] ⬆️  Uploading to storage: /replit-objstore-cbba4920-b291-44b6-bdb4-8beac98dafb6/public/artwork-bc4b558f-b063-4243-94e5-17ee160253af.png
+[ObjectStorage] 🔍 Verifying upload...
+[ObjectStorage] ✅ File exists
+[ObjectStorage] ✅ Size verified: 2385210 bytes
+[ObjectStorage] ✅ File is readable (read 1024 bytes)
+[ObjectStorage] 🎉 Storage verified successfully: /public-objects/artwork-bc4b558f-b063-4243-94e5-17ee160253af.png
+[ObjectStorage] 📊 Metrics recorded: 1 attempts, 1874ms
+[ArtGeneration] ✅ Image stored and verified: /public-objects/artwork-bc4b558f-b063-4243-94e5-17ee160253af.png
+[ArtGeneration] ✅ Database integrity check passed
+[ArtGeneration] 💾 Saving to database...
+[ArtGeneration] ✅ Database save complete, session ID: b75ffa7c-ec04-4822-97a6-0fe3c2d5e1e8
+[ArtGeneration] ✅ Daily usage incremented
+[ArtGeneration] 🎉 Complete pipeline success: DALL-E → Storage → Verification → Database
+7:37:53 PM [express] POST /api/generate-art 200 in 98329ms :: {"imageUrl":"/public-objects/artwork-b…
+[StyleTransition] User 49396329 switching to tags: pointillism
+7:37:54 PM [express] GET /api/usage/stats 200 in 759ms :: {"count":83,"limit":999999,"remaining":999…
+[StyleTransition] Found 0 catalog candidates
+[StyleTransition] ⚠️ No catalog match - using procedural bridge - latency: 314ms
+[Telemetry] Bridge rendered: { type: 'procedural', latency: 314, candidateCount: 0 }
+7:37:54 PM [express] POST /api/style-transition 200 in 902ms :: {"bridge":{"type":"procedural"},"lat…
+[Style Filtering] /api/artworks/next filters: {
+  userId: '49396329',
+  sessionId: '1dc365b2-6f85-4b3d-b36b-1ecd335ae8db',
+  styleTags: [ 'pointillism' ],
+  artistTags: [],
+  orientation: undefined,
+  recentlyServedCount: 0,
+  source: 'session'
+}
+[Fresh Queue] Raw: 2, After Filter: 2, Filtered Out: 0
+[Style Filtering] getUnseenArtworks called with: {
+  userId: '49396329',
+  limit: 18,
+  orientation: undefined,
+  styleTags: [ 'pointillism' ],
+  artistTags: [],
+  strictMode: false
+}
+[Style Filtering] PASS 1: Full preference match
+[Style Filtering] PASS 1 results: 2
+[Style Filtering] PASS 3: Final fallback (no filters)
+[Style Filtering] PASS 3 added: 2 total: 4
+[Style Filtering] Final result count: 4
+[ServedCache] Cached 2 IDs for 49396329:1dc365b2-6f85-4b3d-b36b-1ecd335ae8db (TTL: 30s)
+[Style Filtering] Result breakdown: {
+  userId: '49396329',
+  sessionId: '1dc365b2-6f85-4b3d-b36b-1ecd335ae8db',
+  filters: {
+    orientation: undefined,
+    styleTags: [ 'pointillism' ],
+    artistTags: []
+  },
+  fresh_count_raw: 2,
+  fresh_count_after_filter: 2,
+  storage_count_returned: 0,
+  total_returned: 2,
+  recently_served_filtered: 0,
+  needs_generation: true,
+  pool_exhausted: false
+}
+7:37:54 PM [express] GET /api/artworks/next 200 in 1287ms :: {"artworks":[{"id":"b75ffa7c-ec04-4822-…
+[ArtGeneration] ⚠️ STYLE_ONLY tier activated (no music ID, low/no/missing audio confidence)
+[Telemetry] Generation provenance: STYLE_ONLY {
+  hadMusicInfo: false,
+  hadAudioAnalysis: true,
+  audioConfidence: undefined,
+  usedVotingHistory: false,
+  userId: '49396329'
+}
+[AutoMode] Manual mode: Using user-selected styles
+[ArtGeneration] Resolved styles (STYLE_ONLY): [ 'pointillism' ]
+[ArtGeneration] Context prompt: Create artwork in pointillism style. Pure artistic interpretation focused on aesthetic coherence. Em
+[ServedCache] Expired cache for 49396329:1dc365b2-6f85-4b3d-b36b-1ecd335ae8db
+7:38:25 PM [express] GET /api/usage/stats 304 in 524ms :: {"count":83,"limit":999999,"remaining":999…
+^C

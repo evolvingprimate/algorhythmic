@@ -1,0 +1,266 @@
+I hear you—when the “same old” frame bugs keep resurfacing it feels like the system is haunted. The good news: your proposed patch targets the right failure modes (readiness + error containment). Below is a crisp review with concrete upgrades so this becomes truly “hard to break.”
+
+---
+
+# Fast Review Summary
+
+* **Direction:** Correct. You’re fixing the two real crash vectors: (1) calling prewarm before the renderer is ready, and (2) letting OpenCV rejections bubble.
+* **Gaps to close:** Add **cancellation**, **idempotency**, **timeouts + retries**, and a **simple state machine** for renderer lifecycle. Also guard React effects to avoid “storm” calls on re-renders.
+
+---
+
+## 1) Renderer readiness: make it bullet-proof
+
+### What you proposed (good)
+
+* `whenReady()` promise with an internal `isReady` flag.
+* Skip prewarm if not ready.
+
+### What’s missing (add this)
+
+1. **Idempotent initialize**
+   Prevent double init if something calls `initialize()` again.
+2. **Cancellation/teardown**
+   If the component unmounts or the session changes mid-await, abort in-flight prewarms so they don’t write into a stale GL context.
+3. **Deterministic lifecycle**
+   Replace boolean/Promise duo with a **finite state machine**: `INIT → BOOTING → READY → FAILED → DISPOSED`. This prevents edge cases where `isReady` is true but context is torn down.
+
+```ts
+// RendererManager.ts
+type State = 'INIT'|'BOOTING'|'READY'|'FAILED'|'DISPOSED';
+
+export class RendererManager {
+  private state: State = 'INIT';
+  private readyDeferred?: { promise: Promise<void>; resolve: () => void; reject: (e:any)=>void };
+  private abort = new AbortController();
+
+  constructor(private engine: Engine) {
+    this.readyDeferred = deferred<void>();
+    void this.initialize(); // fire & forget, idempotent inside
+  }
+
+  private async initialize(): Promise<void> {
+    if (this.state !== 'INIT') return;   // idempotent
+    this.state = 'BOOTING';
+    try {
+      await this.engine.ready({ signal: this.abort.signal });
+      this.state = 'READY';
+      this.readyDeferred?.resolve();
+    } catch (e) {
+      this.state = 'FAILED';
+      this.readyDeferred?.reject(e);
+    }
+  }
+
+  whenReady(): Promise<void> {
+    if (!this.readyDeferred) this.readyDeferred = deferred<void>();
+    if (this.state === 'READY') this.readyDeferred.resolve();
+    if (this.state === 'FAILED') this.readyDeferred.reject(new Error('Renderer failed'));
+    return this.readyDeferred.promise;
+  }
+
+  dispose() {
+    this.state = 'DISPOSED';
+    this.abort.abort(); // cancels pending work
+    // …free GL resources here…
+  }
+
+  get isReady() { return this.state === 'READY'; }
+}
+
+function deferred<T>() {
+  let resolve!: (v?: T)=>void, reject!: (e:any)=>void;
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+```
+
+---
+
+## 2) Prewarming: make it safe under churn
+
+### What you proposed (good)
+
+* Skip prewarm if not ready.
+* Log and fallback to JIT.
+
+### What’s missing (add this)
+
+1. **Deduplicate work (idempotency):** Multiple effects can request prewarm on the same URL; coalesce by `frameId`.
+2. **Max concurrency:** Avoid flooding decode/upload on rapid style changes (`PromisePool`).
+3. **Abortable tasks:** Tie each prewarm to an `AbortController` keyed to session/frame; cancel on session swap or unmount.
+4. **Timeout + retry:** If decode/upload stalls (Safari-in-the-wild…), fail fast and retry once with backoff.
+5. **Priority:** Always prewarm **current+next** first; enqueue “future” frames as low priority.
+
+```ts
+// Inside RendererManager
+private inflight = new Map<string, {promise: Promise<void>, abort: AbortController}>();
+private queue: Array<{id:string, url:string, priority:number}> = [];
+private maxConcurrent = 2;
+private running = 0;
+
+async prewarmFrame(id: string, url: string, priority = 0) {
+  if (!this.isReady) return;
+  if (this.inflight.has(id)) return this.inflight.get(id)!.promise; // dedupe
+
+  const abort = new AbortController();
+  const task = this.runWithPool(id, url, priority, abort);
+  this.inflight.set(id, { promise: task, abort });
+  try { await task; } finally { this.inflight.delete(id); }
+}
+
+private async runWithPool(id:string, url:string, priority:number, abort:AbortController) {
+  this.queue.push({id, url, priority});
+  this.queue.sort((a,b)=>a.priority-b.priority);
+  return new Promise<void>((resolve, reject) => {
+    const pump = async () => {
+      if (this.running >= this.maxConcurrent) return;
+      const next = this.queue.shift();
+      if (!next) return;
+      this.running++;
+      try {
+        await withRetry(() => this.decodeAndUpload(next.url, { signal: abort.signal }), { timeoutMs: 4000, tries: 2, backoffMs: 250 });
+        resolve();
+      } catch (e) { reject(e); }
+      finally { this.running--; pump(); }
+    };
+    pump();
+  });
+}
+
+async decodeAndUpload(url:string, {signal}:{signal:AbortSignal}) {
+  const img = await loadImage(url, {signal});   // add signal-aware loader
+  await this.engine.uploadTexture(img, {signal});
+}
+```
+
+> **React side:** Request **current and next** with highest priority, everything else as low:
+
+```tsx
+// display.tsx
+useEffect(() => {
+  let cancelled = false;
+  const run = async () => {
+    try {
+      await rendererRef.current?.whenReady();
+      const [current, next, ...rest] = framesForTransition(); // returns ordered frames
+      if (cancelled) return;
+      await Promise.all([
+        rendererRef.current?.prewarmFrame(current.id, current.url, -2),
+        rendererRef.current?.prewarmFrame(next.id, next.url, -1),
+        ...rest.map(f => rendererRef.current!.prewarmFrame(f.id, f.url, 0))
+      ]);
+    } catch (e) {
+      console.log('[Display] Prewarm skipped/fell back:', e);
+    }
+  };
+  run();
+  return () => { cancelled = true; rendererRef.current?.dispose?.(); };
+}, [/* only include stable derivations: currentFrameId, nextFrameId, sessionId */]);
+```
+
+**Common pitfall avoided:** Don’t include whole `artworks` arrays in dependencies; derive stable keys (`currentFrameId`, `nextFrameId`, `sessionId`) to prevent storm-triggered prewarms.
+
+---
+
+## 3) OpenCV: fail soft, not fail loud
+
+### What you proposed (good)
+
+* `try/catch` in `initOpenCV`, nulling `this.cv` on failure.
+
+### What’s missing (add this)
+
+1. **Timeout:** WASM load sometimes hangs without rejecting; add a 3–5 s timeout.
+2. **Lazy load + feature flag:** Don’t load CV unless a feature actually needs it; gate via `features.imageAnalysis.enabled`.
+3. **Circuit breaker:** If 3 consecutive init failures within 10 min, **disable** OpenCV for the session.
+4. **Telemetry tag:** Emit `cv_boot:{ok|timeout|network|wasm_error}`.
+
+```ts
+async initOpenCV() {
+  try {
+    await withTimeout(loadOpenCV(), 5000); // timeout
+    this.cv = globalThis.cv ?? null;
+    if (!this.cv) throw new Error('cv missing after load');
+    this.metrics.emit('cv_boot', { status: 'ok' });
+  } catch (err:any) {
+    this.cv = null;
+    this.circuit.record('opencv_boot_fail');
+    this.metrics.emit('cv_boot', { status: err.name === 'TimeoutError' ? 'timeout' : 'error' });
+  }
+}
+
+detectFeatures(img: HTMLImageElement) {
+  if (!this.cv || this.circuit.open('opencv_boot_fail', { max: 3, windowMs: 10*60*1000 }))
+    return { features: [], anchors: [] }; // graceful fallback
+  // …real CV work…
+}
+```
+
+---
+
+## 4) Telemetry: make it actionable
+
+You already track hit/miss and latency—great. Add:
+
+* `prewarm_requested`, `prewarm_started`, `prewarm_aborted`, `prewarm_succeeded`, `prewarm_failed:{timeout|decode|upload|cancel}`
+* **Correlation IDs:** `sessionId`, `frameId`, `transitionId`.
+* **Quality guard:** If `prewarm_failed_rate > 20%` or `hit_rate < 70%` for 10 min, automatically **throttle** prewarming to current+next only and log an “auto-downgrade” event.
+* **Validator health:** you already log `validator_rejections`; add `duplicate_block_source:{server|client}` to see which layer saved you.
+
+---
+
+## 5) Tests you should run today (fast & surgical)
+
+1. **Renderer state machine**
+
+   * Boot success → `READY` → dispose → `DISPOSED` → reject further prewarms.
+   * Boot fail → `FAILED` → `whenReady()` rejects; ensure display fallback happens without crash.
+
+2. **Prewarm concurrency**
+
+   * Burst 20 requests for 5 unique frames → ensure only 5 actual decodes (dedupe) and max 2 concurrent uploads.
+
+3. **Abort on session switch**
+
+   * Start prewarms, then change `sessionId` quickly → all in-flight prewarms abort; no GL write after dispose.
+
+4. **OpenCV timeout & breaker**
+
+   * Simulate slow WASM → timeout logs; after 3 fails, breaker opens and features return empty safely.
+
+5. **Effect storm defense**
+
+   * Simulate re-renders (props churn) → prewarm called **once** per frameId change, not per render.
+
+---
+
+## 6) Production guardrails
+
+* **Feature flags:** `prewarm.enabled`, `prewarm.maxConcurrent`, `prewarm.priorityDepth`, `opencv.enabled`.
+* **Safe defaults:** If flags service absent, default to “on, conservative.”
+* **Rollforward plan:** If you must disable prewarm, the app should still look acceptable (your JIT path + Ken Burns crossfade should be okay).
+
+---
+
+## 7) Fit with your existing Stability Register
+
+This aligns with your Immediate items:
+
+* **Telemetry:** Add the new `prewarm_*` counters and alerts alongside `validator_rejections` (keep your 0.5% rejection alert).
+* **QA loops:** Add a “**Session swap under load**” case that specifically asserts in-flight aborts and no GL errors.
+
+---
+
+## Final verdict
+
+Your fix is on the right track but **needs four reinforcements** to stop the “break again under churn” pattern:
+
+1. state machine readiness + idempotent init,
+2. abortable, deduped, bounded prewarm with timeout+retry,
+3. OpenCV timeout + circuit breaker + lazy load,
+4. effect-storm-proof React wiring and richer telemetry.
+
+If you apply the snippets above, the frame pipeline becomes resilient to order-of-operations bugs, network stalls, and rapid UI churn—i.e., the exact conditions that have been biting you.
+
+Want me to turn these into ready-to-paste **patch files** (`RendererManager.ts`, `display.tsx`, `ImageAnalyzer.ts`, small `utils/async.ts`) next?
