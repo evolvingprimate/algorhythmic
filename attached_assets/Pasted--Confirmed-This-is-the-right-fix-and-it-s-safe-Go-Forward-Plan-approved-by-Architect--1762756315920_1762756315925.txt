@@ -1,0 +1,107 @@
+👍 Confirmed. This is the right fix, and it’s safe.
+
+# ✅ Go-Forward Plan (approved by Architect)
+
+## 1) One-line JSX change (do this now)
+
+```tsx
+// Before (broken)
+{dynamicMode && setupComplete && (
+  <DynamicModeController ... />
+)}
+
+// After (fixed)
+{setupComplete && (
+  <DynamicModeController ... />
+)}
+```
+
+## 2) Add lightweight guards inside `DynamicModeController` (defense-in-depth)
+
+These keep behavior identical for Dynamic ON while enabling manual style bridges when Dynamic is OFF.
+
+```ts
+// inside DynamicModeController
+const lastKeyRef = useRef<string>("");
+
+useEffect(() => {
+  if (!morphEngineRef.current?.isReady()) return;
+
+  // Build a stable “transition key” tied to what actually matters
+  const transitionKey = JSON.stringify({
+    styles: (activeStyles ?? []).slice().sort(),
+    trackId: activeTrackId ?? null,
+  });
+
+  // No-op if nothing truly changed (prevents double-fires)
+  if (transitionKey === lastKeyRef.current) return;
+  lastKeyRef.current = transitionKey;
+
+  // Debounce rapid successive changes (manual scrubbing / UI jitter)
+  const t = setTimeout(() => {
+    requestCatalogBridge({ styles: activeStyles, trackId: activeTrackId });
+  }, 150); // small, keeps UI snappy
+
+  return () => clearTimeout(t);
+}, [activeStyles, activeTrackId]);
+```
+
+Optional: if you want the controller to **only** auto-adapt when Dynamic is ON, but **still** bridge on manual style picks, add this early-return:
+
+```ts
+if (!dynamicMode && !userJustChangedStylesRef.current) return;
+```
+
+…but since you already debounce & compare deltas, the simple version above is fine.
+
+---
+
+## 3) Telemetry (so we can prove it works)
+
+Emit on the controller:
+
+* `style_transition_detected` { manual: !dynamicMode, styles, trackId }
+* `bridge_requested` { source:'manual'|'dynamic', type:'catalog'|'procedural', latency_ms }
+* `bridge_completed` { crossfade_ms }
+
+Alert if:
+
+* `bridge_requested` but no `bridge_completed` within 8s (stalled transition).
+
+---
+
+## 4) Test checklist (please run these)
+
+1. **Manual switch with Dynamic OFF** → see `[DynamicMode] Transition trigger` → `/api/style-transition` called → **catalog bridge or procedural** appears → smooth crossfade → first fresh frame replaces bridge.
+2. **Manual switch with Dynamic ON** → unchanged behavior (still bridges).
+3. **Initial load** → no stray transition (guarded by `lastKeyRef`).
+4. **Rapid toggles** (change styles 3–4 times quickly) → at most one bridge per final state (debounce ok).
+5. **No regressions**: CPU/FPS stable; no duplicate impressions; no “never repeat” violations.
+
+---
+
+## 5) Edge cases considered
+
+* **Empty catalog** → procedural bridge path still triggers; later fresh frame crossfades in.
+* **Back-to-back identical styles** → delta check blocks no-op transitions.
+* **Track change without style change** → transition triggers (desired for Dynamic ON; for Dynamic OFF it won’t unless styles changed).
+* **Engine not ready** → early return; no errors.
+
+---
+
+## 6) Naming suggestion (optional)
+
+If “Dynamic Mode” is only about **auto-adapting to music**, rename the prop later to:
+
+* `autoAdaptToMusic` or `autoStyleFromAudio`
+  This clarifies why bridges must still occur for **manual** style changes.
+
+---
+
+# 📌 TL;DR
+
+* **Yes**: remove the `dynamicMode &&` guard (mount controller whenever `setupComplete` is true).
+* Add tiny **delta+debounce** guard inside the controller.
+* Ship with telemetry and the test checklist above.
+
+If you say “go”, apply the JSX change now and I’ll hand you the exact patch for the controller guard + a short Playwright test to lock it in.
