@@ -41,12 +41,15 @@ export class FalAiProvider implements GenerationProvider {
         pollInterval: 2000, // Check status every 2s
       }) as any;
 
-      if (!result?.images?.[0]?.url) {
+      // Response is wrapped in .data when using subscribe()
+      const data = result.data || result;
+
+      if (!data?.images?.[0]?.url) {
         throw new Error("No image URL in fal.ai response");
       }
 
       // Fetch image buffer for local storage
-      const imageUrl = result.images[0].url;
+      const imageUrl = data.images[0].url;
       const response = await fetch(imageUrl);
       
       if (!response.ok) {
@@ -58,10 +61,10 @@ export class FalAiProvider implements GenerationProvider {
       return {
         imageUrl,
         imageBuffer,
-        seed: result.seed,
+        seed: data.seed,
         metadata: {
-          timings: result.timings,
-          hasNsfw: result.has_nsfw_concepts?.[0] || false,
+          timings: data.timings,
+          hasNsfw: data.has_nsfw_concepts?.[0] || false,
         },
       };
     } catch (error: any) {
