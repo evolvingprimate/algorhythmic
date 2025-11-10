@@ -66,8 +66,12 @@ export const DEFAULT_DISTRIBUTION: DistributionConfig = {
 /**
  * Calculate exact file counts from distribution config
  */
-export function calculateCounts(config: DistributionConfig = DEFAULT_DISTRIBUTION) {
-  const { totalArtworks, distribution } = config;
+export function calculateCounts(
+  config: DistributionConfig = DEFAULT_DISTRIBUTION,
+  customTotal?: number
+) {
+  const totalArtworks = customTotal ?? config.totalArtworks;
+  const { distribution } = config;
   
   // Dual-native creates 2 files per concept
   const dualArtworks = Math.round((totalArtworks * distribution.dualNative) / 2);

@@ -58,9 +58,9 @@ class CatalogueSeedRunner {
   /**
    * Generate all jobs based on distribution
    */
-  private createJobs(): GenerationJob[] {
+  private createJobs(totalCount?: number): GenerationJob[] {
     const jobs: GenerationJob[] = [];
-    const counts = calculateCounts(DEFAULT_DISTRIBUTION);
+    const counts = calculateCounts(DEFAULT_DISTRIBUTION, totalCount);
 
     console.log("\n📊 Distribution Plan:");
     console.log(`  Dual-Native:   ${counts.dualArtworks} concepts × 2 = ${counts.dualFiles} files`);
@@ -233,6 +233,7 @@ class CatalogueSeedRunner {
    */
   async run(options: SeedOptions = {}): Promise<void> {
     const {
+      count,
       dryRun = false,
       batchSize = 12,
     } = options;
@@ -242,9 +243,12 @@ class CatalogueSeedRunner {
     console.log(`Provider: ${this.provider.name}`);
     console.log(`Batch Size: ${batchSize} concurrent`);
     console.log(`Dry Run: ${dryRun ? "YES" : "NO"}`);
+    if (count) {
+      console.log(`Custom Count: ${count} (overriding default 1400)`);
+    }
 
     // Create generation jobs
-    const jobs = this.createJobs();
+    const jobs = this.createJobs(count);
 
     // Process in batches
     const startTime = Date.now();
@@ -266,9 +270,13 @@ class CatalogueSeedRunner {
 
 // CLI entry point
 const args = process.argv.slice(2);
+const countArg = args.find((arg) => arg.startsWith("--count="))?.split("=")[1];
+const batchSizeArg = args.find((arg) => arg.startsWith("--batch-size="))?.split("=")[1];
+
 const options: SeedOptions = {
+  count: countArg ? parseInt(countArg) : undefined,
   dryRun: args.includes("--dry-run") || args.includes("--dry-run=true"),
-  batchSize: parseInt(args.find((arg) => arg.startsWith("--batch-size="))?.split("=")[1] || "12"),
+  batchSize: batchSizeArg ? parseInt(batchSizeArg) : 12,
 };
 
 const runner = new CatalogueSeedRunner();
