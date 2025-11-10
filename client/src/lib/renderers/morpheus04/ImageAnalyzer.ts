@@ -5,6 +5,7 @@
 
 import type { ImageAnalysisResult, Point2D } from './types';
 import { computeHistogram, histogramDistance } from './utils';
+import { loadOpenCV } from './opencvLoader';
 
 // OpenCV.js will be loaded globally
 declare const cv: any;
@@ -25,53 +26,31 @@ export class ImageAnalyzer {
   }
 
   private async initOpenCV(): Promise<void> {
-    // Wait for OpenCV.js to load (if not already loaded)
-    if (typeof cv !== 'undefined' && cv.Mat) {
-      this.cvReady = true;
-      console.log('[ImageAnalyzer] OpenCV.js already loaded');
-      return;
+    // BUG FIX: Actually call loadOpenCV() which sets up Module.onRuntimeInitialized callback
+    console.log('[ImageAnalyzer] Starting OpenCV initialization...');
+    
+    const maxRetries = 2;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        if (attempt > 0) {
+          const backoffMs = Math.pow(2, attempt) * 1000;
+          console.warn(`[ImageAnalyzer] ⚠️ OpenCV init attempt ${attempt + 1}/${maxRetries}, waiting ${backoffMs}ms...`);
+          await new Promise(resolve => setTimeout(resolve, backoffMs));
+        }
+        
+        console.log(`[ImageAnalyzer] Calling loadOpenCV() (attempt ${attempt + 1}/${maxRetries})...`);
+        await loadOpenCV();
+        this.cvReady = true;
+        console.log('[ImageAnalyzer] ✅ OpenCV.js loaded successfully');
+        return;
+      } catch (error) {
+        if (attempt === maxRetries - 1) {
+          console.error('[ImageAnalyzer] ❌ OpenCV.js failed to load after 2 attempts');
+          console.error('[ImageAnalyzer] OpenCV init failed:', error);
+          throw error;
+        }
+      }
     }
-
-    return this.attemptOpenCVInit();
-  }
-  
-  /**
-   * BUG FIX: Retry OpenCV initialization with exponential backoff
-   */
-  private async attemptOpenCVInit(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const checkInterval = setInterval(() => {
-        if (typeof cv !== 'undefined' && cv.Mat) {
-          clearInterval(checkInterval);
-          this.cvReady = true;
-          console.log('[ImageAnalyzer] ✅ OpenCV.js loaded');
-          resolve();
-        }
-      }, 100);
-
-      // Timeout after 30 seconds per attempt (matches opencvLoader timeout)
-      setTimeout(() => {
-        clearInterval(checkInterval);
-        if (!this.cvReady) {
-          this.retryCount++;
-          
-          if (this.retryCount < this.MAX_RETRIES) {
-            // Exponential backoff: 2s, 4s
-            const backoffMs = Math.pow(2, this.retryCount) * 1000;
-            console.warn(`[ImageAnalyzer] ⚠️ OpenCV init attempt ${this.retryCount} failed, retrying in ${backoffMs}ms...`);
-            
-            setTimeout(() => {
-              this.attemptOpenCVInit()
-                .then(resolve)
-                .catch(reject);
-            }, backoffMs);
-          } else {
-            console.error('[ImageAnalyzer] ❌ OpenCV.js failed to load after 3 attempts');
-            reject(new Error('[ImageAnalyzer] OpenCV.js failed to load after retries'));
-          }
-        }
-      }, 30000);
-    });
   }
 
   async ensureReady(): Promise<void> {
