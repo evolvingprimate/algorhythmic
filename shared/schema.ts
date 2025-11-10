@@ -441,6 +441,8 @@ export type AudioAnalysis = {
   bassLevel: number;
   trebleLevel: number;
   mood: "energetic" | "calm" | "dramatic" | "playful" | "melancholic";
+  spectralCentroid?: number;
+  confidence?: number;
 };
 
 // Music identification result type
@@ -461,6 +463,24 @@ export type MusicIdentification = {
     album?: { id: string };
     id?: string;
   };
+};
+
+// Generation Context for Fallback System (3-tier: MUSIC_ID → AUDIO_ONLY → STYLE_ONLY)
+export type GenerationProvenance = 'MUSIC_ID' | 'AUDIO_ONLY' | 'STYLE_ONLY';
+
+export type GenerationContext = {
+  provenance: GenerationProvenance;
+  musicInfo?: MusicIdentification;
+  audioAnalysis?: AudioAnalysis;
+  stylePreferences: {
+    styles: string[];
+    autoGenerate: boolean;
+    votingHistory?: {
+      upvoted: string[];
+      downvoted: string[];
+    };
+  };
+  timestamp: Date;
 };
 
 // Art generation request type

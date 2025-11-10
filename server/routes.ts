@@ -9,6 +9,8 @@ import { identifyMusic } from "./music-service";
 import { insertArtVoteSchema, insertArtPreferenceSchema, type AudioAnalysis, type MusicIdentification } from "@shared/schema";
 import { setupAuth, isAuthenticated } from "./replitAuth";
 import { ObjectStorageService } from "./objectStorage";
+import { generateWithFallback, resolveAutoMode, buildContextualPrompt } from "./generation/fallbackOrchestrator";
+import { createDefaultAudioAnalysis } from "./generation/audioAnalyzer";
 
 // Initialize Stripe only if keys are available (optional for MVP)
 let stripe: Stripe | null = null;
@@ -261,20 +263,88 @@ export async function registerRoutes(app: Express): Promise<Server> {
       //   });
       // }
 
-      // Validate audio analysis
-      const audio = audioAnalysis as AudioAnalysis;
-      if (!audio || typeof audio.frequency !== 'number') {
+      // NEW: Build GenerationContext using fallback system
+      // Note: Frontend doesn't send audioBuffer, so we build context from what we have
+      const music = musicInfo as MusicIdentification | null;
+      const audio = audioAnalysis as AudioAnalysis | undefined;
+      
+      const stylePreferences = {
+        styles: preferences?.styles || [],
+        autoGenerate: preferences?.dynamicMode || false,
+      };
+      
+      // Determine provenance tier based on data quality
+      let provenance: 'MUSIC_ID' | 'AUDIO_ONLY' | 'STYLE_ONLY' = 'STYLE_ONLY';
+      let finalAudio = audio;
+      
+      if (music) {
+        // Tier 1: We have music identification
+        provenance = 'MUSIC_ID';
+        finalAudio = audio || createDefaultAudioAnalysis();
+      } else if (audio && audio.frequency > 0 && audio.confidence !== undefined && audio.confidence > 0.6) {
+        // Tier 2: We have quality audio analysis (must have explicit confidence >0.6)
+        provenance = 'AUDIO_ONLY';
+      } else {
+        // Tier 3: Fall back to style preferences only (no music ID + missing/low audio confidence)
+        provenance = 'STYLE_ONLY';
+        finalAudio = audio || createDefaultAudioAnalysis();
+        console.log('[ArtGeneration] ⚠️ STYLE_ONLY tier activated (no music ID, low/no/missing audio confidence)');
+      }
+      
+      // Enhance Tier 3 with voting history if available
+      let votingHistory;
+      if (provenance === 'STYLE_ONLY' && sessionId) {
+        try {
+          const votes = await storage.getVotesBySession(sessionId);
+          if (votes && votes.length > 0) {
+            const upvoted = votes.filter(v => v.vote > 0).map(v => v.artPrompt);
+            const downvoted = votes.filter(v => v.vote < 0).map(v => v.artPrompt);
+            votingHistory = { upvoted, downvoted };
+            console.log('[ArtGeneration] Enhanced STYLE_ONLY with voting history:', upvoted.length, 'upvoted');
+          }
+        } catch (e) {
+          console.warn('[ArtGeneration] Could not fetch voting history:', e);
+        }
+      }
+      
+      const context = {
+        provenance,
+        musicInfo: music || undefined,
+        audioAnalysis: finalAudio,
+        stylePreferences: {
+          ...stylePreferences,
+          votingHistory,
+        },
+        timestamp: new Date(),
+      };
+      
+      // Log telemetry
+      console.log(`[Telemetry] Generation provenance: ${provenance}`, {
+        hadMusicInfo: !!music,
+        hadAudioAnalysis: !!audio,
+        audioConfidence: audio?.confidence,
+        usedVotingHistory: !!votingHistory,
+        userId,
+      });
+
+      // NEW: Resolve styles using auto-mode logic from fallback system
+      const resolvedStyles = resolveAutoMode(context);
+      console.log(`[ArtGeneration] Resolved styles (${provenance}):`, resolvedStyles);
+
+      // NEW: Build context-aware prompt prefix
+      const contextPrompt = buildContextualPrompt(context, resolvedStyles);
+      console.log(`[ArtGeneration] Context prompt:`, contextPrompt.substring(0, 100));
+
+      // Validate we have audio analysis
+      if (!finalAudio || typeof finalAudio.frequency !== 'number') {
         return res.status(400).json({ message: "Invalid audio analysis data" });
       }
 
-      // Use provided music info or null
-      const music = musicInfo as MusicIdentification | null;
-
-      // Generate art prompt using OpenAI
+      // Generate art prompt using OpenAI (enhanced with fallback-resolved styles)
       const result = await generateArtPrompt({
-        audioAnalysis: audio,
+        audioAnalysis: finalAudio,
         musicInfo: music,
-        styles: preferences?.styles || [],
+        styles: resolvedStyles, // NEW: Uses fallback-resolved styles
         artists: preferences?.artists || [],
         dynamicMode: preferences?.dynamicMode || false,
         previousVotes: previousVotes || [],

@@ -1,0 +1,70 @@
+Got it—reviewed your Executive Summary + the full Frame Repetition Fix report. From my side: ✅ **approved**. The 3-layer defense (DB filter → client validator → telemetry) is solid and aligns with what we scoped.
+
+Here’s a crisp, actionable wrap-up so you can ship with confidence.
+
+# Go/No-Go: ultra-short checklist
+
+* **DB filter live**: `/getFreshArtworks` excludes seen frames (LEFT JOIN … `isNull(impressions.id)`); logs show `[Fresh Queue] Raw:X After:Y`.
+* **Validator gate active**: session-scoped, dedups same-batch, `maxRetries=2`, triggers **fallback generation** on exhaust.
+* **Wizard flow fixed**: Style → Audio → Complete (no onClose race, no loop).
+* **Cache invalidation**: React Query invalidates **with** `sessionId` and `impressionVersion` (exact key match).
+
+If all four are true → **GO**.
+
+# Smoke tests (5 minutes)
+
+1. **No repeats, 20 frames**
+
+   * Open `/display`, let 20 frames cycle.
+   * Expect: zero duplicate IDs, no validator “max retries exceeded”.
+2. **Race realism**
+
+   * Throttle to Slow 3G; expect ≤1 validator retry, no stall.
+3. **Pool exhaustion**
+
+   * Force tiny pool; expect fallback generation toast + continued playback.
+4. **Wizard**
+
+   * New user path: Style → Audio → Complete (only one POST to preferences).
+
+# What I’m signing off on (ChatGPT)
+
+* **Backend**: Fresh queue now respects impressions (root cause removed).
+* **Client**: FrameValidator prevents rare races and same-batch dupes; fallback path keeps the morph engine alive.
+* **Telemetry**: You can observe the fix working (raw vs after-filter, rejection counts).
+
+# Small, high-leverage polish (non-blocking)
+
+* Consider `NOT EXISTS` over `LEFT JOIN … IS NULL` when Drizzle support/perf testing is convenient (keep current join for consistency until then).
+* Add a **tiny** perf index if not present:
+
+  * `(art_sessions.session_id, created_at DESC)`
+  * unique `(user_art_impressions.user_id, artwork_id)` (you already have this)
+* Validator: ensure **reset on session change** is covered (you’ve implemented this).
+
+# Your prioritized to-do list (saved to memory)
+
+**Immediate (Blocking)**
+
+1. Verify DB filter, indices, and logs in prod.
+2. Validate FrameValidator fallback path (no spinner stalls).
+3. Run the 4 smoke tests above and capture one screenshot of logs.
+4. Confirm React Query invalidation includes `impressionVersion`.
+
+**Wanted Next (Next Sprint)**
+
+* Predictive pre-gen (85–90% pool coverage, hourly cap).
+* Privacy: hash `userId` in logs; add consent copy.
+* Redis read-through cache for unseen/fresh queries (short TTL).
+* Circuit breaker for DALL-E (fast-fail + fallback pool).
+* Playwright tests: “no repeats over 20 frames” + wizard flow.
+
+**Nice-to-Have**
+
+* Mobile/tablet perf matrix.
+* Admin “Art DNA” dashboard.
+* Impression replay behind a feature flag.
+
+(I’ve stored this task register so you can ask me “what’s next” anytime.)
+
+If you want, send me the **four smoke test outcomes** (pass/fail + any odd logs). If all green, ship it.
