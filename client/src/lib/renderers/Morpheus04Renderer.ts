@@ -71,11 +71,12 @@ export class Morpheus04Renderer implements IMorphRenderer {
     console.log('[Morpheus04] Initializing...');
 
     try {
-      // Load OpenCV.js (required for analysis)
-      await loadOpenCV();
-
-      // Ensure analyzer is ready
-      await this.imageAnalyzer.ensureReady();
+      // BUG FIX: Load OpenCV.js in background (non-blocking)
+      // Renderer works fine without it - just won't have intelligent analysis
+      loadOpenCV()
+        .then(() => this.imageAnalyzer.ensureReady())
+        .then(() => console.log('[Morpheus04] ✅ OpenCV loaded, analysis available'))
+        .catch(error => console.warn('[Morpheus04] OpenCV unavailable, rendering without analysis:', error));
 
       // Create shader programs
       this.programs = createShaderPrograms(gl);
@@ -154,7 +155,15 @@ export class Morpheus04Renderer implements IMorphRenderer {
     console.log('[Morpheus04] Analyzing frames...');
 
     try {
-      // Analyze images
+      // BUG FIX: Skip analysis if OpenCV not ready (graceful degradation to crossfade)
+      // This prevents blocking the renderer waiting for OpenCV to load
+      if (!(this.imageAnalyzer as any).cvReady) {
+        console.warn('[Morpheus04] OpenCV not ready, falling back to crossfade rendering');
+        this.currentPlan = null; // Will trigger renderCrossfade() fallback
+        return;
+      }
+
+      // Analyze images (non-blocking since cvReady=true means OpenCV loaded)
       this.currentAnalysis = await this.imageAnalyzer.analyze(imageA, imageB, {
         targetRes: 512,
         maxFeatures: 500,
