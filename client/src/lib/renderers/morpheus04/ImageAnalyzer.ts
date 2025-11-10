@@ -49,15 +49,15 @@ export class ImageAnalyzer {
         }
       }, 100);
 
-      // Timeout after 10 seconds per attempt (reduced from 30s)
+      // Timeout after 30 seconds per attempt (matches opencvLoader timeout)
       setTimeout(() => {
         clearInterval(checkInterval);
         if (!this.cvReady) {
           this.retryCount++;
           
           if (this.retryCount < this.MAX_RETRIES) {
-            // Exponential backoff: 1s, 2s, 4s
-            const backoffMs = Math.pow(2, this.retryCount - 1) * 1000;
+            // Exponential backoff: 2s, 4s
+            const backoffMs = Math.pow(2, this.retryCount) * 1000;
             console.warn(`[ImageAnalyzer] ⚠️ OpenCV init attempt ${this.retryCount} failed, retrying in ${backoffMs}ms...`);
             
             setTimeout(() => {
@@ -66,11 +66,11 @@ export class ImageAnalyzer {
                 .catch(reject);
             }, backoffMs);
           } else {
-            console.error('[ImageAnalyzer] ❌ OpenCV.js failed to load after 3 retries');
+            console.error('[ImageAnalyzer] ❌ OpenCV.js failed to load after 3 attempts');
             reject(new Error('[ImageAnalyzer] OpenCV.js failed to load after retries'));
           }
         }
-      }, 10000);
+      }, 30000);
     });
   }
 

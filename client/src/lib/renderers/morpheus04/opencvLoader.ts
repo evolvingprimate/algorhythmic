@@ -28,54 +28,40 @@ export async function loadOpenCV(): Promise<any> {
 
     console.log('[OpenCV] Loading OpenCV.js from local server...');
 
+    // BUG FIX: Set up Module object with onRuntimeInitialized callback
+    // OpenCV.js requires this to signal when WASM is ready
+    (window as any).Module = {
+      onRuntimeInitialized: () => {
+        console.log('[OpenCV] ✅ WASM runtime initialized, cv object ready');
+        cvLoaded = true;
+        if (typeof (window as any).cv !== 'undefined' && (window as any).cv.Mat) {
+          console.log('[OpenCV] ✅ OpenCV.js ready! Version:', (window as any).cv.getBuildInformation?.() || '4.5.2');
+          resolve((window as any).cv);
+        } else {
+          reject(new Error('OpenCV Module initialized but cv object not found'));
+        }
+      }
+    };
+
     // Create script tag - load from local public/opencv/opencv.js (version 4.5.2)
     const script = document.createElement('script');
     script.src = '/opencv/opencv.js';
     script.async = true;
 
     let timeoutId: number | null = null;
-    let rafId: number | null = null;
-
-    // Cleanup function
-    const cleanup = () => {
-      if (timeoutId !== null) {
-        clearTimeout(timeoutId);
-        timeoutId = null;
-      }
-      if (rafId !== null) {
-        cancelAnimationFrame(rafId);
-        rafId = null;
-      }
-    };
-
-    // Non-blocking check using requestAnimationFrame
-    const checkCV = () => {
-      if (typeof (window as any).cv !== 'undefined' && (window as any).cv.Mat) {
-        cleanup();
-        cvLoaded = true;
-        console.log('[OpenCV] ✅ OpenCV.js ready! Version:', (window as any).cv.getBuildInformation?.() || '4.5.2');
-        resolve((window as any).cv);
-      } else {
-        // Schedule next check without blocking
-        rafId = requestAnimationFrame(checkCV);
-      }
-    };
 
     // Handle successful script load
     script.onload = () => {
-      console.log('[OpenCV] Script loaded, waiting for cv object...');
+      console.log('[OpenCV] Script loaded, waiting for WASM initialization...');
       
-      // Start non-blocking check loop
-      rafId = requestAnimationFrame(checkCV);
-
-      // Timeout after 10 seconds with proper cleanup
+      // Timeout after 30 seconds as fallback (7.7MB file with embedded WASM needs time)
+      // The onRuntimeInitialized callback should fire first
       timeoutId = window.setTimeout(() => {
-        cleanup();
         if (!cvLoaded) {
-          const errorMsg = `OpenCV.js script loaded but cv object never initialized after 10s. Local path: ${script.src}`;
+          const errorMsg = `OpenCV.js WASM runtime never initialized after 30s. Module callback didn't fire.`;
           console.error('[OpenCV] ❌', errorMsg);
           console.error('[OpenCV] window.cv type:', typeof (window as any).cv);
-          console.error('[OpenCV] Check: 1) File exists at public/opencv/opencv.js, 2) File is valid JS, 3) No console errors above');
+          console.error('[OpenCV] window.Module:', typeof (window as any).Module);
           console.warn('[OpenCV] Resetting loader state - future calls will retry');
           
           // Remove failed script to prevent conflicts
@@ -86,18 +72,26 @@ export async function loadOpenCV(): Promise<any> {
           // Reset all global state for clean retry
           cvPromise = null;
           cvLoaded = false;
+          delete (window as any).Module;
           if (typeof (window as any).cv !== 'undefined') {
             delete (window as any).cv;
           }
           
           reject(new Error(errorMsg));
+        } else {
+          // Clear timeout if callback already fired
+          if (timeoutId !== null) clearTimeout(timeoutId);
         }
-      }, 10000);
+      }, 30000);
     };
 
     // Handle error
     script.onerror = (error) => {
-      cleanup();
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+      
       const errorMsg = `Failed to load OpenCV.js from local server: ${script.src}`;
       console.error('[OpenCV] ❌ Network error:', errorMsg, error);
       console.error('[OpenCV] Check: 1) File exists at public/opencv/opencv.js, 2) Server serving static files correctly');
@@ -111,6 +105,7 @@ export async function loadOpenCV(): Promise<any> {
       // Reset all global state for clean retry
       cvPromise = null;
       cvLoaded = false;
+      delete (window as any).Module;
       if (typeof (window as any).cv !== 'undefined') {
         delete (window as any).cv;
       }
