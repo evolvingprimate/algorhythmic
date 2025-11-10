@@ -54,14 +54,14 @@ export async function loadOpenCV(): Promise<any> {
     script.onload = () => {
       console.log('[OpenCV] Script loaded, waiting for WASM initialization...');
       
-      // Timeout after 30 seconds as fallback (7.7MB file with embedded WASM needs time)
-      // The onRuntimeInitialized callback should fire first
+      // BUG FIX: Reduced timeout from 30s to 2s so UI doesn't hang
+      // If WASM doesn't initialize in 2s, we proceed with crossfade rendering
       timeoutId = window.setTimeout(() => {
         if (!cvLoaded) {
-          const errorMsg = `OpenCV.js WASM runtime never initialized after 30s. Module callback didn't fire.`;
-          console.error('[OpenCV] ❌', errorMsg);
-          console.error('[OpenCV] window.cv type:', typeof (window as any).cv);
-          console.error('[OpenCV] window.Module:', typeof (window as any).Module);
+          const errorMsg = `OpenCV.js WASM runtime never initialized after 2s. Module callback didn't fire.`;
+          console.warn('[OpenCV] ⚠️', errorMsg, '- proceeding with crossfade fallback');
+          console.warn('[OpenCV] window.cv type:', typeof (window as any).cv);
+          console.warn('[OpenCV] window.Module:', typeof (window as any).Module);
           console.warn('[OpenCV] Resetting loader state - future calls will retry');
           
           // Remove failed script to prevent conflicts
@@ -82,7 +82,7 @@ export async function loadOpenCV(): Promise<any> {
           // Clear timeout if callback already fired
           if (timeoutId !== null) clearTimeout(timeoutId);
         }
-      }, 30000);
+      }, 2000); // Changed from 30000 to 2000
     };
 
     // Handle error

@@ -54,9 +54,21 @@ export class ImageAnalyzer {
   }
 
   async ensureReady(): Promise<void> {
-    if (this.initPromise) {
-      await this.initPromise;
-    }
+    if (!this.initPromise) return;
+    
+    // BUG FIX: Add 2-second timeout so we don't block the UI waiting for OpenCV
+    // If OpenCV doesn't load in 2s, proceed with crossfade rendering
+    const timeoutPromise = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        if (!this.cvReady) {
+          console.warn('[ImageAnalyzer] ⚠️ OpenCV initialization timeout (2s) - proceeding with crossfade fallback');
+        }
+        resolve();
+      }, 2000);
+    });
+    
+    // Race between init completion and timeout
+    await Promise.race([this.initPromise, timeoutPromise]);
   }
 
   /**
