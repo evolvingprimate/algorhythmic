@@ -68,11 +68,12 @@ export interface IStorage {
   deleteArt(artId: string, userId: string): Promise<void>;
   
   // User Art Impressions (Freshness Pipeline)
-  recordImpression(userId: string, artworkId: string): Promise<void>;
+  recordImpression(userId: string, artworkId: string, isBridge?: boolean): Promise<void>;
   recordBatchImpressions(userId: string, artworkIds: string[]): Promise<number>;
   validateArtworkVisibility(userId: string, artworkIds: string[]): Promise<string[]>; // Filter to valid IDs in global pool
   getUnseenArtworks(userId: string, limit?: number): Promise<ArtSession[]>;
   getFreshArtworks(sessionId: string, userId: string, limit?: number): Promise<ArtSession[]>; // Fresh AI-generated artwork (priority queue)
+  getCatalogCandidates(userId: string, styleTags: string[], limit?: number): Promise<ArtSession[]>; // Catalog search for style switching
   
   // Users (for subscription management and authentication)
   getUser(id: string): Promise<User | undefined>;
@@ -534,6 +535,20 @@ export class MemStorage implements IStorage {
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .slice(0, limit);
   }
+
+  async getCatalogCandidates(userId: string, styleTags: string[], limit: number = 200): Promise<ArtSession[]> {
+    // MemStorage stub: filter by tag overlap (simple in-memory filtering)
+    if (!styleTags || styleTags.length === 0) return [];
+    
+    const tagSet = new Set(styleTags.map(t => t.toLowerCase()));
+    return Array.from(this.sessions.values())
+      .filter(session => {
+        if (!session.motifs || session.motifs.length === 0) return false;
+        return session.motifs.some(motif => tagSet.has(motif.toLowerCase()));
+      })
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, limit);
+  }
 }
 
 // PostgreSQL Storage Implementation
@@ -687,15 +702,31 @@ export class PostgresStorage implements IStorage {
   }
 
   // User Art Impressions (Freshness Pipeline)
-  async recordImpression(userId: string, artworkId: string): Promise<void> {
+  async recordImpression(userId: string, artworkId: string, isBridge: boolean = false): Promise<void> {
     // CRITICAL: UPSERT to update viewedAt timestamp on repeat views
     // This resets the 7-day cooldown each time artwork is seen
+    // PHASE 1 CATALOG: Now supports bridgeAt timestamp for catalog bridges
+    const values: any = { 
+      userId, 
+      artworkId, 
+      viewedAt: sql`NOW()` 
+    };
+    const updates: any = { 
+      viewedAt: sql`NOW()` 
+    };
+    
+    // Only set bridgeAt if this is a catalog bridge
+    if (isBridge) {
+      values.bridgeAt = sql`NOW()`;
+      updates.bridgeAt = sql`NOW()`;
+    }
+    
     await this.db
       .insert(userArtImpressions)
-      .values({ userId, artworkId, viewedAt: sql`NOW()` })
+      .values(values)
       .onConflictDoUpdate({
         target: [userArtImpressions.userId, userArtImpressions.artworkId],
-        set: { viewedAt: sql`NOW()` } // Update timestamp on conflict
+        set: updates
       });
   }
 
@@ -1115,6 +1146,38 @@ export class PostgresStorage implements IStorage {
         )
       )
       .where(and(...whereConditions))
+      .orderBy(desc(artSessions.createdAt))
+      .limit(limit);
+    
+    return results;
+  }
+
+  async getCatalogCandidates(userId: string, styleTags: string[], limit: number = 200): Promise<ArtSession[]> {
+    // Guard: Empty tags would return all unseen artworks (defeats catalog matching)
+    if (!styleTags || styleTags.length === 0) {
+      return [];
+    }
+
+    // Build array literal for SQL with proper typing
+    const tagArray = sql`array[${sql.join(styleTags.map(tag => sql`${tag}`), sql`, `)}]::text[]`;
+    
+    // Query unseen artworks with array overlap on motifs
+    const results = await this.db
+      .select(getTableColumns(artSessions))
+      .from(artSessions)
+      .leftJoin(
+        userArtImpressions,
+        and(
+          eq(artSessions.id, userArtImpressions.artworkId),
+          eq(userArtImpressions.userId, userId)
+        )
+      )
+      .where(
+        and(
+          isNull(userArtImpressions.id), // Never-repeat: exclude seen
+          sql<boolean>`coalesce(${artSessions.motifs}, '{}') && ${tagArray}` // Array overlap with NULL safety
+        )
+      )
       .orderBy(desc(artSessions.createdAt))
       .limit(limit);
     

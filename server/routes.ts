@@ -11,6 +11,7 @@ import { setupAuth, isAuthenticated } from "./replitAuth";
 import { ObjectStorageService } from "./objectStorage";
 import { generateWithFallback, resolveAutoMode, buildContextualPrompt } from "./generation/fallbackOrchestrator";
 import { createDefaultAudioAnalysis } from "./generation/audioAnalyzer";
+import { findBestCatalogMatch, type CatalogMatchRequest } from "./generation/catalogMatcher";
 
 // Initialize Stripe only if keys are available (optional for MVP)
 let stripe: Stripe | null = null;
@@ -455,6 +456,78 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(sessions);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
+    }
+  });
+
+  // PHASE 1 CATALOG: Style transition endpoint for instant bridge switching
+  // Returns best catalog match or procedural fallback for seamless style transitions
+  app.post("/api/style-transition", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { sessionId, styleTags, audioMeta, trackId } = req.body;
+
+      const startTime = Date.now();
+
+      // Validate required fields
+      if (!sessionId || !styleTags || !Array.isArray(styleTags)) {
+        return res.status(400).json({ 
+          message: "Missing required fields: sessionId, styleTags (array)" 
+        });
+      }
+
+      console.log(`[StyleTransition] User ${userId} switching to tags: ${styleTags.join(', ')}`);
+
+      // Fetch catalog candidates (unseen artworks with tag overlap, limit 200)
+      const candidates = await storage.getCatalogCandidates(userId, styleTags, 200);
+      
+      console.log(`[StyleTransition] Found ${candidates.length} catalog candidates`);
+
+      // Build catalog match request
+      const matchRequest: CatalogMatchRequest = {
+        userId,
+        styleTags,
+        audioMeta,
+        trackId
+      };
+
+      // Find best match using in-memory cosine similarity on DNA vectors
+      const matchResult = findBestCatalogMatch(candidates, matchRequest);
+
+      const latency = Date.now() - startTime;
+
+      if (matchResult.type === 'catalog' && matchResult.artwork) {
+        // Record bridge impression (sets bridgeAt timestamp)
+        await storage.recordImpression(userId, matchResult.artwork.id, true);
+
+        console.log(`[StyleTransition] ✅ Catalog match found (score: ${matchResult.score?.toFixed(2)}) - latency: ${latency}ms`);
+
+        // Telemetry: catalog bridge rendered
+        console.log(`[Telemetry] Bridge rendered: { type: 'catalog', latency: ${latency}, score: ${matchResult.score}, artworkId: '${matchResult.artwork.id}' }`);
+
+        return res.json({
+          bridge: {
+            type: 'catalog',
+            artwork: matchResult.artwork,
+            score: matchResult.score
+          },
+          latency
+        });
+      } else {
+        console.log(`[StyleTransition] ⚠️ No catalog match - using procedural bridge - latency: ${latency}ms`);
+
+        // Telemetry: procedural bridge fallback
+        console.log(`[Telemetry] Bridge rendered: { type: 'procedural', latency: ${latency}, candidateCount: ${candidates.length} }`);
+
+        return res.json({
+          bridge: {
+            type: 'procedural'
+          },
+          latency
+        });
+      }
+    } catch (error: any) {
+      console.error('[StyleTransition] Error:', error);
+      res.status(500).json({ message: "Failed to find style transition: " + error.message });
     }
   });
 

@@ -22,8 +22,9 @@ const dnaCache = new Map<string, Float32Array>();
 function parseDNA(dnaString: string | null): Float32Array | null {
   if (!dnaString) return null;
   
-  if (dnaCache.has(dnaString)) {
-    return dnaCache.get(dnaString)!;
+  const cached = dnaCache.get(dnaString);
+  if (cached) {
+    return cached;
   }
 
   try {
@@ -31,8 +32,8 @@ function parseDNA(dnaString: string | null): Float32Array | null {
     const float32 = new Float32Array(dnaArray);
     
     if (dnaCache.size > 1000) {
-      const firstKey = dnaCache.keys().next().value;
-      dnaCache.delete(firstKey);
+      const firstKey = Array.from(dnaCache.keys())[0];
+      if (firstKey) dnaCache.delete(firstKey);
     }
     
     dnaCache.set(dnaString, float32);
@@ -69,10 +70,11 @@ function calculateTagOverlap(artworkMotifs: string[] | null, requestedTags: stri
   const artworkSet = new Set(artworkMotifs.map(m => m.toLowerCase()));
   const requestedSet = new Set(requestedTags.map(t => t.toLowerCase()));
 
-  const intersection = [...artworkSet].filter(tag => requestedSet.has(tag));
-  const union = new Set([...artworkSet, ...requestedSet]);
+  const artworkArray = Array.from(artworkSet);
+  const intersection = artworkArray.filter(tag => requestedSet.has(tag));
+  const unionArray = Array.from(new Set([...artworkArray, ...Array.from(requestedSet)]));
 
-  return intersection.length / union.size;
+  return intersection.length / unionArray.length;
 }
 
 export function findBestCatalogMatch(
