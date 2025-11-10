@@ -48,6 +48,9 @@ export const artSessions = pgTable("art_sessions", {
   perceptualHash: varchar("perceptual_hash"), // pHash/dHash for deduplication
   poolStatus: varchar("pool_status").default("active"), // active, archived, pending
   lastUsedAt: timestamp("last_used_at"), // For LRU eviction
+  // User preference tags (for storage pool filtering - BUG FIX)
+  styles: text("styles").array().default(sql`'{}'::text[]`), // Style preferences used: ["scifi", "cyberpunk"]
+  artists: text("artists").array().default(sql`'{}'::text[]`), // Artist preferences used: ["van gogh", "picasso"]
   // Image Catalogue Manager metadata (for pre-generated library images)
   isLibrary: boolean("is_library").notNull().default(false), // true = pre-generated library, false = user-generated
   orientation: varchar("orientation"), // 'portrait' | 'landscape' | 'square'
