@@ -12,6 +12,7 @@ import { ObjectStorageService } from "./objectStorage";
 import { generateWithFallback, resolveAutoMode, buildContextualPrompt } from "./generation/fallbackOrchestrator";
 import { createDefaultAudioAnalysis } from "./generation/audioAnalyzer";
 import { findBestCatalogMatch, type CatalogMatchRequest } from "./generation/catalogMatcher";
+import { recentlyServedCache } from "./recently-served-cache";
 
 // Initialize Stripe only if keys are available (optional for MVP)
 let stripe: Stripe | null = null;
@@ -142,6 +143,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(preferences);
     } catch (error: any) {
       res.status(400).json({ message: error.message });
+    }
+  });
+
+  // ============================================================================
+  // Catalogue Bridge: Instant artwork display via cascading library search
+  // ============================================================================
+  
+  app.post("/api/catalogue-bridge", isAuthenticated, async (req: any, res) => {
+    try {
+      const { sessionId, styleTags = [], artistTags = [], orientation, limit = 2 } = req.body;
+      
+      if (!sessionId) {
+        return res.status(400).json({ message: "sessionId is required" });
+      }
+      
+      // Get userId from authenticated user
+      const userId = req.user.claims.sub;
+      
+      // Get recently-served artwork IDs from cache (30s window)
+      const excludeIds = recentlyServedCache.getRecentIds(sessionId);
+      
+      console.log(`[Catalogue Bridge] User ${userId}, session ${sessionId}, styles: [${styleTags}], orientation: ${orientation}, excluding ${excludeIds.length} recent IDs`);
+      
+      // Call cascading search: exact → partial → global
+      const result = await storage.getLibraryArtworkWithFallback(userId, {
+        styleTags,
+        artistTags,
+        orientation,
+        excludeIds,
+        limit,
+      });
+      
+      // Mark returned artworks as recently-served (prevent echoing back within 30s)
+      if (result.artworks.length > 0) {
+        const artworkIds = result.artworks.map(art => art.id);
+        recentlyServedCache.markRecent(sessionId, artworkIds);
+        
+        console.log(`[Catalogue Bridge] Served ${result.artworks.length} artworks (tier: ${result.tier}), marked as recent: [${artworkIds.join(', ')}]`);
+      } else {
+        console.log(`[Catalogue Bridge] No artworks found (tier: ${result.tier})`);
+      }
+      
+      res.json({
+        artworks: result.artworks,
+        tier: result.tier,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      console.error("Error in catalogue bridge:", error);
+      res.status(500).json({ message: error.message });
     }
   });
 

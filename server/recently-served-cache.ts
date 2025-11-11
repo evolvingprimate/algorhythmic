@@ -155,7 +155,7 @@ export class RecentlyServedCache {
 }
 
 // Global singleton instance
-export const recentlyServedCache = new RecentlyServedCache();
+export const recentlyServedCache: RecentlyServedCache = new RecentlyServedCache();
 
 // Start periodic cleanup (every 60 seconds)
 setInterval(() => {
