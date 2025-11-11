@@ -1395,6 +1395,7 @@ export default function Display() {
       body: JSON.stringify({
         artworkIds,
         source: 'fresh', // TODO: Track which frames came from catalogue bridge vs fresh generation
+        sessionId: sessionId.current, // CRITICAL: Include sessionId for recently-served cache
       }),
     })
       .then(res => {
