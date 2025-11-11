@@ -1,0 +1,191 @@
+Here’s a tight engineer/architect review for Claude (Replit Agent 3)—what’s solid, what’s risky, and the exact changes I’d make so the display pipeline can never be bricked by a boolean again.
+
+---
+
+# Review: Frame Display System Failure Analysis
+
+## Verdict
+
+**Root cause confirmed**: gating the fetch on `setupComplete` hard-bricks the render pipeline for returning users who never re-run the wizard. Secondary items (OpenCV, breaker) are degradations, not root causes.
+
+**Action**: decouple frame fetching from onboarding; make fetching *always* eligible when authenticated, and let onboarding only influence *preference selection*, not the fetch enable.
+
+---
+
+## What’s Strong
+
+* Correct identification that **/api/artworks/next never fires** due to `enabled: isAuthenticated && setupComplete`.
+* Good separation of “frame switching layer” vs “motion effects layer”.
+* Reasonable phased fix order (unblock fetch → effects → breaker).
+
+---
+
+## Gaps & Improvements
+
+### 1) Don’t reintroduce a brittle client flag
+
+The suggested quick fix uses `localStorage.getItem('setupComplete')`. That’s fragile (multi-device, cleared storage, private windows). Prefer a **server-truthy predicate**: “does user have preferences in DB?”
+
+**Change** (React Query & derived flag):
+
+```ts
+const { data: prefs, isLoading: prefsLoading } = useQuery({
+  queryKey: ['/api/preferences', userId],
+  enabled: !!userId,
+});
+
+const hasServerPrefs =
+  !!prefs && Array.isArray(prefs.styles) && prefs.styles.length > 0;
+
+const shouldFetchArt = isAuthenticated && !prefsLoading; // <- do not gate on wizard
+```
+
+**Rationale**: fetch art as soon as we know auth; if no prefs, backend applies default style set (or uses catalogue bridge). Wizard becomes progressive enhancement, not a gate.
+
+### 2) Make `/api/artworks/next` safe without prefs
+
+Ensure the endpoint gracefully handles empty/undefined style filters (your recent storage fixes already support this). If no prefs, it should:
+
+* Try fresh queue,
+* Then **preference-agnostic** library fallback (your 3-tier cascade),
+* Always return *something* (plus `needsGeneration` signal).
+
+### 3) Avoid coupled enablement chains
+
+Depending the frames query on `prefsLoading` or `setupComplete` can deadlock. Use **independent queries** and **idempotent backend**:
+
+* Frames query enabled on `isAuthenticated` only.
+* Preferences query in parallel.
+* Combine on the server (prefer) or merge client-side when both arrive, but never block the frames query.
+
+### 4) Reinstate the *correct* React Query keys & invalidation
+
+Your earlier fix note mentioned a cache key mismatch. Ensure the fetch uses a **stable, specific key** and invalidation matches it:
+
+```ts
+const qk = ['/api/artworks/next', sessionIdRef.current, impressionVersionRef.current];
+
+const { data: artworksData } = useQuery({
+  queryKey: qk,
+  queryFn: () => fetchNextArtworks({ sessionId: sessionIdRef.current }),
+  enabled: shouldFetchArt,
+  staleTime: 0,
+});
+
+mutation.onSuccess(() => {
+  impressionVersionRef.current += 1;
+  queryClient.invalidateQueries({ queryKey: qk }); // exact key!
+});
+```
+
+### 5) OpenCV should not gate frame progression
+
+Load OpenCV/WASM **lazily**, and let MorphEngine fall back to crossfade/Ken Burns-lite *without blocking frame swaps*.
+
+**Checklist**:
+
+* Serve WASM with correct MIME+headers; prefer local copy with SRI.
+* Wrap OpenCV init with a Promise and a 2–3s timeout; if it misses, fall back and keep running.
+* Telemetry: `opencv_init_success/failed/timeout`.
+
+### 6) Circuit breaker tuning—align to real latencies
+
+The report says DALL-E P95 is **13–26s**, yet jobs “marked expired at 45s.” That doesn’t add up unless there’s a different watchdog marking them stale. Make it explicit:
+
+* **Adaptive timeout**: `clamp(p95 + 10s, 30s, 60s)` (start with 40s if p95≈26s).
+* **No global MIN 60s** unless you observe provider tails > 50s.
+* Distinguish **client-side aborts** vs **provider 5xx/429** in telemetry.
+* Breaker policy: window=20, open on `failures >= 5 && failureRate >= 0.5`, half-open probe every 60s.
+
+### 7) State reset semantics
+
+When unbricking:
+
+* Clear breaker state,
+* Clear “recently served” cache,
+* Trigger a **single** warm probe; don’t stampede the generator.
+
+### 8) Defensive UX & observability
+
+* If frames list is empty after fetch returns (should be rare), show the **catalogue bridge** card immediately and fire `generateFallbackArtwork()`. Never show a black screen.
+* Add a canary `useEffect` that logs once if no frames displayed after 10s post-auth.
+
+---
+
+## Proposed Patches (minimal, safe)
+
+### A) Decouple `enabled`
+
+```ts
+// before
+const { data: artworksData } = useQuery({
+  queryKey: ['/api/artworks/next'],
+  enabled: isAuthenticated && setupComplete,
+});
+
+// after
+const { data: artworksData } = useQuery({
+  queryKey: ['/api/artworks/next', sessionIdRef.current, impressionVersionRef.current],
+  queryFn: () => fetchNextArtworks({ sessionId: sessionIdRef.current }),
+  enabled: isAuthenticated, // <- decoupled
+  refetchOnWindowFocus: false,
+  staleTime: 0,
+});
+```
+
+### B) Safe backend defaults
+
+In `/api/artworks/next`:
+
+* If `preferences` missing/empty: skip style filters; use your cascade.
+* Always return `{ artworks, needsGeneration, tier }`.
+
+### C) OpenCV tolerant loader
+
+```ts
+async function initOpenCVWithTimeout(ms = 2500) {
+  try {
+    const p = loadOpenCV(); // your loader
+    const t = new Promise((_, r) => setTimeout(() => r(new Error('opencv-timeout')), ms));
+    await Promise.race([p, t]);
+    telemetry.emit('opencv_init_success');
+    return true;
+  } catch (e) {
+    telemetry.emit('opencv_init_failed', { reason: String(e) });
+    return false; // engine keeps running with crossfade
+  }
+}
+```
+
+### D) Breaker timeout
+
+```ts
+const p95 = generationHealthService.getP95(); // rolling window
+const timeoutMs = Math.min(Math.max(p95 + 10_000, 30_000), 60_000);
+```
+
+---
+
+## Validation Plan (fast, deterministic)
+
+1. **Auth’d user with existing prefs**: Confirm `/api/artworks/next` fires within 1s of mount; `frameDisplayCount` > 0 within first cycle.
+2. **Auth’d user without prefs**: Confirm catalogue bridge tier appears instantly; fresh gen swaps in < 15s; no black screen.
+3. **OpenCV blocked** (simulate 404): Motion falls back; frames continue to advance.
+4. **Timeout chaos**: Stub generation to sleep > timeout; verify abort, breaker opens after 3, half-open recovers after 3 greens.
+5. **Regression**: Wizard flow still works; but even if user cancels wizard, frames continue (with default/cascade).
+
+---
+
+## Acceptance Criteria
+
+* `/api/artworks/next` requests occur regardless of wizard state once authenticated.
+* No black screens under any preference state (new or returning users).
+* Frame swaps continue at the configured cadence even if OpenCV fails.
+* Breaker stats/telemetry visible; no false “expired” classification for normal 13–26s jobs.
+* Zero repeats confirmed by your existing validator + backend filter.
+
+---
+
+## TL;DR to Claude
+
+Decouple frame fetching from `setupComplete` immediately and let the backend handle “no prefs” via your cascade/bridge. Harden OpenCV loading to never gate frame swaps. Tune breaker to measured p95. With these changes, a single boolean can never brick the pipeline again, and users always see art.

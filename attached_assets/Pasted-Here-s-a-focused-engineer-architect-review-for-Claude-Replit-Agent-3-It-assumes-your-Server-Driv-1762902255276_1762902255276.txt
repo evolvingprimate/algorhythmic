@@ -1,0 +1,238 @@
+Here’s a focused engineer/architect review for Claude (Replit Agent 3). It assumes your “Server-Driven Progressive Frame Pipeline” is the baseline and calls out what’s excellent, what’s risky, and the precise tweaks I’d make so frames never stall and the pipeline stays observable and rollback-safe.
+
+---
+
+# Review: Server-Driven Progressive Frame Pipeline
+
+## Verdict
+
+**Direction is right.** Decoupling frame fetching from the wizard and making the server the source of truth eliminates the “setupComplete bricks the app” class of bugs. The phased plan is small, safe, and high-impact.
+
+Below are concrete refinements to make this production-robust and to avoid re-introducing earlier cache/validator and freshness issues.
+
+---
+
+## What’s strong
+
+* **Auth-only enablement** for `/api/artworks/next` — correct. The wizard should never gate frames.
+* **Server returns frames even without prefs** — aligns with your cascade/bridge and avoids black screens.
+* **Lazy OpenCV with timeout** — motion is progressive enhancement, not a dependency.
+* **Adaptive breaker** — timeout based on rolling P95 is the right primitive.
+* **Reset & monitor** — good, but expand telemetry (below).
+
+---
+
+## Gaps / Improvements
+
+### 1) Keep React Query keys and invalidation *exactly* aligned
+
+You previously had repetition due to mismatched keys. Lock this down.
+
+**Do**
+
+```ts
+// Derive a single, stable key factory
+const qk = (sid: string, iv: number) => ['/api/artworks/next', sid, iv];
+
+const { data: artworksData } = useQuery({
+  queryKey: qk(sessionIdRef.current, impressionVersionRef.current),
+  queryFn: () => fetchNextArtworks({ sessionId: sessionIdRef.current }),
+  enabled: isAuthenticated,
+  staleTime: 0,
+  refetchOnWindowFocus: false,
+});
+
+// On impression write:
+impressionVersionRef.current += 1;
+queryClient.invalidateQueries({ queryKey: qk(sessionIdRef.current, impressionVersionRef.current) });
+```
+
+**Why**: prevents stale reuse and ensures “never repeat” integrity when impressions commit.
+
+### 2) Re-insert the client-side FrameValidator gate (defense-in-depth)
+
+Your server filtering fixes 95% of repeats. Keep the **FrameValidator** pre-morph gate to catch races (impression flush delay, same-batch dupes) and trigger refetch/fallback generation on max-retries.
+
+* Session-scoped `seenFrameIds`
+* Same-batch de-dup
+* `maxRetries = 2` then `generateFallbackArtwork()` to avoid spinner stalls
+* Telemetry: `frame_validator_rejection`, `frame_validator_retries`, `fallback_generation_triggered`
+
+### 3) Server endpoint must **never** return an empty list
+
+Phase 2 says “ensure never empty,” but make the rule explicit in code:
+
+Order of assembly:
+
+1. **Fresh (impression-filtered)** by `sessionId`
+2. **Unseen storage** **filtered by current prefs** (your fixed `@>` operator)
+3. **Catalogue bridge cascade** (exact → related → global)
+4. **Procedural bridge** (last-ditch gradient/placeholder) + **kick background gen**
+
+Return **at least one** frame (or a procedural bridge marker) every time. Include `tier` so the UI can badge and your telemetry can show coverage.
+
+### 4) Orientation & aspect routing
+
+Ensure the endpoint takes `orientation: 'portrait'|'landscape'|'square'` and the cascade respects it across all tiers. If nothing matches the requested orientation, allow one **controlled** aspect-ratio fallback tier (e.g., letterbox/pillarbox in the procedural bridge only), but never distort or resize the art itself.
+
+### 5) Circuit breaker tuning & hygiene
+
+* **Timeout**: `clamp(p95 + 10s, 30s, 60s)` (don’t hard-set MIN 60s unless tails demand it).
+* **Token bucket**: start **5 tokens, refill 1/60s** (per Grok).
+* **Open/half-open**: window=20, open on `failures >= 5 && failureRate >= 0.5`, probe every 60s with **simple prompts** (avoid cache artifacts).
+* **AbortSignal**: ensure it’s actually wired through the OpenAI SDK call.
+* **Feature flag**: `GEN_BREAKER_ENABLED` to kill breaker behavior instantly.
+
+### 6) Telemetry you’ll want on day 1
+
+Emit structured events (not plain logs):
+
+* `artworks_next_request`: `{userId, sessionId, styles, orientation, freshCount, storageCount, tier, needsGeneration}`
+* `catalogue_bridge_tier`: `{tier: 'exact'|'related'|'global', latencyMs}`
+* `frame_validator_*` as above
+* `opencv_init_{success|failed|timeout}`
+* `breaker_state_change`: `{from, to, reason}`
+* `generation_latency_sample`: `{latencyMs, success, timeout}`
+* Canary: after 10s post-mount, if `frameDisplayCount===0` emit `display_stalled`
+
+### 7) Race-safe onboarding state
+
+You propose:
+
+```ts
+const showSetupWizard = artworksData?.onboardingState === 'incomplete' && !skipSetup;
+```
+
+Good. Add a **first-run guard** so the wizard doesn’t pop back due to transient empty prefs during refetch. You already used an `IDLE`/latch pattern in the wizard loop fix—reuse that.
+
+### 8) API contract additions (small but important)
+
+Have `/api/artworks/next` return:
+
+```json
+{
+  "artworks": [...],
+  "tier": "fresh|storage|catalogue_exact|catalogue_related|catalogue_global|procedural",
+  "needsGeneration": true,
+  "onboardingState": "complete|incomplete",
+  "orientation": "landscape",
+  "freshCount": 3,
+  "storageCount": 12
+}
+```
+
+This gives the UI everything it needs without additional calls.
+
+### 9) Backpressure & flood control
+
+When `needsGeneration` is `true`, ensure the client (or server) **debounces** generation kicks (e.g., leading edge, 5s trailing). Prevent “toggle storms” during rapid style switches.
+
+### 10) Testing checklist (fast and definitive)
+
+* **No-prefs user**: receives catalogue/procedural immediately; fresh swaps within SLA; no black screen.
+* **Prefs user**: receives pref-filtered storage, no repeats over 20 frames.
+* **Orientation**: portrait request never returns landscape (unless procedural bridge fallback with letterbox).
+* **Breaker chaos**: force 3 timeouts → breaker opens; half-open probe closes after greens.
+* **OpenCV 404**: frames continue, crossfade active, telemetry marked failed init.
+* **Wizard**: toggling styles mid-stream triggers **catalogue bridge + jump** without re-opening wizard or stalling.
+
+---
+
+## Suggested diffs (minimal & safe)
+
+**display.tsx – enablement & keying**
+
+```ts
+// enablement
+const { data: artworksData } = useQuery({
+  queryKey: ['/api/artworks/next', sessionIdRef.current, impressionVersionRef.current, orientation],
+  queryFn: () => fetchNextArtworks({ sessionId: sessionIdRef.current, orientation }),
+  enabled: isAuthenticated,
+  staleTime: 0,
+  refetchOnWindowFocus: false,
+});
+
+// validator gate (before morph add)
+useEffect(() => {
+  const ids = artworksData?.artworks?.map(a => a.id) ?? [];
+  if (!ids.length) return;
+  const verdict = frameValidatorRef.current.validate(ids, sessionIdRef.current);
+  if (!verdict.valid) {
+    if (verdict.reason === 'max_retries_exceeded') {
+      await generateFallbackArtwork(); // non-blocking toast already in your code
+    } else {
+      queryClient.invalidateQueries({ queryKey: ['/api/artworks/next', sessionIdRef.current, impressionVersionRef.current, orientation] });
+    }
+    return;
+  }
+  morphEngineRef.current.addFrames(artworksData.artworks);
+}, [artworksData, orientation]);
+```
+
+**routes.ts – never empty**
+
+```ts
+const prefs = await storage.getArtPreferences(userId);
+const styles = (prefs?.styles?.length ? prefs.styles : DEFAULT_STYLES);
+const fresh = sessionId ? await storage.getFreshArtworks(sessionId, userId, limit, orientation) : [];
+let pool = [...fresh];
+
+if (pool.length < limit) {
+  const remaining = limit - pool.length;
+  const storagePool = await storage.getUnseenArtworks(userId, remaining, styles, [], orientation);
+  pushUnique(pool, storagePool);
+}
+if (pool.length < 1) {
+  const catalogue = await catalogueManager.getWithCascade(styles, orientation, 1);
+  pushUnique(pool, catalogue);
+}
+if (pool.length < 1) {
+  pool.push(buildProceduralBridgeFrame(orientation)); // sentinel frame
+}
+
+res.json({
+  artworks: pool,
+  tier: classifyTier(fresh, pool),
+  needsGeneration: pool.length < MIN_BUFFER,
+  onboardingState: (prefs?.styles?.length ? 'complete' : 'incomplete'),
+  orientation,
+  freshCount: fresh.length,
+  storageCount: Math.max(pool.length - fresh.length, 0),
+});
+```
+
+**generation-health.ts – adaptive timeout**
+
+```ts
+const p95 = health.latencyP95() ?? 25000;
+const timeoutMs = Math.min(60000, Math.max(30000, p95 + 10000));
+const controller = new AbortController();
+const timer = setTimeout(() => controller.abort('timeout'), timeoutMs);
+try {
+  const img = await openai.images.generate({ ...params, signal: controller.signal });
+  recordSuccess(Date.now() - start);
+  return img;
+} catch (e) {
+  recordFailure(e);
+  throw e;
+} finally {
+  clearTimeout(timer);
+}
+```
+
+---
+
+## Acceptance criteria
+
+* `/api/artworks/next` fires within 1s after auth (even with no prefs).
+* Display shows a frame (art or procedural) immediately; **no black screens**.
+* Zero repeats over 20 frames (validator + backend filters).
+* Orientation respected end-to-end.
+* Breaker opens on real timeouts, not false positives; AbortSignal cancels hung calls.
+* OpenCV failures do not affect frame cadence.
+
+---
+
+## TL;DR to Claude
+
+Ship Phase 1 as written, but lock query keys/invalidation, re-enable the FrameValidator gate, and make `/api/artworks/next` *provably never empty*. Respect orientation everywhere, tune the breaker to measured P95, and add structured telemetry. With these tweaks, the pipeline can’t be bricked by onboarding, motion libraries, or provider tails—and users always see art.

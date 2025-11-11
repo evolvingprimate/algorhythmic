@@ -245,7 +245,7 @@ export default function Display() {
   });
 
   // Fetch UNSEEN artwork only - Freshness Pipeline ensures never seeing repeats
-  // GATED: Only load artworks after first-time setup is complete
+  // PROGRESSIVE ENHANCEMENT: Frames flow immediately on auth, setup wizard enhances
   // CRITICAL: staleTime=0 forces fresh fetch on mount, cache invalidation on impressions
   // BUG FIX: Include impressionVersion in queryKey for proper cache invalidation
   const { data: unseenResponse } = useQuery<{
@@ -254,6 +254,8 @@ export default function Display() {
     freshCount?: number;
     storageCount?: number;
     needsGeneration: boolean;
+    onboardingState?: 'complete' | 'incomplete';
+    tier?: string;
   }>({
     queryKey: ["/api/artworks/next", sessionId.current, impressionVersionTrigger],
     queryFn: async () => {
@@ -263,7 +265,7 @@ export default function Display() {
       if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
       return await res.json();
     },
-    enabled: isAuthenticated && setupComplete, // Block until wizard complete
+    enabled: isAuthenticated, // Progressive enhancement: auth is the only gate
     staleTime: 0, // Always consider data stale - refetch on mount
     refetchOnWindowFocus: false,
     refetchOnMount: true,
