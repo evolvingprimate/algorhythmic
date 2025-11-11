@@ -15,6 +15,7 @@ import { createDefaultAudioAnalysis } from "./generation/audioAnalyzer";
 import { findBestCatalogMatch, type CatalogMatchRequest } from "./generation/catalogMatcher";
 import { recentlyServedCache, makeRecentKey } from "./recently-served-cache";
 import { queueController } from "./queue-controller";
+import { wsSequence, WS_MESSAGE_TYPES } from "./websocket-sequence";
 
 // Initialize Stripe only if keys are available (optional for MVP)
 let stripe: Stripe | null = null;
@@ -1763,38 +1764,145 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // WebSocket client tracking
+  const wsClients = new Map<WebSocket, string>();
+  
+  // Helper function to generate client ID
+  const generateClientId = () => `client-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  
+  // Helper function to resync client
+  const resyncClient = (ws: WebSocket, clientId: string, fromSeq: number) => {
+    const messages = wsSequence.getMessagesFromSequence(clientId, fromSeq);
+    messages.forEach(msg => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(msg));
+      }
+    });
+    console.log(`[WebSocket] Resynced ${messages.length} messages to client ${clientId} from seq ${fromSeq}`);
+  };
+  
+  // Periodic check for pending messages (retry mechanism)
+  const retryInterval = setInterval(() => {
+    const pendingMessages = wsSequence.checkPendingMessages();
+    pendingMessages.forEach(pending => {
+      // Find the client's WebSocket
+      for (const [ws, clientId] of wsClients) {
+        if (clientId === pending.clientId && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify(pending.message));
+          wsSequence.markRetried(clientId, pending.seq);
+          console.log(`[WebSocket] Retrying message seq ${pending.seq} to client ${clientId}`);
+          break;
+        }
+      }
+    });
+  }, 5000); // Check every 5 seconds
+  
+  // Periodic cleanup of stale clients
+  const cleanupInterval = setInterval(() => {
+    wsSequence.cleanupStaleClients();
+  }, 60000); // Cleanup every minute
+  
   wss.on('connection', (ws: WebSocket) => {
-    console.log('Client connected to WebSocket');
-
+    const clientId = generateClientId();
+    wsClients.set(ws, clientId);
+    wsSequence.initializeClient(clientId);
+    
+    console.log(`[WebSocket] Client ${clientId} connected`);
+    
+    // Send initial connection/sync message with current sequence
+    ws.send(JSON.stringify({
+      type: WS_MESSAGE_TYPES.CONNECTION_INIT,
+      seq: wsSequence.getCurrentSequence(),
+      clientId,
+      ts: Date.now()
+    }));
+    
+    // Setup heartbeat interval for this client
+    const heartbeatInterval = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        const heartbeat = wsSequence.createClientMessage(
+          clientId, 
+          WS_MESSAGE_TYPES.HEARTBEAT, 
+          { timestamp: Date.now() }
+        );
+        ws.send(JSON.stringify(heartbeat));
+      }
+    }, 30000); // Send heartbeat every 30 seconds
+    
     ws.on('message', async (message: string) => {
       try {
         const data = JSON.parse(message.toString());
         
-        if (data.type === 'audio-analysis') {
-          // Broadcast audio analysis to all connected clients (for multi-device sync)
-          wss.clients.forEach((client) => {
-            if (client !== ws && client.readyState === WebSocket.OPEN) {
-              client.send(JSON.stringify({
-                type: 'audio-update',
-                data: data.payload,
-              }));
-            }
-          });
+        // Update client's last seen timestamp for any message
+        wsSequence.updateClientLastSeen(clientId);
+        
+        switch (data.type) {
+          case WS_MESSAGE_TYPES.CLIENT_ACK:
+            // Client acknowledging a server message
+            wsSequence.acknowledgeMessage(clientId, data.seq);
+            break;
+            
+          case WS_MESSAGE_TYPES.HEARTBEAT_ACK:
+            // Client responding to heartbeat
+            console.log(`[WebSocket] Heartbeat ACK from ${clientId}`);
+            break;
+            
+          case WS_MESSAGE_TYPES.RESYNC_REQUEST:
+            // Client requesting resync from a specific sequence
+            resyncClient(ws, clientId, data.fromSeq);
+            break;
+            
+          case 'audio-analysis':
+            // Existing audio analysis handling
+            // Broadcast to all OTHER clients (not the sender)
+            wss.clients.forEach((client) => {
+              if (client !== ws && client.readyState === WebSocket.OPEN) {
+                const targetClientId = wsClients.get(client);
+                if (targetClientId) {
+                  const msg = wsSequence.createClientMessage(
+                    targetClientId,
+                    'audio-update',
+                    data.payload
+                  );
+                  client.send(JSON.stringify(msg));
+                }
+              }
+            });
+            break;
+            
+          default:
+            console.log(`[WebSocket] Unknown message type from ${clientId}:`, data.type);
         }
       } catch (error) {
-        console.error('WebSocket message error:', error);
+        console.error(`[WebSocket] Message error from ${clientId}:`, error);
+        // Send error message back to client
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: WS_MESSAGE_TYPES.ERROR,
+            error: 'Invalid message format',
+            ts: Date.now()
+          }));
+        }
       }
     });
 
     ws.on('close', () => {
-      console.log('Client disconnected from WebSocket');
+      console.log(`[WebSocket] Client ${clientId} disconnected`);
+      clearInterval(heartbeatInterval);
+      wsSequence.resetClientSequence(clientId);
+      wsClients.delete(ws);
     });
-
-    // Send welcome message
-    ws.send(JSON.stringify({ 
-      type: 'connected', 
-      message: 'Connected to Algorhythmic WebSocket server' 
-    }));
+    
+    ws.on('error', (error) => {
+      console.error(`[WebSocket] Client ${clientId} error:`, error);
+    });
+  });
+  
+  // Cleanup intervals on server shutdown
+  process.on('SIGINT', () => {
+    clearInterval(retryInterval);
+    clearInterval(cleanupInterval);
+    process.exit(0);
   });
 
   return httpServer;
