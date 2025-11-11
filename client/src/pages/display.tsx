@@ -74,6 +74,8 @@ enum SetupStep {
 }
 
 export default function Display() {
+  console.log('[Display] Component mounting');
+  
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentImage, setCurrentImage] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);

@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Link } from "wouter";
+import { useState, useEffect } from "react";
+import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -170,6 +170,15 @@ const galleryImages = [
 export default function Landing() {
   const [hoveredStyle, setHoveredStyle] = useState<number | null>(null);
   const { isAuthenticated, isLoading } = useAuth();
+  const [, navigate] = useLocation();
+
+  // Auto-redirect authenticated users to display page
+  useEffect(() => {
+    if (isAuthenticated && !isLoading) {
+      console.log('[Landing] User authenticated, redirecting to /display');
+      navigate('/display');
+    }
+  }, [isAuthenticated, isLoading, navigate]);
 
   return (
     <div className="min-h-screen relative">
