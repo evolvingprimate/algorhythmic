@@ -59,7 +59,7 @@ import { EffectLogger } from "@/lib/effectLogger";
 import { EngineRegistry } from "@/lib/renderers";
 import { FrameValidator } from "@/lib/FrameValidator";
 import { DynamicModeController } from "@/components/DynamicModeController";
-import type { AudioAnalysis, ArtVote, ArtPreference, MusicIdentification } from "@shared/schema";
+import type { AudioAnalysis, ArtVote, ArtPreference, MusicIdentification, ArtSession } from "@shared/schema";
 
 // BUG FIX: Setup step enum for sequential modal flow (prevents overlapping modals)
 enum SetupStep {
@@ -167,6 +167,7 @@ export default function Display() {
   const hideControlsTimeoutRef = useRef<number>();
   const generationTimeoutRef = useRef<number>();
   const musicIdentificationTimeoutRef = useRef<number>();
+  const catalogueBridgeAbortRef = useRef<AbortController | null>(null);
   const sessionId = useRef(crypto.randomUUID());
   const lastGenerationTime = useRef<number>(0);
   const historyIndexRef = useRef<number>(-1);
@@ -1631,6 +1632,90 @@ export default function Display() {
     // This prevents showing old "cartoon landscape" when user selects "landscape/Escher"
     console.log('[Display] 🧹 Clearing morphEngine frames for fresh artwork with new style');
     morphEngineRef.current.reset();
+    
+    // ============================================================================
+    // CATALOGUE BRIDGE: Instant <100ms artwork display while fresh gen happens in background
+    // ============================================================================
+    
+    // Abort any pending catalogue bridge request (prevents race conditions on rapid style changes)
+    if (catalogueBridgeAbortRef.current) {
+      console.log('[CatalogueBridge] Aborting pending request (style changed)');
+      catalogueBridgeAbortRef.current.abort();
+    }
+    
+    // Create new AbortController for this request
+    catalogueBridgeAbortRef.current = new AbortController();
+    const abortSignal = catalogueBridgeAbortRef.current.signal;
+    
+    // Fetch catalogue artworks immediately (target: <100ms)
+    const bridgeStartTime = Date.now();
+    fetch('/api/catalogue-bridge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      signal: abortSignal,
+      body: JSON.stringify({
+        sessionId: sessionId.current,
+        styleTags: styles,
+        orientation: 'landscape', // TODO: Get from user preferences
+        limit: 2,
+      }),
+    })
+      .then(res => {
+        if (!res.ok) {
+          throw new Error(`Catalogue bridge failed: ${res.statusText}`);
+        }
+        return res.json();
+      })
+      .then((data: { artworks: ArtSession[]; tier: string; latency: number }) => {
+        const bridgeLatency = Date.now() - bridgeStartTime;
+        console.log(`[CatalogueBridge] ✅ Retrieved ${data.artworks.length} artworks (tier: ${data.tier}, latency: ${bridgeLatency}ms)`);
+        
+        // Add catalogue artworks to morphEngine for instant display
+        for (const artwork of data.artworks) {
+          let dnaVector = artwork.dnaVector 
+            ? (JSON.parse(artwork.dnaVector) as number[])
+            : Array(50).fill(0).map(() => Math.random() * 3);
+          
+          const audioFeatures = artwork.audioFeatures ? JSON.parse(artwork.audioFeatures) : null;
+          const musicInfo = artwork.musicTrack ? {
+            title: artwork.musicTrack,
+            artist: artwork.musicArtist || '',
+            album: artwork.musicAlbum || undefined,
+          } : null;
+          
+          morphEngineRef.current.addFrame({
+            imageUrl: artwork.imageUrl,
+            dnaVector,
+            prompt: artwork.prompt,
+            explanation: artwork.generationExplanation || 'Catalogue bridge',
+            artworkId: artwork.id,
+            musicInfo,
+            audioAnalysis: audioFeatures,
+          });
+          
+          console.log(`[CatalogueBridge] 🎨 Added catalogue frame: ${artwork.id}`);
+        }
+        
+        // Start morphEngine if not already running
+        if (morphEngineRef.current.getFrameCount() > 0) {
+          morphEngineRef.current.start();
+          console.log(`[CatalogueBridge] 🚀 MorphEngine started with ${morphEngineRef.current.getFrameCount()} catalogue frames`);
+        }
+        
+        // TODO: Track catalogue artwork IDs for render-ack (Task 7)
+        // When frames are actually displayed, call POST /api/impressions/rendered with source='bridge'
+      })
+      .catch(error => {
+        // Ignore abort errors (expected when styles change rapidly)
+        if (error.name === 'AbortError') {
+          console.log('[CatalogueBridge] Request aborted (style changed)');
+          return;
+        }
+        
+        console.error('[CatalogueBridge] Error fetching catalogue:', error);
+        // Graceful degradation: Continue with normal flow, wait for fresh generation
+      });
     
     // BUG FIX #3: Advance to AUDIO step (wizard remains latched until completion)
     setSetupStep(SetupStep.AUDIO);
