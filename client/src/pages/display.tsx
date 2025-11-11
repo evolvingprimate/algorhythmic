@@ -1334,6 +1334,25 @@ export default function Display() {
         totalHandoffMs: totalHandoffDuration,
       });
       
+      // FIX: Immediately update UI state to show new artwork metadata
+      setCurrentImage(artwork.imageUrl);
+      setCurrentPrompt(artwork.prompt || '');
+      setCurrentExplanation(artwork.explanation || '');
+      setCurrentArtworkId(artwork.id);
+      setCurrentMusicInfo(artwork.musicInfo || null);
+      setCurrentAudioAnalysis(artwork.audioAnalysis || null);
+      setIsGenerating(false);
+      isGeneratingRef.current = false;
+      
+      console.log(`[WebSocket] ✅ UI state updated for fresh artwork: ${artwork.id}`);
+      
+      // FIX: Record impression for the fresh artwork
+      if (artwork.id && !impressionRecorder.hasRecorded(artwork.id)) {
+        impressionRecorder.queueImpressions(artwork.id);
+        lastRenderedArtworkIdsRef.current.add(artwork.id);
+        console.log(`[WebSocket] ✅ Impression queued for fresh artwork: ${artwork.id}`);
+      }
+      
       // Start morphEngine if this is the first frame
       if (morphEngineRef.current.getFrameCount() === 1) {
         morphEngineRef.current.start();

@@ -31,6 +31,7 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 - **Hybrid Gen+Retrieve Pipeline**: Selects best DNA/motif match from a warm-start pool for instant display, then asynchronously generates fresh artwork which seamlessly hot-swaps via WebSocket. This pipeline includes an emergency fallback mechanism to ensure artwork is always displayed, even when the primary pool is exhausted.
 - **DNA Morphing System**: Enables smooth, procedural morphing between frames over 1-minute cycles with audio-reactive modulation using a 50-point DNA vector.
 - **Frame Pool Management**: Ensures continuous morphing, smart synchronization of new frames, deduplication, and active frame protection with priority insertion for freshly generated artwork.
+- **Fresh Artwork Handoff**: WebSocket handler implements atomic UI state updates when fresh artwork arrives - updates metadata (prompt, music info), records impressions, clears generating flag, and coordinates with morphEngine's jump mechanism for seamless transition.
 - **Rendering Engines (Morpheus)**: Evolves from simple crossfade to advanced Ken Burns and intelligent anchor-based zoom with radial crossfade, with future plans for CV-based feature morphing.
 - **Visual Effects System**: Includes trace extraction, soft bloom/glow, chromatic drift, displacement & flow, enhanced Ken Burns, and beat-triggered particle systems.
 - **Audio-Reactive Control System**: Real-time audio analysis maps parameters to visual effects with safety caps and provides a public API.
