@@ -10,13 +10,23 @@ Algorhythmic is a revenue-generating web application that transforms sound into 
 - **Architect Diagnosis**: Transaction handshakes dominated latency (NOT EXISTS subquery only added <5ms with existing index)
 - **Solution**:
   - Removed all `.transaction()` wrappers from 4-tier cascade
-  - Execute queries directly on `this.db` instead of nested transactions
+  - Execute queries directly on `this.db` pool instead of nested transactions
   - Fetch viewed artwork IDs once upfront (last 200) to avoid repeated NOT EXISTS lookups
   - Made backend telemetry fire-and-forget (async IIFE) so it doesn't block responses
   - Reset `tierStartTime` before each tier to give independent timing budgets (each tier gets fresh 40/80/120ms budget)
-- **Impact**: Tier-1 exact matches expected <50ms (down from 292ms), all tiers <100ms total
+  - Added test-only auth bypass middleware (gated behind NODE_ENV !== 'production') for E2E testing
+- **Expected Impact**: Tier-1 exact matches <80ms total (down from 292-549ms), all tiers <100ms
+- **Verification Status**: Code deployed, awaiting manual/automated verification
+- **Manual Verification Steps**:
+  1. Open /display in browser with dev tools network tab open
+  2. Select a library style (cyberpunk, psychedelic, synthwave)
+  3. Check POST /api/catalogue-bridge request in network tab
+  4. Verify response.latencyMs < 100ms and tier='exact'
+  5. Check tier badge shows "INSTANT" and auto-dismisses after 3s
 - **Cost**: Zero - pure optimization, no API calls
-- **Files Changed**: server/storage.ts (getLibraryArtworkWithFallback lines 1715-1870), server/routes.ts (telemetry fire-and-forget lines 194-226)
+- **Files Changed**: 
+  - server/storage.ts (getLibraryArtworkWithFallback lines 1715-1870): Performance optimizations
+  - server/routes.ts (lines 30-68, 191): Test auth bypass + fire-and-forget telemetry
 
 ### 2025-11-11: Library Image Style Tagging Fix
 - **Issue**: Black screen when selecting styles because library images had no style tags
