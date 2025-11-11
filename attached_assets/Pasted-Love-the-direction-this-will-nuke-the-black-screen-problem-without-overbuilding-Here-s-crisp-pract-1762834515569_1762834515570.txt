@@ -1,0 +1,167 @@
+Love the direction—this will nuke the black-screen problem without overbuilding. Here’s crisp, practical feedback to tighten it up and avoid new edge-cases.
+
+---
+
+# 👍 What’s Strong
+
+* **User-first:** instant visual with a graceful upgrade is exactly right.
+* **Backend-driven fallback:** keeps logic centralized and consistent.
+* **Telemetry awareness:** you’re already planning to measure tiers, latency, and swaps.
+* **Clear effort estimate:** ~10 hours feels realistic for Phase 1.
+
+---
+
+# ⚠️ Gaps & Risks (and fixes)
+
+## 1) “Never repeat” & seen-frame filtering
+
+**Risk:** Tier 2/3 can accidentally surface **already-seen** items.
+**Fix:** Your API signature includes `excludeIds`; also enforce server-side **impressions** filtering:
+
+* In the cascade queries, **LEFT JOIN / NOT EXISTS** against `user_art_impressions`.
+* Keep a **session-scoped seen set** in memory on the client for instant rejection (your FrameValidator).
+
+**Acceptance test:** 20 consecutive frames during a style switch contain **zero duplicate IDs**.
+
+---
+
+## 2) Orientation discipline
+
+**Risk:** Showing the right style but the wrong **orientation** breaks the visual.
+**Fix:** Every tier must filter by `orientation` first (portrait/landscape). If empty, **do not** cross-convert—fall back to **procedural bridge** + queue fresh gen.
+
+**Acceptance test:** No portrait→landscape (or vice versa) leaks in Tier 1–3.
+
+---
+
+## 3) Tier-3 “ANY artwork” can feel off-brand
+
+**Risk:** Global fallback may surface unrelated vibes (e.g., synthwave during “dark-fantasy”)—hurts the “it knows me” promise.
+**Two options (pick one):**
+
+* **A. Procedural bridge first (recommended):** If Tier-1 & Tier-2 miss, show a **neutral procedural bridge** (gradient/particles keyed to the requested style palette), then swap to fresh. Avoid Tier-3 global unless you **explicitly** prefer “something over nothing.”
+* **B. Constrained global:** If you must show library content, restrict Tier-3 to a **shortlist of neutral/ambient styles** you pre-approve (e.g., “ambient-landscape,” “dreamlike-abstract”), *not* random across all 57.
+
+**Copy tweak for badge** (see below) helps set expectations.
+
+---
+
+## 4) Related-styles quality
+
+**Risk:** A static map can be brittle or drift as your catalog evolves.
+**Fix:** Blend **curated adjacencies** with a **fallback cosine similarity** on your DNA vectors:
+
+* If curated map exists → use it.
+* If not → pick top-K neighbors via cosine over stored DNA (in memory is fine for 57 items).
+* Cache the neighbor list for 10–30s to avoid recompute storms.
+
+---
+
+## 5) Performance guardrails
+
+* Add a **hard budget** for the cascade: `TIER1 (≤40ms) → TIER2 (≤80ms) → TIER3 (≤120ms)`, abort to procedural bridge at **~150–200ms** total.
+* Log `cascade_budget_hit` when you must bail early.
+
+---
+
+## 6) Badge UX & wording
+
+**Risk:** “Exploring similar styles…” might feel technical.
+**Safer copy (auto-dismiss after swap):**
+
+* Tier-2: “Showing a close match while we create your style…”
+* Tier-3/Bridge: “Warming up visuals for your style…”
+
+Keep badge **small, low-contrast**, and **auto-hide** on swap.
+
+---
+
+## 7) Background generation priority
+
+Ensure style-switch generations jump the queue:
+
+* Add `urgency_score` column (e.g., 100 for style transitions, 10 for normal).
+* Workers pull `ORDER BY urgency_score DESC, created_at ASC FOR UPDATE SKIP LOCKED`.
+
+No Redis needed; Postgres handles this fine.
+
+---
+
+## 8) Branding & “no text” interaction
+
+* Fallback tiers must still respect **no-text** rule (except Business watermark mode).
+* If Business branding is enabled, let Tier-2 borrowing **bias color/mood** using brand palette—but **never** render literal logos/text unless watermark is toggled.
+
+---
+
+# 🔧 Implementation Nits (quick wins)
+
+* **Signature:**
+  `getLibraryArtworkWithFallback(styles: string[], orientation: 'portrait'|'landscape', excludeIds: string[], limit = 1)`
+* **Ordering:** prefer **freshness** (newer first) but include a small random jitter to avoid the same few items dominating.
+* **Short-circuit:** return as soon as you find ≥ `limit`, don’t fetch all candidates.
+* **Indexes:**
+
+  ```sql
+  CREATE INDEX IF NOT EXISTS idx_art_sessions_orientation ON art_sessions (orientation, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_art_sessions_style_tags ON art_sessions USING GIN (style_tags);
+  ```
+* **Telemetry (add these):**
+
+  * `catalogue_bridge.tier` = exact|related|global|bridge
+  * `catalogue_bridge.ms` (duration)
+  * `style_switch.handoff_latency_ms`
+  * `style_switch.swap_success` (bool)
+  * `validator.rejections` and `retries`
+  * A **SLO alert** if `handoff_latency_ms p95 > 1200` for 15 min.
+
+---
+
+# 🧪 Test Matrix (minimal but meaningful)
+
+1. **Non-library style (portrait):** Tier-2 hits, swap <15s, no repeats.
+2. **Non-library style (landscape):** Tier-2 miss → **bridge** (not global), swap <15s.
+3. **Library style (exact):** Zero badge, instant show, no repeats.
+4. **Rapid style switches:** 3 changes in 5s → each shows something within 200–300ms; no queue deadlock.
+5. **Seen-set stress:** After 20 frames, `duplicate_count === 0`.
+
+---
+
+# 🔁 Copy/UX Suggestions
+
+* Replace “Exploring similar styles…” with **“Showing a close match while we create your style…”**
+* Auto-dismiss in **~1.5–2.0s** or on swap, whichever comes first.
+* Never block interactions with the badge.
+
+---
+
+# 📈 Metrics Targets (proposed)
+
+* **Black-screen rate:** → **0** (bridge covers misses)
+* **Cascade median latency:** **< 200–250 ms** (server time)
+* **Handoff latency p95:** **< 1.2 s**
+* **Tier distribution:** Exact ≥ 50%, Related ≤ 40%, Bridge/Global ≤ 10% (watch & tune)
+* **Repeat rate:** **0%** over 20-frame runs (validator + DB filter)
+
+---
+
+# ❓ Reviewer Questions (refined)
+
+1. For Tier-3, do we prefer **procedural bridge** over **unrelated global art** by default?
+2. Are the **latency budgets** acceptable for first release?
+3. Should related styles be **curated-first, cosine-fallback** as proposed?
+4. Badge language okay, or even **more** subtle?
+5. Any reason to allow Tier-3 global at all, or keep it behind a feature flag?
+
+---
+
+# ✅ Bottom-line Recommendation
+
+**Approve with these refinements:**
+
+* Enforce **impressions + orientation** filters across all tiers.
+* Prefer **procedural bridge** over totally unrelated Tier-3.
+* Add **latency budgets + telemetry** and **priority gen** for style switches.
+* Blend curated relations with **cosine fallback** to future-proof.
+
+This keeps the 10-hour scope, avoids UX regressions, and gives you crisp signals to iterate.
