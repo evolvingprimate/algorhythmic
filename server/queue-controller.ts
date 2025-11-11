@@ -169,6 +169,53 @@ export class QueueController {
   }
   
   /**
+   * Get generation decision with detailed reasoning
+   * Returns both whether to generate AND why not (if applicable)
+   * Critical for triggering fallback when circuit breaker is open
+   */
+  getGenerationDecision(): { shouldGenerate: boolean; reason?: 'breaker_open' | 'queue_full' | 'breaker_half_open' } {
+    // Check DALL-E health first (circuit breaker state)
+    const breakerState = this.generationHealth.getCurrentState();
+    const dalleHealthy = this.generationHealth.shouldAttemptGeneration();
+    
+    if (!dalleHealthy) {
+      console.log('[QueueController] DALL-E unhealthy, breaker state:', breakerState);
+      
+      // Track this decision in telemetry
+      telemetryService.recordEvent({
+        category: 'generation',
+        event: 'generation_denied_breaker',
+        metrics: {
+          queue_state: this.currentState,
+          breaker_state: breakerState,
+          reason: 'breaker_denial'
+        },
+        severity: 'warning'
+      });
+      
+      // Provide specific reason for fallback routing
+      if (breakerState === 'open') {
+        return { shouldGenerate: false, reason: 'breaker_open' };
+      } else if (breakerState === 'half-open') {
+        // In half-open, some requests are denied for sampling
+        return { shouldGenerate: false, reason: 'breaker_half_open' };
+      }
+    }
+    
+    // Check queue state
+    switch (this.currentState) {
+      case 'HUNGRY':
+        return { shouldGenerate: true };
+      case 'SATISFIED':
+        return { shouldGenerate: true };
+      case 'OVERFULL':
+        return { shouldGenerate: false, reason: 'queue_full' };
+      default:
+        return { shouldGenerate: true };
+    }
+  }
+  
+  /**
    * Get recommended batch size based on current state
    * Now considers recovery batch size when in degraded mode
    */

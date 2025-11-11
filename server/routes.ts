@@ -1610,20 +1610,98 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Process tick and get current state
       const state = queueController.tick(metrics);
       
-      // Record telemetry
-      const shouldGenerate = queueController.shouldGenerateFrame();
+      // Get detailed generation decision
+      const decision = queueController.getGenerationDecision();
       const batchSize = queueController.getRecommendedBatchSize();
       queueController.recordTelemetry(
         queueMetrics.freshCount,
-        shouldGenerate ? 'generate' : 'skip',
+        decision.shouldGenerate ? 'generate' : 'skip',
         batchSize
       );
       
       console.log('[Queue Controller] State:', state, 'Queue size:', queueMetrics.freshCount, 
-                  'Should generate:', shouldGenerate, 'Batch size:', batchSize);
+                  'Should generate:', decision.shouldGenerate, 'Reason:', decision.reason, 'Batch size:', batchSize);
       
-      // Check if we should generate
-      if (!shouldGenerate) {
+      // Check if generation is denied by circuit breaker - TRIGGER FALLBACK
+      if (!decision.shouldGenerate && (decision.reason === 'breaker_open' || decision.reason === 'breaker_half_open')) {
+        console.warn(`[Queue Controller] Circuit breaker ${decision.reason} - triggering fallback cascade`);
+        
+        try {
+          // Import fallback service for emergency frame retrieval
+          const { resolveEmergencyFallback } = await import('./fallback-service');
+          
+          // Get user preferences for style matching
+          const preferences = await storage.getPreferencesBySession(sessionId);
+          
+          // Trigger 3-tier fallback cascade
+          const fallbackResult = await resolveEmergencyFallback(
+            storage,
+            sessionId,
+            userId,
+            {
+              styleTags: preferences?.styles || [],
+              artistTags: preferences?.artists || [],
+              minFrames: 2, // Need at least 2 frames for morphEngine
+              useCache: true
+            }
+          );
+          
+          // Log telemetry for fallback usage
+          telemetryService.recordEvent({
+            category: 'fallback',
+            event: 'breaker_triggered_fallback',
+            metrics: {
+              breaker_state: decision.reason,
+              fallback_tier: fallbackResult.tier,
+              frames_retrieved: fallbackResult.artworks.length,
+              queue_state: state
+            },
+            severity: 'warning',
+            sessionId,
+            userId
+          });
+          
+          console.log(`[Queue Controller] Fallback SUCCESS - Retrieved ${fallbackResult.artworks.length} frames from ${fallbackResult.tier} tier`);
+          
+          // Return fallback frames instead of empty response
+          return res.json({
+            status: 'fallback',
+            reason: decision.reason,
+            state,
+            batchSize: 0, // No new generation
+            framesGenerated: 0,
+            frames: fallbackResult.artworks.map(artwork => ({
+              id: artwork.id,
+              imageUrl: artwork.imageUrl,
+              prompt: artwork.prompt,
+              fallback: true,
+              tier: fallbackResult.tier
+            })),
+            metrics: queueController.getMetrics(),
+            message: `Circuit breaker ${decision.reason} - using fallback frames from ${fallbackResult.tier} tier`
+          });
+        } catch (fallbackError: any) {
+          console.error(`[Queue Controller] Fallback FAILED:`, fallbackError);
+          
+          // Even if fallback fails, return procedural bridge as last resort
+          const { generateProceduralBridge } = await import('./procedural-bridge');
+          const proceduralData = generateProceduralBridge(preferences?.styles || ['abstract']);
+          
+          return res.json({
+            status: 'procedural_fallback',
+            reason: decision.reason,
+            state,
+            batchSize: 0,
+            framesGenerated: 0,
+            procedural: proceduralData, // Frontend can render gradient/particles
+            metrics: queueController.getMetrics(),
+            message: `Circuit breaker ${decision.reason} - using procedural bridge`
+          });
+        }
+      }
+      
+      // Check if we should generate (queue full case)
+      if (!decision.shouldGenerate) {
         return res.json({
           status: 'queue_full',
           state,
