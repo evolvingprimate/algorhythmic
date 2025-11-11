@@ -282,10 +282,7 @@ export class ClientTelemetry {
       };
       
       // Send to server
-      await apiRequest('/api/telemetry/client', {
-        method: 'POST',
-        body: JSON.stringify(payload)
-      });
+      await apiRequest('POST', '/api/telemetry/client', payload);
       
       console.log(`[ClientTelemetry] Flushed ${eventsToSend.length} events to server`);
       
