@@ -3,6 +3,8 @@
  * Manages frame generation state with 2-tick hysteresis to prevent oscillation
  */
 
+import { telemetryService } from "./telemetry-service";
+
 // State types for queue management
 export type QueueState = 'HUNGRY' | 'SATISFIED' | 'OVERFULL';
 
@@ -90,8 +92,34 @@ export class QueueController {
         queueSize: metrics.queueSize,
         counter: this.stateChangeCounter
       });
+      
+      // Track telemetry for state change
+      telemetryService.recordEvent({
+        category: 'generation',
+        event: 'queue_state_change',
+        metrics: {
+          fromState: this.currentState,
+          toState: newState,
+          queueSize: metrics.queueSize,
+          stateChangeCounter: this.stateChangeCounter
+        },
+        severity: newState === 'HUNGRY' ? 'warning' : 'info'
+      });
+      
       this.currentState = newState;
     }
+    
+    // Also track queue depth for monitoring
+    telemetryService.recordEvent({
+      category: 'generation',
+      event: 'queue_tick',
+      metrics: {
+        state: this.currentState,
+        queueSize: metrics.queueSize,
+        targetSize: metrics.targetSize
+      },
+      severity: 'info'
+    });
     
     return this.currentState;
   }

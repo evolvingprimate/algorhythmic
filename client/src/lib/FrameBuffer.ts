@@ -15,6 +15,7 @@
  */
 
 import { PLACEHOLDER_IMAGE_URL } from './PlaceholderFrame';
+import { clientTelemetry } from './client-telemetry';
 
 export interface BufferedFrame {
   id: string;
@@ -111,6 +112,14 @@ export class FrameBuffer {
     }
     
     console.log(`[FrameBuffer] Enqueued frame to ${queueName} queue (seq: ${frame.sequenceId}, total: ${this.getBufferSize()})`);
+    
+    // Track buffer state telemetry
+    clientTelemetry.trackFrameBuffer(
+      this.freshQueue.length,
+      this.styleQueue.length,
+      this.globalQueue.length,
+      this.getBufferSize()
+    );
   }
   
   /**
@@ -125,6 +134,9 @@ export class FrameBuffer {
       // Return placeholder as last resort
       this.stats.placeholderUsed++;
       console.warn('[FrameBuffer] Using placeholder - all queues empty');
+      
+      // Track critical telemetry - placeholder usage
+      clientTelemetry.trackPlaceholderUsage();
       
       // Request more frames urgently
       this.requestMoreFrames(true);

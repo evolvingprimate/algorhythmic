@@ -1,6 +1,7 @@
 import { DNAVector, DNAFrame, interpolateDNA, applyAudioReactivity, smoothstepBellCurve, sigmoid, smootherstep } from './dna';
 import { MorphScheduler } from './MorphScheduler';
 import type { AudioAnalysis } from '@shared/schema';
+import { clientTelemetry } from './client-telemetry';
 
 export type MorphPhase = 'hold' | 'ramp' | 'morph';
 
@@ -401,6 +402,14 @@ export class MorphEngine {
     if (!activeFrames && elapsed >= this.TOTAL_CYCLE && this.frames.length > 1) {
       // Legacy frame advancement (only if scheduler not active)
       if (elapsed > this.TOTAL_CYCLE + 100) { // 100ms grace period for final state
+        // Track morph cycle completion
+        clientTelemetry.trackMorphCycle(
+          this.currentIndex,
+          elapsed,
+          this.frames.length,
+          true // completed
+        );
+        
         this.currentIndex = (this.currentIndex + 1) % this.frames.length;
         this.phaseStartTime = Date.now();
         console.log(`[MorphEngine] Advanced to frame ${this.currentIndex} (cycle complete)`);

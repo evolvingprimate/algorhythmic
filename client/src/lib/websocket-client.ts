@@ -41,8 +41,12 @@ export class WebSocketClient {
       this.connectionResolve = resolve;
     });
     
+    // Robust URL construction with fallback
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//${window.location.host}/ws`;
+    const host = window.location.host || "localhost:5000"; // Fallback to localhost:5000 if host is empty
+    const wsUrl = `${protocol}//${host}/ws`;
+    
+    console.log("[WebSocket] Connecting to:", wsUrl);
 
     try {
       this.ws = new WebSocket(wsUrl);

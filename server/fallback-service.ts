@@ -2,6 +2,7 @@
 import type { ArtSession } from "../shared/schema";
 import type { IStorage } from "./storage";
 import { recentlyServedCache } from "./recently-served-cache";
+import { telemetryService } from "./telemetry-service";
 
 export interface FallbackResult {
   artworks: ArtSession[];
@@ -50,6 +51,7 @@ export async function resolveEmergencyFallback(
   } = options;
 
   console.log(`[Fallback] Starting 3-tier fallback for user ${userId}, session ${sessionId}, cache: ${useCache}`);
+  const startTime = Date.now(); // Track latency
   
   // Tier 1: Fresh Generated Frames (never seen by user)
   if (sessionId) {
@@ -80,6 +82,21 @@ export async function resolveEmergencyFallback(
           const servedIds = result.artworks.map(a => a.id);
           recentlyServedCache.addServed(sessionId, userId, servedIds, 'fresh');
         }
+        
+        // Track telemetry
+        telemetryService.recordEvent({
+          category: 'fallback',
+          event: 'tier_selected',
+          metrics: {
+            tier: 'fresh',
+            queueSize: result.artworks.length,
+            latencyMs: Date.now() - startTime,
+            bypassedCache: false
+          },
+          severity: 'info',
+          sessionId,
+          userId
+        });
         
         return result;
       }
@@ -143,6 +160,21 @@ export async function resolveEmergencyFallback(
           recentlyServedCache.addServed(sessionId, userId, servedIds, 'style');
         }
         
+        // Track telemetry
+        telemetryService.recordEvent({
+          category: 'fallback',
+          event: 'tier_selected',
+          metrics: {
+            tier: 'style-matched',
+            queueSize: result.artworks.length,
+            latencyMs: Date.now() - startTime,
+            bypassedCache: true
+          },
+          severity: 'warning', // Style tier is less ideal
+          sessionId,
+          userId
+        });
+        
         return result;
       }
     } catch (error) {
@@ -182,6 +214,21 @@ export async function resolveEmergencyFallback(
         const servedIds = result.artworks.map(a => a.id);
         recentlyServedCache.addServed(sessionId, userId, servedIds, 'global');
       }
+      
+      // Track telemetry
+      telemetryService.recordEvent({
+        category: 'fallback',
+        event: 'tier_selected',
+        metrics: {
+          tier: 'global',
+          queueSize: result.artworks.length,
+          latencyMs: Date.now() - startTime,
+          bypassedCache: true
+        },
+        severity: 'warning', // Global tier indicates generation issues
+        sessionId,
+        userId
+      });
       
       return result;
     }

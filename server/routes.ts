@@ -16,6 +16,7 @@ import { findBestCatalogMatch, type CatalogMatchRequest } from "./generation/cat
 import { recentlyServedCache, makeRecentKey } from "./recently-served-cache";
 import { queueController } from "./queue-controller";
 import { wsSequence, WS_MESSAGE_TYPES } from "./websocket-sequence";
+import { telemetryService } from "./telemetry-service";
 
 // Initialize Stripe only if keys are available (optional for MVP)
 let stripe: Stripe | null = null;
@@ -1761,6 +1762,79 @@ export async function registerRoutes(app: Express): Promise<Server> {
         message: 'Failed to get telemetry',
         error: error.message 
       });
+    }
+  });
+
+  // Comprehensive Telemetry Dashboard Endpoint
+  app.get('/api/telemetry/dashboard', async (req, res) => {
+    try {
+      const summary = telemetryService.getMetricsSummary();
+      const health = telemetryService.getHealthStatus();
+      const alerts = telemetryService.checkAlerts();
+      
+      res.json({
+        health,
+        alerts,
+        metrics: summary,
+        successCriteria: {
+          zeroBlackFrames: summary.blackFrameCount === 0,
+          lowLatency: summary.avgTransitionLatency < 1500,
+          minimalFallback: summary.fallbackUsage.rate < 0.05,
+          displayLatency: summary.avgTransitionLatency < 100
+        },
+        timestamp: new Date()
+      });
+    } catch (error: any) {
+      console.error('[Telemetry] Dashboard error:', error);
+      res.status(500).json({ 
+        message: 'Failed to get telemetry dashboard',
+        error: error.message 
+      });
+    }
+  });
+
+  // Client Telemetry Collection Endpoint
+  app.post('/api/telemetry/client', async (req, res) => {
+    try {
+      const { events, summary } = req.body;
+      
+      // Process client events
+      if (events && Array.isArray(events)) {
+        events.forEach((event: any) => {
+          telemetryService.recordEvent({
+            ...event,
+            category: event.category || 'display'
+          });
+        });
+      }
+      
+      // Log client summary
+      if (summary) {
+        console.log('[ClientTelemetry] Summary:', summary);
+      }
+      
+      res.json({ 
+        success: true,
+        processed: events?.length || 0
+      });
+    } catch (error: any) {
+      console.error('[Telemetry] Client telemetry error:', error);
+      res.status(500).json({ 
+        message: 'Failed to process client telemetry',
+        error: error.message 
+      });
+    }
+  });
+
+  // Telemetry Metrics Export (Prometheus format)
+  app.get('/api/telemetry/metrics', (req, res) => {
+    try {
+      const metricsText = telemetryService.exportMetrics();
+      res.set('Content-Type', 'text/plain; version=0.0.4');
+      res.send(metricsText);
+    } catch (error: any) {
+      console.error('[Telemetry] Metrics export error:', error);
+      res.status(500).send('# Error exporting metrics');
     }
   });
 
