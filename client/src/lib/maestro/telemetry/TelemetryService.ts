@@ -22,6 +22,7 @@ export type TelemetryEventType =
   | "catalogue_bridge.fallback_tier_1"
   | "catalogue_bridge.fallback_tier_2"
   | "catalogue_bridge.fallback_tier_3"
+  | "catalogue_bridge.fallback_tier_4"
   | "catalogue_bridge.error"
   | "handoff.prewarm_start"
   | "handoff.prewarm_complete"
@@ -69,7 +70,7 @@ interface TelemetryEventData {
   sessionId?: string;
   
   // catalogue_bridge.success / fallback_tier_*
-  tier?: number; // 1 (exact), 2 (partial), 3 (global)
+  tier?: number; // 1 (exact), 2 (related), 3 (global), 4 (procedural)
   frameCount?: number;
   latencyMs?: number;
   

@@ -178,7 +178,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       console.log(`[Catalogue Bridge] User ${userId}, session ${sessionId}, styles: [${styleTags}], orientation: ${orientation}, excluding ${excludeIds.length} recent IDs`);
       
-      // Call cascading search: exact → partial → global
+      // Call 4-tier cascading search: exact → related → global → procedural
       const result = await storage.getLibraryArtworkWithFallback(userId, {
         styleTags,
         artistTags,
@@ -187,19 +187,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
         limit,
       });
       
+      // Backend Telemetry: Emit tier and latency events
+      try {
+        const raiSessionId = await storage.findOrCreateRaiSessionForClientSession(userId, sessionId);
+        const metadata = JSON.stringify({
+          tier: result.tier,
+          latencyMs: result.latencyMs,
+          styleTags,
+          artistTags,
+          artworkCount: result.artworks.length,
+        });
+        
+        await storage.createTelemetryEvents([
+          {
+            sessionId: raiSessionId,
+            userId,
+            eventType: `catalogue_bridge.tier_${result.tier}`,
+            eventData: metadata,
+            audioFeatures: null,
+            visualState: null,
+          },
+          {
+            sessionId: raiSessionId,
+            userId,
+            eventType: 'catalogue_bridge.handoff_latency_ms',
+            eventData: metadata,
+            audioFeatures: null,
+            visualState: null,
+          },
+        ]);
+      } catch (telemetryError: any) {
+        console.error('[Catalogue Bridge] Telemetry emission failed (non-blocking):', telemetryError.message);
+      }
+      
       // Mark returned artworks as recently-served (prevent echoing back within 30s)
       if (result.artworks.length > 0) {
         const artworkIds = result.artworks.map(art => art.id);
         recentlyServedCache.markRecent(cacheKey, artworkIds);
         
-        console.log(`[Catalogue Bridge] Served ${result.artworks.length} artworks (tier: ${result.tier}), marked as recent: [${artworkIds.join(', ')}]`);
+        console.log(`[Catalogue Bridge] Served ${result.artworks.length} artworks (tier: ${result.tier}, ${result.latencyMs}ms), marked as recent: [${artworkIds.join(', ')}]`);
       } else {
-        console.log(`[Catalogue Bridge] No artworks found (tier: ${result.tier})`);
+        console.log(`[Catalogue Bridge] No library artworks, using ${result.tier} tier (${result.latencyMs}ms)`);
       }
       
       res.json({
         artworks: result.artworks,
         tier: result.tier,
+        latency: result.latencyMs, // Keep backend field name as latencyMs but expose as 'latency' per API contract
+        proceduralData: result.proceduralData,
         timestamp: new Date().toISOString(),
       });
     } catch (error: any) {

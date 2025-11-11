@@ -160,6 +160,7 @@ export interface IStorage {
   endRaiSession(sessionId: string): Promise<void>;
   createTelemetryEvents(events: InsertTelemetryEvent[]): Promise<void>;
   getTelemetryEventsSince(cutoffTime: Date): Promise<TelemetryEvent[]>;
+  findOrCreateRaiSessionForClientSession(userId: string, clientSessionId: string): Promise<string>;
 
   // Generation Jobs (Hybrid gen+retrieve)
   createGenerationJob(job: InsertGenerationJob): Promise<GenerationJob>;
@@ -566,6 +567,7 @@ export class MemStorage implements IStorage {
     const session: RaiSession = {
       id: randomUUID(),
       userId,
+      clientSessionId: null,
       artworkId: artworkId || null,
       genomeId: genomeId || null,
       audioContext: null,
@@ -588,6 +590,11 @@ export class MemStorage implements IStorage {
   async getTelemetryEventsSince(cutoffTime: Date): Promise<TelemetryEvent[]> {
     // MemStorage doesn't persist telemetry
     return [];
+  }
+
+  async findOrCreateRaiSessionForClientSession(userId: string, clientSessionId: string): Promise<string> {
+    // MemStorage doesn't persist sessions - return mock ID
+    return randomUUID();
   }
 
   // Generation Jobs (MemStorage stubs)
@@ -2016,6 +2023,48 @@ export class PostgresStorage implements IStorage {
     } catch (error: any) {
       console.error('[PostgresStorage] Failed to query telemetry events:', error);
       return [];
+    }
+  }
+
+  async findOrCreateRaiSessionForClientSession(userId: string, clientSessionId: string): Promise<string> {
+    try {
+      // Look for existing RAI session with matching clientSessionId
+      const existing = await this.db
+        .select()
+        .from(raiSessions)
+        .where(
+          and(
+            eq(raiSessions.userId, userId),
+            eq(raiSessions.clientSessionId, clientSessionId)
+          )
+        )
+        .limit(1);
+
+      if (existing.length > 0) {
+        return existing[0].id;
+      }
+
+      // Create lightweight RAI session with clientSessionId
+      const sessionData: InsertRaiSession = {
+        userId,
+        clientSessionId,
+        artworkId: null,
+        genomeId: null,
+        audioContext: null,
+        visualContext: null,
+        endedAt: null,
+        durationSeconds: null,
+      };
+
+      const [session] = await this.db
+        .insert(raiSessions)
+        .values(sessionData)
+        .returning();
+
+      return session.id;
+    } catch (error: any) {
+      console.error('[PostgresStorage] Failed to find/create RAI session:', error);
+      throw error; // Propagate error instead of silent fallback
     }
   }
 

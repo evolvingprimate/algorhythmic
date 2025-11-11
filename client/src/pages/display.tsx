@@ -44,7 +44,8 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { StyleSelector } from "@/components/style-selector";
 import { AudioSourceSelector } from "@/components/audio-source-selector";
 import { DebugOverlay, type DebugStats } from "@/components/debug-overlay";
-import { EffectsControlMenu, type EffectsConfig } from "@/components/effects-control-menu";
+// EffectsControlMenu temporarily removed - requires MaestroControlStore/CommandBus refactor
+// import { EffectsControlMenu } from "@/components/effects-control-menu";
 import { useToast } from "@/hooks/use-toast";
 import { useImpressionRecorder } from "@/hooks/useImpressionRecorder";
 import { telemetryService } from "@/lib/maestro/telemetry/TelemetryService";
@@ -114,6 +115,16 @@ export default function Display() {
   // Debug and Effects Control
   const [showDebugOverlay, setShowDebugOverlay] = useState(false);
   const [showEffectsMenu, setShowEffectsMenu] = useState(false);
+  const [catalogueTier, setCatalogueTier] = useState<'exact' | 'related' | 'global' | 'procedural' | null>(null);
+  
+  // Local EffectsConfig type (TODO: migrate to MaestroControlStore/EffectPreferences)
+  type EffectsConfig = {
+    trace: { enabled: boolean; intensity: number };
+    bloom: { enabled: boolean; intensity: number };
+    chromaticDrift: { enabled: boolean; intensity: number };
+    particles: { enabled: boolean; density: number };
+    kenBurns: { enabled: boolean; maxZoom: number };
+  };
   const [debugStats, setDebugStats] = useState<DebugStats>({
     fps: 0,
     frameAOpacity: 0,
@@ -797,6 +808,9 @@ export default function Display() {
       
       // PEER-REVIEWED FIX #3: Record impression when fresh frame is inserted (deduplicated with retry on failure)
       impressionRecorder.queueImpressions(artwork.id);
+      
+      // Auto-dismiss catalogue tier badge when fresh artwork arrives
+      setCatalogueTier(null);
       
       console.log(`[Display] ✅ Inserted fresh frame with immediate jump (safe - pruning already done): ${artwork.prompt?.substring(0, 50)}...`);
     });
@@ -1947,21 +1961,34 @@ export default function Display() {
         }
         return res.json();
       })
-      .then((data: { artworks: ArtSession[]; tier: string; latency: number }) => {
+      .then((data: { 
+        artworks: ArtSession[]; 
+        tier: 'exact' | 'related' | 'global' | 'procedural'; 
+        latency: number;
+        proceduralData?: any;
+      }) => {
         const bridgeLatency = Date.now() - bridgeStartTime;
-        console.log(`[CatalogueBridge] ✅ Retrieved ${data.artworks.length} artworks (tier: ${data.tier}, latency: ${bridgeLatency}ms)`);
+        console.log(`[CatalogueBridge] ✅ Retrieved ${data.artworks.length} artworks (tier: ${data.tier}, latency: ${data.latency}ms)`);
         
-        // TELEMETRY: Record catalogue bridge success/fallback based on tier
-        const tierNumber = parseInt(data.tier.replace('tier_', ''));
-        const eventType = tierNumber === 1 
-          ? 'catalogue_bridge.success' as const
-          : `catalogue_bridge.fallback_tier_${tierNumber}` as const;
+        // Tier mapping for telemetry and UX
+        const tierMap = {
+          exact: { priority: 1, event: 'catalogue_bridge.success' as const },
+          related: { priority: 2, event: 'catalogue_bridge.fallback_tier_2' as const },
+          global: { priority: 3, event: 'catalogue_bridge.fallback_tier_3' as const },
+          procedural: { priority: 4, event: 'catalogue_bridge.fallback_tier_4' as const },
+        };
         
-        telemetryService.recordEvent(eventType, {
-          tier: tierNumber,
+        const tierInfo = tierMap[data.tier];
+        telemetryService.recordEvent(tierInfo.event, {
+          tier: tierInfo.priority,
           frameCount: data.artworks.length,
-          latencyMs: bridgeLatency,
+          latencyMs: data.latency,
         });
+        
+        // Set tier for badge UI (will auto-dismiss on next real frame swap)
+        if (data.tier !== 'exact') {
+          setCatalogueTier(data.tier);
+        }
         
         // Add catalogue artworks to morphEngine for instant display
         for (const artwork of data.artworks) {
@@ -2331,6 +2358,27 @@ export default function Display() {
         </div>
       </div>
 
+      {/* Tier Badge - shown when catalogue bridge uses fallback tier */}
+      {catalogueTier && catalogueTier !== 'exact' && (
+        <div className="fixed top-20 left-1/2 transform -translate-x-1/2 z-50">
+          <Badge 
+            variant="secondary" 
+            className="text-sm py-2 px-4 shadow-lg bg-background/90 backdrop-blur-md border-primary/30"
+            data-testid="tier-badge"
+          >
+            {catalogueTier === 'related' && (
+              <span>Showing a close match while we create your style...</span>
+            )}
+            {catalogueTier === 'global' && (
+              <span>Showing similar artwork while we create your style...</span>
+            )}
+            {catalogueTier === 'procedural' && (
+              <span>Loading a preview while we create your custom artwork...</span>
+            )}
+          </Badge>
+        </div>
+      )}
+
       {/* Bottom Control Bar */}
       <div 
         className={`fixed bottom-0 left-0 right-0 z-50 transition-opacity duration-300 ${
@@ -2593,14 +2641,14 @@ export default function Display() {
         />
       )}
 
-      {/* Effects Control Menu */}
-      {showEffectsMenu && (
+      {/* Effects Control Menu - temporarily removed pending MaestroControlStore/CommandBus refactor */}
+      {/* {showEffectsMenu && (
         <EffectsControlMenu
-          config={effectsConfig}
-          onChange={setEffectsConfig}
+          controlStore={controlStore}
+          commandBus={commandBus}
           onClose={() => setShowEffectsMenu(false)}
         />
-      )}
+      )} */}
 
       {/* Dynamic Mode Controller - Handles catalog bridges on ALL style/track changes */}
       {setupComplete && (

@@ -233,6 +233,7 @@ export const generationJobs = pgTable("generation_jobs", {
 export const raiSessions = pgTable("rai_sessions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").references(() => users.id, { onDelete: "cascade" }),
+  clientSessionId: varchar("client_session_id"), // Client-provided session UUID for correlation
   artworkId: varchar("artwork_id").references(() => artSessions.id, { onDelete: "set null" }),
   genomeId: varchar("genome_id"), // Reference to dna_genomes.id (nullable for initial sessions)
   audioContext: text("audio_context"), // JSON: {bpm, energy, mood, musicTrack}
@@ -245,6 +246,7 @@ export const raiSessions = pgTable("rai_sessions", {
   artworkIdIdx: index("rai_sessions_artwork_id_idx").on(table.artworkId),
   genomeIdIdx: index("rai_sessions_genome_id_idx").on(table.genomeId),
   startedAtIdx: index("rai_sessions_started_at_idx").on(table.startedAt),
+  userClientSessionIdx: index("rai_sessions_user_client_session_idx").on(table.userId, table.clientSessionId),
 }));
 
 // Telemetry Events - Append-only log of all user/system events
