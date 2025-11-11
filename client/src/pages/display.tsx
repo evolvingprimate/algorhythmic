@@ -592,6 +592,12 @@ export default function Display() {
             continue;
           }
           
+          // CRITICAL FIX: Validate artwork has imageUrl before using it
+          if (!artwork.imageUrl) {
+            console.error(`[Display] ❌ CRITICAL: Artwork ${artwork.id} has no imageUrl!`);
+            continue; // Skip this invalid artwork
+          }
+          
           console.log(`[Display] Attempt ${attemptCount}/${MAX_VALIDATION_ATTEMPTS}: Validating ${artwork.imageUrl.substring(0, 60)}...`);
           
           // CRITICAL: Validate image URL from object storage (loads + not blank)
@@ -776,6 +782,12 @@ export default function Display() {
       if (morphEngineRef.current.hasFrameById(artwork.id)) {
         console.log(`[FlickerFix] Skipping duplicate frame (already in engine): ${artwork.id}`);
         return;
+      }
+      
+      // CRITICAL FIX: Validate artwork has imageUrl before using it
+      if (!artwork.imageUrl) {
+        console.error(`[Display] ❌ CRITICAL: Fresh artwork ${artwork.id} has no imageUrl!`);
+        return; // Skip this invalid artwork
       }
       
       let dnaVector = parseDNAFromSession(artwork);

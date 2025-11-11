@@ -1019,19 +1019,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
             
             if (validStorage.length === 0) {
               console.error(`[EmergencyFallback] ❌ CRITICAL: No valid artworks with imageUrl found!`);
-              // Generate procedural fallback artwork
-              combinedArtworks = [{
-                id: `procedural-emergency-${Date.now()}`,
-                sessionId: sessionId || 'emergency',
-                userId,
-                imageUrl: '/assets/fallback-art.jpg', // Use a default fallback image
-                prompt: 'Emergency procedural fallback',
-                dnaVector: JSON.stringify(Array(50).fill(0).map(() => Math.random() * 3)),
-                createdAt: new Date(),
-                styles: [],
-                artists: [],
-                orientation: orientation || 'landscape'
-              }];
+              // Try to get ANY artwork from the database, even duplicates
+              const anyArtwork = await storage.getArtSessions({ limit: 2 });
+              if (anyArtwork.length > 0) {
+                combinedArtworks = anyArtwork;
+                console.warn(`[EmergencyFallback] Using ANY ${combinedArtworks.length} artworks as last resort`);
+              } else {
+                // Absolute last resort - return empty and trigger generation
+                combinedArtworks = [];
+                console.error(`[EmergencyFallback] ❌ DATABASE EMPTY - no artworks available at all!`);
+              }
             } else {
               // FIX: Don't apply recently-served filter if it would leave <2 frames
               const unfiltered = validStorage;
