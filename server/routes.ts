@@ -6,7 +6,8 @@ import Stripe from "stripe";
 import { storage } from "./storage";
 import { generateArtPrompt, generateArtImage } from "./openai-service";
 import { identifyMusic } from "./music-service";
-import { insertArtVoteSchema, insertArtPreferenceSchema, type AudioAnalysis, type MusicIdentification } from "@shared/schema";
+import { insertArtVoteSchema, insertArtPreferenceSchema, type AudioAnalysis, type MusicIdentification, telemetryEvents } from "@shared/schema";
+import { and, sql } from "drizzle-orm";
 import { setupAuth, isAuthenticated } from "./replitAuth";
 import { ObjectStorageService } from "./objectStorage";
 import { generateWithFallback, resolveAutoMode, buildContextualPrompt } from "./generation/fallbackOrchestrator";
@@ -378,6 +379,130 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error("Error inserting telemetry events:", error);
       res.status(500).json({ message: error.message });
+    }
+  });
+
+  // GET /api/telemetry/catalogue-bridge/stats - Aggregated catalogue bridge performance metrics
+  app.get("/api/telemetry/catalogue-bridge/stats", async (req, res) => {
+    try {
+      const hoursBack = parseInt(req.query.hours as string) || 24;
+      const since = new Date(Date.now() - hoursBack * 60 * 60 * 1000);
+      
+      // Query catalogue bridge telemetry events
+      const allEvents = await storage.getTelemetryEventsSince(since);
+      const events = allEvents.filter(e => e.eventType.startsWith('catalogue_bridge'));
+      
+      // Parse and aggregate data
+      const tierCounts = { exact: 0, related: 0, global: 0, procedural: 0 };
+      const latencies: number[] = [];
+      const tierLatencies: Record<string, number[]> = {
+        exact: [],
+        related: [],
+        global: [],
+        procedural: []
+      };
+      
+      for (const event of events) {
+        try {
+          const data = JSON.parse(event.eventData);
+          
+          // Extract tier from different event types
+          let tier: string | null = null;
+          let latencyMs: number | null = null;
+          
+          if (event.eventType === 'catalogue_bridge.handoff_latency_ms') {
+            tier = data.tier;
+            latencyMs = data.latencyMs;
+          } else if (event.eventType === 'catalogue_bridge.fallback_tier_1') {
+            tier = 'exact';
+            latencyMs = data.latencyMs;
+          } else if (event.eventType === 'catalogue_bridge.fallback_tier_2') {
+            tier = 'related';
+            latencyMs = data.latencyMs;
+          } else if (event.eventType === 'catalogue_bridge.fallback_tier_3') {
+            tier = 'global';
+            latencyMs = data.latencyMs;
+          } else if (event.eventType === 'catalogue_bridge.fallback_tier_4') {
+            tier = 'procedural';
+            latencyMs = data.latencyMs;
+          }
+          
+          if (tier && latencyMs !== null) {
+            // Normalize tier name
+            const normalizedTier = tier.toLowerCase() === 'exact' || tier === '1' ? 'exact'
+              : tier.toLowerCase() === 'related' || tier === '2' ? 'related'
+              : tier.toLowerCase() === 'global' || tier === '3' ? 'global'
+              : 'procedural';
+            
+            tierCounts[normalizedTier]++;
+            latencies.push(latencyMs);
+            tierLatencies[normalizedTier].push(latencyMs);
+          }
+        } catch (e) {
+          // Skip malformed events
+          continue;
+        }
+      }
+      
+      // Calculate percentiles
+      const calculatePercentile = (arr: number[], p: number) => {
+        if (arr.length === 0) return 0;
+        const sorted = [...arr].sort((a, b) => a - b);
+        const index = Math.ceil((sorted.length * p) / 100) - 1;
+        return sorted[Math.max(0, index)];
+      };
+      
+      const totalRequests = latencies.length;
+      const tierDistribution = {
+        exact: totalRequests > 0 ? (tierCounts.exact / totalRequests) * 100 : 0,
+        related: totalRequests > 0 ? (tierCounts.related / totalRequests) * 100 : 0,
+        global: totalRequests > 0 ? (tierCounts.global / totalRequests) * 100 : 0,
+        procedural: totalRequests > 0 ? (tierCounts.procedural / totalRequests) * 100 : 0,
+      };
+      
+      const latencyStats = {
+        avg: latencies.length > 0 ? latencies.reduce((a, b) => a + b, 0) / latencies.length : 0,
+        p50: calculatePercentile(latencies, 50),
+        p95: calculatePercentile(latencies, 95),
+        p99: calculatePercentile(latencies, 99),
+        min: latencies.length > 0 ? Math.min(...latencies) : 0,
+        max: latencies.length > 0 ? Math.max(...latencies) : 0,
+      };
+      
+      // Per-tier latency stats
+      const tierStats = Object.entries(tierLatencies).map(([tier, lats]) => ({
+        tier,
+        count: lats.length,
+        avgLatency: lats.length > 0 ? lats.reduce((a, b) => a + b, 0) / lats.length : 0,
+        p50: calculatePercentile(lats, 50),
+        p95: calculatePercentile(lats, 95),
+      }));
+      
+      // Alert: Tier-3/4 usage >20%
+      const tier34Percentage = tierDistribution.global + tierDistribution.procedural;
+      const alert = tier34Percentage > 20 ? {
+        level: 'warning',
+        message: `Tier-3/4 usage at ${tier34Percentage.toFixed(1)}% (threshold: 20%)`,
+        recommendation: 'Consider expanding library coverage for frequently requested styles'
+      } : null;
+      
+      res.json({
+        period: {
+          since: since.toISOString(),
+          hoursBack
+        },
+        summary: {
+          totalRequests,
+          tierDistribution,
+          latencyStats
+        },
+        tierStats,
+        alert,
+        timestamp: new Date().toISOString()
+      });
+    } catch (error: any) {
+      console.error('[Telemetry API] Error:', error);
+      res.status(500).json({ message: "Failed to fetch telemetry stats: " + error.message });
     }
   });
 
