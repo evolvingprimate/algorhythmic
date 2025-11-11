@@ -268,6 +268,207 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Test generation endpoint (bypasses auth for circuit breaker testing)
+  app.post('/api/test/generate', async (req: any, res) => {
+    try {
+      // Check if testing is allowed - ONLY non-production
+      if (process.env.NODE_ENV === 'production') {
+        return res.status(403).json({ 
+          message: "Test endpoint disabled in production",
+          status: 'error' 
+        });
+      }
+
+      console.log('[Test Generate] Starting test generation request');
+      
+      const { sessionId, audioAnalysis, preferences } = req.body;
+      
+      // Use test session ID if not provided
+      const testSessionId = sessionId || `test-session-${Date.now()}`;
+      const testUserId = `test-user-${Date.now()}`;
+      
+      // Get queue metrics for the Queue Controller
+      const queueMetrics = await storage.getQueueMetrics(testSessionId);
+      
+      // Prepare metrics for the Queue Controller
+      const metrics = {
+        queueSize: queueMetrics.freshCount,
+        targetSize: queueController.TARGET_FRAMES,
+        minSize: queueController.MIN_FRAMES,
+        maxSize: queueController.MAX_FRAMES,
+        generationRate: queueMetrics.generationRate,
+        consumptionRate: queueMetrics.consumptionRate
+      };
+      
+      // Process tick and get current state
+      const state = queueController.tick(metrics);
+      
+      // Get detailed generation decision
+      const decision = queueController.getGenerationDecision();
+      const batchSize = queueController.getRecommendedBatchSize();
+      
+      console.log('[Test Generate] Queue Controller Decision:', {
+        shouldGenerate: decision.shouldGenerate,
+        reason: decision.reason,
+        batchSize,
+        state
+      });
+      
+      // Check if generation is denied by circuit breaker - TRIGGER FALLBACK
+      if (!decision.shouldGenerate && (decision.reason === 'breaker_open' || decision.reason === 'breaker_half_open')) {
+        console.log('[Test Generate] Circuit breaker triggered fallback:', decision.reason);
+        
+        try {
+          // Import fallback service for emergency frame retrieval
+          const { resolveEmergencyFallback } = await import('./fallback-service');
+          
+          // Trigger 3-tier fallback cascade
+          const fallbackResult = await resolveEmergencyFallback(
+            storage,
+            testSessionId,
+            testUserId,
+            {
+              styleTags: preferences?.styles || ['Abstract'],
+              artistTags: preferences?.artists || [],
+              minFrames: 1, // Only need 1 frame for test
+              useCache: true
+            }
+          );
+          
+          console.log(`[Test Generate] Fallback SUCCESS - tier: ${fallbackResult.tier}`);
+          
+          // Return simplified response for test
+          return res.json({
+            status: 'success',
+            source: 'catalog', 
+            fallbackTier: fallbackResult.tier,
+            breakerState: decision.reason,
+            frames: fallbackResult.artworks.length,
+            message: `Circuit breaker ${decision.reason} - using ${fallbackResult.tier} fallback`
+          });
+        } catch (fallbackError: any) {
+          console.error('[Test Generate] Fallback failed, using procedural:', fallbackError);
+          
+          // Use procedural fallback as last resort
+          const { generateProceduralBridge } = await import('./procedural-bridge');
+          const proceduralData = generateProceduralBridge(preferences?.styles || ['abstract']);
+          
+          return res.json({
+            status: 'success',
+            source: 'procedural',
+            fallbackTier: 'procedural',
+            breakerState: decision.reason,
+            procedural: proceduralData,
+            message: `Circuit breaker ${decision.reason} - using procedural fallback`
+          });
+        }
+      }
+      
+      // Check if we should generate (queue full case)  
+      if (!decision.shouldGenerate) {
+        return res.json({
+          status: 'queue_full',
+          source: 'none',
+          breakerState: decision.reason,
+          message: 'Queue is full, waiting for frames to be consumed'
+        });
+      }
+      
+      // Try fresh generation
+      console.log('[Test Generate] Attempting fresh generation');
+      
+      try {
+        // Generate art prompt using the proper flow
+        const promptResult = await generateArtPrompt({
+          audioAnalysis: audioAnalysis || createDefaultAudioAnalysis(),
+          musicInfo: null,
+          styles: preferences?.styles || ['Abstract'],
+          artists: preferences?.artists || [],
+          dynamicMode: preferences?.dynamicMode || false,
+          previousVotes: []
+        });
+        
+        // Generate image using DALL-E
+        const imageUrl = await generateArtImage(promptResult.prompt);
+        
+        if (imageUrl) {
+          console.log('[Test Generate] Fresh generation SUCCESS');
+          
+          // Store the generated artwork
+          const artSession = await storage.createArtSession({
+            sessionId: testSessionId,
+            userId: testUserId,
+            imageUrl,
+            prompt: promptResult.prompt,
+            dnaVector: promptResult.dnaVector ? JSON.stringify(promptResult.dnaVector) : null,
+            audioFeatures: audioAnalysis ? JSON.stringify(audioAnalysis) : null,
+            generationExplanation: promptResult.explanation || null,
+            styles: preferences?.styles || ['Abstract'],
+            artists: preferences?.artists || []
+          });
+          
+          return res.json({
+            status: 'success',
+            source: 'fresh',
+            breakerState: 'closed',
+            imageUrl,
+            prompt: promptResult.prompt,
+            message: 'Fresh generation successful'
+          });
+        } else {
+          throw new Error('No image URL returned from generation');
+        }
+      } catch (genError: any) {
+        console.error('[Test Generate] Fresh generation failed:', genError);
+        
+        // Try catalog fallback on generation failure
+        try {
+          const { resolveEmergencyFallback } = await import('./fallback-service');
+          const fallbackResult = await resolveEmergencyFallback(
+            storage,
+            testSessionId,
+            testUserId,
+            {
+              styleTags: preferences?.styles || ['Abstract'],
+              artistTags: preferences?.artists || [],
+              minFrames: 1,
+              useCache: true
+            }
+          );
+          
+          return res.json({
+            status: 'success',
+            source: 'catalog',
+            fallbackTier: fallbackResult.tier,
+            breakerState: 'generation_failed',
+            frames: fallbackResult.artworks.length,
+            message: `Generation failed - using ${fallbackResult.tier} fallback`
+          });
+        } catch (fallbackError) {
+          // Last resort - procedural
+          const { generateProceduralBridge } = await import('./procedural-bridge');
+          const proceduralData = generateProceduralBridge(preferences?.styles || ['abstract']);
+          
+          return res.json({
+            status: 'success',
+            source: 'procedural',
+            fallbackTier: 'procedural',
+            breakerState: 'all_failed',
+            procedural: proceduralData,
+            message: 'All generation methods failed - using procedural fallback'
+          });
+        }
+      }
+    } catch (error: any) {
+      console.error('[Test Generate] Unexpected error:', error);
+      res.status(500).json({ 
+        status: 'error',
+        message: error.message || 'Test generation failed',
+        error: error.message 
+      });
+    }
+  });
+
   // ============================================================================
   // Resilience Monitoring Endpoint
   // ============================================================================

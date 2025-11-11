@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -8,7 +8,6 @@ import { Separator } from "@/components/ui/separator";
 import { RefreshCw, ZapOff, Zap, Activity, AlertCircle, CheckCircle } from "lucide-react";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { useAuth } from "@/hooks/useAuth";
 
 // Type definitions for API responses
 interface BreakerStatus {
@@ -49,26 +48,31 @@ interface ResilienceData {
 
 interface GenerationResponse {
   status: string;
+  source?: 'fresh' | 'catalog' | 'procedural' | 'none';
   fallbackTier?: string;
+  breakerState?: string;
+  message?: string;
+  imageUrl?: string;
+  prompt?: string;
+  frames?: number;
+  procedural?: any;
 }
 
 export default function BreakerTest() {
   const { toast } = useToast();
-  const { user, isLoading: authLoading } = useAuth();
   const [autoRefresh, setAutoRefresh] = useState(true);
 
   // Fetch circuit breaker status
   const { data: breakerStatus, refetch: refetchStatus } = useQuery<BreakerStatus>({
     queryKey: ["/api/test/breaker-status"],
-    enabled: !!user,
     refetchInterval: autoRefresh ? 2000 : false,
   });
 
-  // Fetch resilience monitoring data
+  // Fetch resilience monitoring data (optional - may fail if authentication required)
   const { data: resilienceData, refetch: refetchResilience } = useQuery<ResilienceData>({
     queryKey: ["/api/monitoring/resilience"],
-    enabled: !!user,
     refetchInterval: autoRefresh ? 5000 : false,
+    retry: false, // Don't retry if it fails due to authentication
   });
 
   // Force breaker open mutation
@@ -123,7 +127,7 @@ export default function BreakerTest() {
   const testGeneration = useMutation<GenerationResponse>({
     mutationFn: async () => {
       const sessionId = `test-session-${Date.now()}`;
-      const res = await apiRequest('POST', '/api/artwork/generate', {
+      const res = await apiRequest('POST', '/api/test/generate', {
         sessionId,
         audioAnalysis: {
           energy: 0.7,
@@ -140,13 +144,37 @@ export default function BreakerTest() {
       return res.json();
     },
     onSuccess: (data) => {
-      const source = data.status === 'fallback' ? 'Fallback' : 'Fresh Generation';
-      const tier = data.fallbackTier || 'N/A';
+      // Determine display based on source
+      let title = '';
+      let description = '';
+      let borderClass = '';
+      
+      if (data.source === 'fresh') {
+        title = 'Fresh Generation Success';
+        description = 'Successfully generated new artwork from DALL-E';
+        borderClass = 'border-green-500';
+      } else if (data.source === 'catalog') {
+        title = 'Catalog Fallback Triggered';
+        description = `Circuit breaker ${data.breakerState || 'open'} - using ${data.fallbackTier} tier`;
+        borderClass = 'border-yellow-500';
+      } else if (data.source === 'procedural') {
+        title = 'Procedural Fallback Triggered';
+        description = `Circuit breaker ${data.breakerState || 'open'} - using procedural generation`;
+        borderClass = 'border-orange-500';
+      } else if (data.status === 'queue_full') {
+        title = 'Queue Full';
+        description = data.message || 'Generation queue is full';
+        borderClass = 'border-blue-500';
+      } else {
+        title = 'Generation Result';
+        description = data.message || 'Generation completed';
+        borderClass = 'border-secondary';
+      }
       
       toast({
-        title: `Test Generation: ${source}`,
-        description: tier !== 'N/A' ? `Fallback tier: ${tier}` : "Successfully generated new artwork",
-        className: data.status === 'fallback' ? "border-yellow-500" : "border-green-500",
+        title,
+        description,
+        className: borderClass,
       });
       refetchResilience();
     },
@@ -184,35 +212,6 @@ export default function BreakerTest() {
         return null;
     }
   };
-
-  if (authLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="text-center">
-          <RefreshCw className="h-8 w-8 animate-spin mx-auto mb-4" />
-          <p>Loading...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (!user) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <Card>
-          <CardHeader>
-            <CardTitle>Authentication Required</CardTitle>
-            <CardDescription>Please log in to access the circuit breaker test interface.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button onClick={() => window.location.href = '/api/auth/login'}>
-              Log In
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
 
   return (
     <div className="container mx-auto p-8 space-y-8">
@@ -371,7 +370,11 @@ export default function BreakerTest() {
         <CardHeader>
           <CardTitle>Test Generation</CardTitle>
           <CardDescription>
-            Trigger a test generation to see if it uses fresh generation or falls back to catalog
+            Trigger a test generation to see if it uses fresh generation or falls back to catalog.
+            <br />
+            <span className="text-xs text-muted-foreground mt-1">
+              Using test endpoint (/api/test/generate) - No authentication required
+            </span>
           </CardDescription>
         </CardHeader>
         <CardContent>
