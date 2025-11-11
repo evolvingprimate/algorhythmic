@@ -30,12 +30,13 @@ export class RecoveryManager {
   private probeCostHistory: { timestamp: number; cost: number }[] = [];
   
   // Lightweight probe prompts (minimal, fast to generate)
+  // Phase 4D: Simplified probe prompts for minimal cost and complexity
   private readonly PROBE_PROMPTS = [
-    '[probe] simple geometric shapes on plain background',
-    '[probe] minimal abstract color gradient',
-    '[probe] basic circle and square composition',
-    '[probe] single color wash with subtle texture',
-    '[probe] elementary line pattern'
+    'abstract geometric shape, no text, minimal detail',
+    'simple abstract geometric pattern, no text, minimal detail',
+    'basic geometric composition, no text, minimal detail',
+    'minimal abstract shapes, no text, simple colors',
+    'elementary geometric forms, no text, minimal complexity'
   ];
 
   constructor(

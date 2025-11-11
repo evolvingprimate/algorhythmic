@@ -2,6 +2,8 @@ import OpenAI from "openai";
 import { nanoid } from "nanoid";
 import type { GenerationHealthPort } from "./types/generation-ports";
 import type { AudioAnalysis, MusicIdentification } from "@shared/schema";
+import { telemetryService } from './telemetry-service';
+import * as crypto from 'crypto';
 
 // the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -623,6 +625,21 @@ export class OpenAIService {
     const timeout = this.generationHealth.getTimeout();
     console.log(`[GenerationHealth] Attempting DALL-E generation with ${timeout}ms timeout (job: ${jobId})`);
     
+    // TELEMETRY: Record generation request
+    const promptHash = crypto.createHash('sha256').update(prompt).digest('hex').substring(0, 8);
+    telemetryService.recordEvent({
+      event: 'gen.request',
+      category: 'generation',
+      severity: 'info',
+      metrics: {
+        prompt_hash: promptHash,
+        session_id: jobId,
+        is_probe: isProbe,
+        retry_count: retryCount,
+        timeout_ms: timeout
+      }
+    });
+    
     // Add "no text" directive unless explicitly skipped (for probes)
     const enhancedPrompt = options?.skipTextDirective 
       ? prompt
@@ -679,6 +696,21 @@ export class OpenAIService {
       
       console.log(`[GenerationHealth] DALL-E generation successful in ${latency}ms`);
       
+      // TELEMETRY: Record generation success
+      const imageUrl = response.data?.[0]?.url || "";
+      telemetryService.recordEvent({
+        event: 'gen.success',
+        category: 'generation',
+        severity: 'info',
+        metrics: {
+          latency_ms: latency,
+          image_url: imageUrl,
+          session_id: jobId,
+          is_probe: isProbe,
+          prompt_hash: promptHash
+        }
+      });
+      
       // Check if result is still valid (not expired)
       if (!this.generationHealth.isJobValid(jobId)) {
         console.warn(`[GenerationHealth] Job ${jobId} completed but expired, dropping result`);
@@ -705,6 +737,21 @@ export class OpenAIService {
           console.log(`[GenerationHealth] ✅ Request was properly cancelled via AbortController`);
         }
         this.generationHealth.recordFailure('timeout', jobId);
+        
+        // TELEMETRY: Record generation failure (timeout)
+        telemetryService.recordEvent({
+          event: 'gen.fail',
+          category: 'generation',
+          severity: 'error',
+          metrics: {
+            error_type: 'timeout',
+            retry_count: retryCount,
+            session_id: jobId,
+            is_probe: isProbe,
+            latency_ms: latency,
+            prompt_hash: promptHash
+          }
+        });
         
         // Retry with exponential backoff if we haven't exceeded retry limit
         if (retryCount < maxRetries) {
@@ -735,6 +782,22 @@ export class OpenAIService {
         failureKind = '4xx';
       }
       this.generationHealth.recordFailure(failureKind, jobId);
+      
+      // TELEMETRY: Record generation failure (general error)
+      telemetryService.recordEvent({
+        event: 'gen.fail',
+        category: 'generation',
+        severity: 'error',
+        metrics: {
+          error_type: failureKind,
+          retry_count: retryCount,
+          session_id: jobId,
+          is_probe: isProbe,
+          http_status: error.status || null,
+          error_message: error.message || 'Unknown error',
+          prompt_hash: promptHash
+        }
+      });
       
       // Check for transient errors that should be retried
       const isTransient = 

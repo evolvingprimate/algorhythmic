@@ -80,17 +80,22 @@ export class GenerationHealthService implements GenerationHealthPort {
   private openUntil = 0;
   
   // Configuration (based on observed data + reviewer feedback)
-  private readonly REFILL_MS = 180000; // 1 token drained every 3 minutes
-  private readonly OPEN_TOKENS = 3; // Open breaker after 3 tokens
+  // Phase 4 Tuning: Based on Grok/ChatGPT recommendations
+  private readonly REFILL_MS = 60000; // 1 token drained every 60 seconds (faster recovery from sporadic issues)
+  private readonly OPEN_TOKENS = 5; // Open breaker after 5 tokens (more resilient to sporadic failures)
   private readonly OPEN_DURATION_MS = 300000; // Stay open for 5 minutes
   private readonly MIN_TIMEOUT_MS = 45000; // Minimum timeout (45s)
   private readonly MAX_TIMEOUT_MS = 90000; // Maximum timeout (90s)
-  private readonly TIMEOUT_MULTIPLIER = 1.25; // P95 * 1.25 for adaptive timeout
+  private readonly TIMEOUT_BUFFER_MS = 10000; // P95 + 10s for adaptive timeout (more predictable than multiplier)
   
   // Half-open recovery configuration
-  private readonly HALF_OPEN_SAMPLE_RATE = 0.05; // Allow 5% traffic through
+  // Phase 4C: Enhanced recovery parameters
+  private readonly HALF_OPEN_SAMPLE_RATE = 0.1; // Allow 10% traffic through (increased for better recovery testing)
   private readonly PROBE_INTERVAL_MS = 120000; // Base probe interval (2 minutes)
   private readonly PROBE_JITTER = 0.2; // ±20% jitter
+  private readonly SLIDING_WINDOW_SIZE = 25; // Track last 25 requests
+  private readonly FAILURE_THRESHOLD = 0.5; // Open breaker at 50% failure rate
+  private readonly RECOVERY_SUCCESS_COUNT = 3; // Require 3 consecutive successes to fully recover
   
   // Metrics tracking
   private stats: RollingStats;
@@ -99,6 +104,10 @@ export class GenerationHealthService implements GenerationHealthPort {
   private totalTimeouts = 0;
   private totalSuccesses = 0;
   private totalAttempts = 0;
+  
+  // Phase 4C: Sliding window for failure tracking
+  private slidingWindow: boolean[] = []; // true = success, false = failure
+  private consecutiveRecoverySuccesses = 0; // Track consecutive successes in half-open state
   
   // Active job tracking
   private activeJobs = new Map<string, GenerationJob>();
@@ -109,6 +118,49 @@ export class GenerationHealthService implements GenerationHealthPort {
   
   constructor() {
     this.stats = new RollingStats(3600000); // 1 hour window for P95 calculation
+  }
+
+  /**
+   * Phase 4C: Add result to sliding window and check if breaker should open
+   */
+  private updateSlidingWindow(success: boolean): void {
+    this.slidingWindow.push(success);
+    
+    // Keep window at configured size
+    while (this.slidingWindow.length > this.SLIDING_WINDOW_SIZE) {
+      this.slidingWindow.shift();
+    }
+    
+    // Check failure rate if we have enough samples
+    if (this.slidingWindow.length >= 10) { // Need minimum samples
+      const failures = this.slidingWindow.filter(result => !result).length;
+      const failureRate = failures / this.slidingWindow.length;
+      
+      // Open breaker if failure rate exceeds threshold
+      if (failureRate >= this.FAILURE_THRESHOLD && this.isHealthy()) {
+        telemetryService.recordEvent({
+          event: 'sliding_window_threshold_exceeded',
+          category: 'system',
+          severity: 'warning',
+          metrics: {
+            failure_rate: failureRate,
+            threshold: this.FAILURE_THRESHOLD,
+            window_size: this.slidingWindow.length
+          }
+        });
+        
+        // Add tokens to trigger breaker opening
+        this.tokens = this.OPEN_TOKENS;
+        this.openBreaker();
+      }
+    }
+  }
+
+  /**
+   * Phase 4C: Check if recovery is complete (3 consecutive successes)
+   */
+  private checkRecoveryComplete(): boolean {
+    return this.consecutiveRecoverySuccesses >= this.RECOVERY_SUCCESS_COUNT;
   }
 
   /**
@@ -140,12 +192,14 @@ export class GenerationHealthService implements GenerationHealthPort {
 
   /**
    * Calculate adaptive timeout based on recent P95 latency
+   * Phase 4B: Changed from P95 * 1.25 to P95 + 10s for more predictable behavior
    */
   getTimeout(): number {
     const p95 = this.stats.getPercentile(95);
-    const adaptiveTimeout = Math.round(p95 * this.TIMEOUT_MULTIPLIER);
+    // P95 + 10 seconds buffer (more predictable than multiplier)
+    const adaptiveTimeout = Math.round(p95 + this.TIMEOUT_BUFFER_MS);
     
-    // Clamp between min and max
+    // Clamp between min and max (45s - 90s)
     const timeout = Math.max(
       this.MIN_TIMEOUT_MS, 
       Math.min(this.MAX_TIMEOUT_MS, adaptiveTimeout)
@@ -242,23 +296,53 @@ export class GenerationHealthService implements GenerationHealthPort {
     this.consecutiveFailures = 0;
     this.stats.addSample(latencyMs);
     
+    // Phase 4C: Update sliding window
+    this.updateSlidingWindow(true);
+    
     // Remove token on success (helps close breaker faster)
     this.tokens = Math.max(0, this.tokens - 1);
     
     // Remove from active jobs
     this.activeJobs.delete(jobId);
     
-    // If we were in recovery, increase batch size
-    if (this.getBreakerState() === 'half-open') {
-      this.recoveryBatchSize = Math.min(this.recoveryBatchSize * 2, 5);
-      telemetryService.recordEvent({
-        event: 'recovery_batch_increased',
-        category: 'system',
-        severity: 'info',
-        metrics: {
-          new_batch_size: this.recoveryBatchSize
-        }
-      });
+    // Phase 4C: Track consecutive recovery successes
+    const currentState = this.getBreakerState();
+    if (currentState === 'half-open') {
+      this.consecutiveRecoverySuccesses++;
+      
+      // Check if we've recovered (3 consecutive successes)
+      if (this.checkRecoveryComplete()) {
+        // Close the breaker completely
+        this.openUntil = 0;
+        this.tokens = 0;
+        this.consecutiveRecoverySuccesses = 0;
+        this.recoveryBatchSize = 5; // Full capacity
+        
+        telemetryService.recordEvent({
+          event: 'circuit_breaker_recovered',
+          category: 'system',
+          severity: 'info',
+          metrics: {
+            consecutive_successes: this.RECOVERY_SUCCESS_COUNT,
+            recovery_batch_size: this.recoveryBatchSize
+          }
+        });
+      } else {
+        // Still recovering, gradually increase batch size
+        this.recoveryBatchSize = Math.min(this.recoveryBatchSize * 2, 5);
+        telemetryService.recordEvent({
+          event: 'recovery_progress',
+          category: 'system',
+          severity: 'info',
+          metrics: {
+            consecutive_successes: this.consecutiveRecoverySuccesses,
+            new_batch_size: this.recoveryBatchSize
+          }
+        });
+      }
+    } else if (currentState === 'closed') {
+      // Reset recovery counter when fully closed
+      this.consecutiveRecoverySuccesses = 0;
     }
     
     telemetryService.recordEvent({
@@ -268,7 +352,7 @@ export class GenerationHealthService implements GenerationHealthPort {
       metrics: {
         latency_ms: latencyMs,
         job_id: jobId,
-        breaker_state: this.getBreakerState()
+        breaker_state: currentState
       }
     });
   }
@@ -284,6 +368,25 @@ export class GenerationHealthService implements GenerationHealthPort {
     this.totalAttempts++;
     this.consecutiveFailures++;
     this.lastFailureTime = Date.now();
+    
+    // Phase 4C: Update sliding window
+    this.updateSlidingWindow(false);
+    
+    // Phase 4C: Reset consecutive recovery successes on failure
+    if (this.getBreakerState() === 'half-open') {
+      this.consecutiveRecoverySuccesses = 0;
+      this.recoveryBatchSize = 1; // Reset batch size on failure during recovery
+      
+      telemetryService.recordEvent({
+        event: 'recovery_reset',
+        category: 'system',
+        severity: 'warning',
+        metrics: {
+          reason: 'failure_during_recovery',
+          failure_type: reason
+        }
+      });
+    }
     
     // Add failure token
     this.tokens++;
@@ -466,6 +569,25 @@ export class GenerationHealthService implements GenerationHealthPort {
     this.totalAttempts++;
     this.consecutiveFailures++;
     this.lastFailureTime = Date.now();
+    
+    // Phase 4C: Update sliding window
+    this.updateSlidingWindow(false);
+    
+    // Phase 4C: Reset consecutive recovery successes on failure
+    if (this.getBreakerState() === 'half-open') {
+      this.consecutiveRecoverySuccesses = 0;
+      this.recoveryBatchSize = 1; // Reset batch size on failure during recovery
+      
+      telemetryService.recordEvent({
+        event: 'recovery_reset',
+        category: 'system',
+        severity: 'warning',
+        metrics: {
+          reason: 'failure_during_recovery',
+          failure_type: kind
+        }
+      });
+    }
     
     // Add failure token
     this.tokens++;

@@ -535,10 +535,15 @@ export default function Display() {
     // Check for missing imageUrl
     if (!artwork.imageUrl) {
       console.error(`[FrameFilter] Artwork ${artwork.id} has no imageUrl - filtering out`);
-      telemetryService.trackEvent('frame_filtered', {
-        reason: 'missing_imageUrl',
-        artworkId: artwork.id,
-        prompt: artwork.prompt?.substring(0, 50),
+      telemetryService.recordEvent({
+        event: 'frame_filtered',
+        category: 'display',
+        severity: 'warning',
+        metrics: {
+          reason: 'missing_imageUrl',
+          artworkId: artwork.id,
+          prompt: artwork.prompt?.substring(0, 50),
+        }
       });
       return false;
     }
@@ -546,9 +551,14 @@ export default function Display() {
     // Check for empty string imageUrl
     if (typeof artwork.imageUrl === 'string' && artwork.imageUrl.trim() === '') {
       console.error(`[FrameFilter] Artwork ${artwork.id} has empty imageUrl - filtering out`);
-      telemetryService.trackEvent('frame_filtered', {
-        reason: 'empty_imageUrl',
-        artworkId: artwork.id,
+      telemetryService.recordEvent({
+        event: 'frame_filtered',
+        category: 'display',
+        severity: 'warning',
+        metrics: {
+          reason: 'empty_imageUrl',
+          artworkId: artwork.id,
+        }
       });
       return false;
     }
@@ -557,10 +567,15 @@ export default function Display() {
     const urlPattern = /^(\/public-objects\/|https?:\/\/|\/)/;
     if (!urlPattern.test(artwork.imageUrl)) {
       console.error(`[FrameFilter] Artwork ${artwork.id} has invalid imageUrl format: ${artwork.imageUrl} - filtering out`);
-      telemetryService.trackEvent('frame_filtered', {
-        reason: 'invalid_url_format',
-        artworkId: artwork.id,
-        imageUrl: artwork.imageUrl,
+      telemetryService.recordEvent({
+        event: 'frame_filtered',
+        category: 'display',
+        severity: 'warning',
+        metrics: {
+          reason: 'invalid_url_format',
+          artworkId: artwork.id,
+          imageUrl: artwork.imageUrl,
+        }
       });
       return false;
     }
@@ -568,9 +583,14 @@ export default function Display() {
     // Check for placeholder URLs that shouldn't be displayed
     if (artwork.imageUrl.includes('placeholder') && !artwork.imageUrl.includes('PLACEHOLDER_IMAGE_URL')) {
       console.warn(`[FrameFilter] Artwork ${artwork.id} has placeholder URL - filtering out`);
-      telemetryService.trackEvent('frame_filtered', {
-        reason: 'placeholder_url',
-        artworkId: artwork.id,
+      telemetryService.recordEvent({
+        event: 'frame_filtered',
+        category: 'display',
+        severity: 'info',
+        metrics: {
+          reason: 'placeholder_url',
+          artworkId: artwork.id,
+        }
       });
       return false;
     }
@@ -1012,9 +1032,14 @@ export default function Display() {
         // Phase 3D: Validate generated frame before adding
         if (!isValidArtworkFrame(data.session)) {
           console.error(`[GenerateMutation] Generated artwork ${data.session.id} failed validation - not adding to morphEngine`);
-          telemetryService.trackEvent('generated_frame_invalid', {
-            artworkId: data.session.id,
-            imageUrl: data.imageUrl,
+          telemetryService.recordEvent({
+            event: 'generated_frame_invalid',
+            category: 'display',
+            severity: 'error',
+            metrics: {
+              artworkId: data.session.id,
+              imageUrl: data.imageUrl,
+            }
           });
           return; // Don't add invalid frame
         }
@@ -1693,18 +1718,27 @@ export default function Display() {
         // Display placeholder immediately using the imported URL
         if (rendererRef.current && PLACEHOLDER_IMAGE_URL) {
           // Create a minimal morph state for static display
-          const placeholderMorphState = {
+          const placeholderMorphState: MorphState = {
             phase: 'hold' as const,
+            currentFrameIndex: 0,
+            nextFrameIndex: 0,
             phaseProgress: 0,
+            totalProgress: 0,
+            currentDNA: Array(50).fill(0.5),
+            nextDNA: Array(50).fill(0.5),
+            viewProgressA: 0,
+            viewProgressB: 0,
+            zoomDirectionA: 'out',
+            zoomDirectionB: 'in',
             morphProgress: 0,
-            frameForeshadowMix: 0,
             audioIntensity: 0,
-            dna: Array(50).fill(0.5),
-            prompt: 'Loading artwork...',
-            explanation: '',
-            artworkId: 'placeholder',
-            musicInfo: null,
-            audioAnalysis: null,
+            frameForeshadowMix: 0,
+            beatBurst: 0,
+            opacityA: 1,
+            opacityB: 0,
+            zoomBias: 0,
+            parallaxStrength: 0,
+            burnIntensity: 0,
           };
           
           // Use static renderer mode for placeholder (same image for both frames)
