@@ -4,7 +4,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { raw } from "express";
 import Stripe from "stripe";
 import { storage } from "./storage";
-import { generateArtPrompt, generateArtImage } from "./openai-service";
+import { generateArtPrompt, generateArtImage, queueController } from "./bootstrap";
 import { identifyMusic } from "./music-service";
 import { insertArtVoteSchema, insertArtPreferenceSchema, type AudioAnalysis, type MusicIdentification, telemetryEvents } from "@shared/schema";
 import { and, sql } from "drizzle-orm";
@@ -14,7 +14,6 @@ import { generateWithFallback, resolveAutoMode, buildContextualPrompt } from "./
 import { createDefaultAudioAnalysis } from "./generation/audioAnalyzer";
 import { findBestCatalogMatch, type CatalogMatchRequest } from "./generation/catalogMatcher";
 import { recentlyServedCache, makeRecentKey } from "./recently-served-cache";
-import { queueController } from "./queue-controller";
 import { wsSequence, WS_MESSAGE_TYPES } from "./websocket-sequence";
 import { telemetryService } from "./telemetry-service";
 
@@ -1638,27 +1637,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       for (let i = 0; i < batchSize; i++) {
         try {
-          // Use the existing generation orchestrator
-          const generationResult = await generateWithFallback(
-            {
-              sessionId,
-              userId,
-              preferences: preferences || { styles: [], artists: [] },
-              audioAnalysis: audioAnalysis || createDefaultAudioAnalysis(),
-              musicIdentification: null
-            },
-            'auto' // Use auto mode for generation
-          );
+          // Generate art prompt using the proper flow
+          const promptResult = await generateArtPrompt({
+            audioAnalysis: audioAnalysis || createDefaultAudioAnalysis(),
+            musicInfo: null,
+            styles: preferences?.styles || [],
+            artists: preferences?.artists || [],
+            dynamicMode: preferences?.dynamicMode || false,
+            previousVotes: []
+          });
           
-          if (generationResult.success && generationResult.artwork) {
+          // Generate image using DALL-E
+          const imageUrl = await generateArtImage(promptResult.prompt);
+          
+          if (imageUrl) {
             // Store the generated artwork
             const artSession = await storage.createArtSession({
               sessionId,
               userId,
-              imageUrl: generationResult.artwork.imageUrl,
-              prompt: generationResult.artwork.prompt,
+              imageUrl,
+              prompt: promptResult.prompt,
+              dnaVector: promptResult.dnaVector ? JSON.stringify(promptResult.dnaVector) : null,
               audioFeatures: audioAnalysis ? JSON.stringify(audioAnalysis) : null,
-              generationExplanation: generationResult.artwork.explanation || null,
+              generationExplanation: promptResult.explanation || null,
               styles: preferences?.styles || [],
               artists: preferences?.artists || []
             });
@@ -1860,7 +1861,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const pendingMessages = wsSequence.checkPendingMessages();
     pendingMessages.forEach(pending => {
       // Find the client's WebSocket
-      for (const [ws, clientId] of wsClients) {
+      for (const [ws, clientId] of Array.from(wsClients)) {
         if (clientId === pending.clientId && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify(pending.message));
           wsSequence.markRetried(clientId, pending.seq);

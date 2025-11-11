@@ -5,8 +5,8 @@
  */
 
 import { telemetryService } from "./telemetry-service";
-import { generationHealthService } from "./generation-health";
-import { recoveryManager } from "./recovery-manager";
+import type { GenerationHealthPort } from "./types/generation-ports";
+import type { RecoveryManager } from "./recovery-manager";
 
 // State types for queue management
 export type QueueState = 'HUNGRY' | 'SATISFIED' | 'OVERFULL';
@@ -64,7 +64,10 @@ export class QueueController {
   private telemetryHistory: QueueTelemetry[] = [];
   private readonly MAX_TELEMETRY_ENTRIES = 100;
   
-  constructor() {
+  constructor(
+    private readonly generationHealth: GenerationHealthPort,
+    private readonly recoveryManager: RecoveryManager
+  ) {
     console.log('[QueueController] Initialized with thresholds:', {
       MIN_FRAMES: this.MIN_FRAMES,
       TARGET_FRAMES: this.TARGET_FRAMES,
@@ -133,7 +136,7 @@ export class QueueController {
    */
   shouldGenerateFrame(): boolean {
     // Check DALL-E health first (circuit breaker state)
-    const dalleHealthy = generationHealthService.shouldAttemptGeneration();
+    const dalleHealthy = this.generationHealth.shouldAttemptGeneration();
     
     if (!dalleHealthy) {
       console.log('[QueueController] DALL-E unhealthy, skipping generation');
@@ -144,7 +147,7 @@ export class QueueController {
         event: 'generation_skipped_health',
         metrics: {
           state: this.currentState,
-          breaker_state: generationHealthService.getBreakerState(),
+          breaker_state: this.generationHealth.getCurrentState(),
           reason: 'dalle_unhealthy'
         },
         severity: 'warning'
@@ -171,9 +174,9 @@ export class QueueController {
    */
   getRecommendedBatchSize(): number {
     // If circuit breaker is in recovery, use recovery batch size
-    const breakerState = generationHealthService.getBreakerState();
+    const breakerState = this.generationHealth.getCurrentState();
     if (breakerState === 'half-open') {
-      const recoveryBatch = recoveryManager.getRecoveryBatchSize();
+      const recoveryBatch = this.recoveryManager.getRecoveryBatchSize();
       console.log(`[QueueController] Using recovery batch size: ${recoveryBatch}`);
       return recoveryBatch;
     }
@@ -382,5 +385,6 @@ export class QueueController {
   }
 }
 
-// Export a singleton instance for the application
-export const queueController = new QueueController();
+// Export singleton placeholder for backward compatibility
+// This will be replaced in bootstrap.ts
+export let queueController: QueueController;

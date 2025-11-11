@@ -832,6 +832,13 @@ export class MemStorage implements IStorage {
       generationRate: recentGenerations // Approximation: recent generations per minute
     };
   }
+
+  // Telemetry methods (stub for MemStorage)
+  async getCatalogueBridgeTelemetry(cutoffTime: Date): Promise<TelemetryEvent[]> {
+    // Return empty array for in-memory storage
+    // Real telemetry is only tracked in PostgresStorage
+    return [];
+  }
 }
 
 // PostgreSQL Storage Implementation

@@ -1,5 +1,5 @@
-import { generationHealthService } from './generation-health';
-import { generateArtImage, GenerationFailure } from './openai-service';
+import type { GenerationHealthPort } from './types/generation-ports';
+import { GenerationFailure } from './openai-service';
 import { telemetryService } from './telemetry-service';
 
 /**
@@ -10,7 +10,7 @@ import { telemetryService } from './telemetry-service';
  * - Gradual batch size recovery
  * - Lightweight probe prompts
  */
-class RecoveryManager {
+export class RecoveryManager {
   private batchSize = 1;
   private probeCostEstimate = 0; // Track estimated costs
   private probeAttempts = 0;
@@ -37,6 +37,14 @@ class RecoveryManager {
     '[probe] single color wash with subtle texture',
     '[probe] elementary line pattern'
   ];
+
+  constructor(
+    private readonly generationHealth: GenerationHealthPort,
+    private readonly generateArtImage: (prompt: string, options?: {
+      isProbe?: boolean;
+      skipTextDirective?: boolean;
+    }) => Promise<string>
+  ) {}
 
   /**
    * Get current recovery batch size for gradual scaling
@@ -87,7 +95,7 @@ class RecoveryManager {
    */
   scheduleProbe(): void {
     // Don't schedule if already probing or breaker is closed
-    if (this.isProbing || generationHealthService.isHealthy()) {
+    if (this.isProbing || this.generationHealth.getCurrentState() === 'closed') {
       return;
     }
     
@@ -116,7 +124,7 @@ class RecoveryManager {
    */
   private async executeProbe(): Promise<void> {
     // Check if we should still probe
-    if (generationHealthService.isHealthy()) {
+    if (this.generationHealth.getCurrentState() === 'closed') {
       console.log('[RecoveryManager] Circuit breaker closed, cancelling probe');
       return;
     }
@@ -161,17 +169,12 @@ class RecoveryManager {
       // Try a lightweight generation with shorter timeout
       const startTime = Date.now();
       
-      // Temporarily override the health check to allow this probe through
-      const originalShouldAttempt = generationHealthService.shouldAttemptGeneration.bind(generationHealthService);
-      generationHealthService.shouldAttemptGeneration = () => true;
-      
-      const result = await generateArtImage(probePrompt, {
+      // Note: Probes are handled specially by the generateArtImage function
+      // The isProbe flag allows the generation to bypass certain checks
+      const result = await this.generateArtImage(probePrompt, {
         isProbe: true,
         skipTextDirective: true // Probes don't need the no-text directive
       });
-      
-      // Restore original function
-      generationHealthService.shouldAttemptGeneration = originalShouldAttempt;
       
       const latency = Date.now() - startTime;
       
@@ -301,19 +304,25 @@ class RecoveryManager {
       budgetRemaining: Math.max(0, this.HOURLY_BUDGET - recentCost)
     };
   }
+  
+  /**
+   * Start monitoring circuit breaker state
+   * This should be called after the recovery manager is instantiated
+   */
+  startMonitoring(): void {
+    setInterval(() => {
+      const breakerState = this.generationHealth.getCurrentState();
+      
+      // If breaker is open and we're not already probing, schedule a probe
+      if (breakerState === 'open' || breakerState === 'half-open') {
+        if (!this.isProbing && this.nextProbeTime === 0) {
+          this.scheduleProbe();
+        }
+      }
+    }, 10000); // Check every 10 seconds
+  }
 }
 
-// Singleton instance
-export const recoveryManager = new RecoveryManager();
-
-// Start monitoring circuit breaker state
-setInterval(() => {
-  const breakerState = generationHealthService.getBreakerState();
-  
-  // If breaker is open and we're not already probing, schedule a probe
-  if (breakerState === 'open' || breakerState === 'half-open') {
-    if (!recoveryManager.getStatus().isProbing && recoveryManager.getStatus().nextProbeTime === 0) {
-      recoveryManager.scheduleProbe();
-    }
-  }
-}, 10000); // Check every 10 seconds
+// Export singleton placeholder for backward compatibility
+// This will be replaced in bootstrap.ts
+export let recoveryManager: RecoveryManager;
