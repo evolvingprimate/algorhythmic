@@ -331,7 +331,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // CRITICAL FIX: Mark artworks as recently-served ONLY after client confirms render
       // This prevents fresh artwork from being filtered out before display
       if (validIds.length > 0 && sessionId) {
-        const cacheKey = `${userId}-${sessionId}`;
+        // FIX: Use same composite key format as /api/artworks/next endpoint
+        const cacheKey = makeRecentKey(userId, sessionId, 'next');
         recentlyServedCache.markRecent(cacheKey, validIds);
         console.log(`[Render-Ack] Marked ${validIds.length} artworks as recently-served AFTER render confirmation for session ${sessionId}`);
       }
