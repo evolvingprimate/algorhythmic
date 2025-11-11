@@ -41,6 +41,8 @@ import { drizzle } from "drizzle-orm/neon-serverless";
 import { eq, desc, and, or, isNull, lt, gte, sql, getTableColumns, inArray, type SQL } from "drizzle-orm";
 import { Pool, neonConfig } from "@neondatabase/serverless";
 import ws from "ws";
+import { expandStyles } from "@shared/style-relations";
+import { generateProceduralBridge } from "./procedural-bridge";
 
 // Helper function to normalize tier names (handles both hyphenated and underscored formats)
 function normalizeTierName(tier: string): keyof typeof SUBSCRIPTION_TIERS {
@@ -136,7 +138,9 @@ export interface IStorage {
     }
   ): Promise<{
     artworks: ArtSession[];
-    tier: 'exact' | 'partial' | 'global';
+    tier: 'exact' | 'related' | 'procedural' | 'global'; // Updated: 4-tier cascade
+    latencyMs: number;          // Per-tier latency tracking
+    proceduralData?: import('./procedural-bridge').ProceduralBridgeData; // Tier 3.5 metadata
   }>;
   
   // Storage Metrics
@@ -722,11 +726,13 @@ export class MemStorage implements IStorage {
     }
   ): Promise<{
     artworks: ArtSession[];
-    tier: 'exact' | 'partial' | 'global';
+    tier: 'exact' | 'related' | 'procedural' | 'global';
+    latencyMs: number;
+    proceduralData?: import('./procedural-bridge').ProceduralBridgeData;
   }> {
     // MemStorage stub: return empty with global tier
     // In production, this would do in-memory filtering similar to PostgresStorage
-    return { artworks: [], tier: 'global' };
+    return { artworks: [], tier: 'global', latencyMs: 0 };
   }
 }
 
@@ -1692,8 +1698,11 @@ export class PostgresStorage implements IStorage {
     }
   ): Promise<{
     artworks: ArtSession[];
-    tier: 'exact' | 'partial' | 'global';
+    tier: 'exact' | 'related' | 'procedural' | 'global';
+    latencyMs: number;
+    proceduralData?: import('./procedural-bridge').ProceduralBridgeData;
   }> {
+    const startTime = Date.now();
     const { 
       styleTags = [], 
       artistTags = [], 
@@ -1722,40 +1731,34 @@ export class PostgresStorage implements IStorage {
         LIMIT ${limit}
       `);
       
-      return { artworks: globalResults.rows, tier: 'global' };
+      const latencyMs = Date.now() - startTime;
+      return { artworks: globalResults.rows, tier: 'global', latencyMs };
     }
     
-    // Build CTE with cascading tiers
-    const allStyleTags = styleTags; // All tags for Tier 1
-    
-    // Build style array for overlap operations
-    const styleArray = sql`ARRAY[${sql.join(allStyleTags.map(tag => sql`${tag}`), sql`, `)}]::text[]`;
+    // Tier 1 & 2: Exact + Related (via style expansion)
+    // Expand styles to include related styles for Tier 2
+    const relatedStyleTags = expandStyles(styleTags);
+    const exactStyleArray = sql`ARRAY[${sql.join(styleTags.map(tag => sql`${tag}`), sql`, `)}]::text[]`;
+    const relatedStyleArray = sql`ARRAY[${sql.join(relatedStyleTags.map(tag => sql`${tag}`), sql`, `)}]::text[]`;
     
     const query = sql`
       WITH tiered_artworks AS (
-        -- Tier 1: Exact match (all styles)
+        -- Tier 1: Exact match (all requested styles)
         SELECT DISTINCT ${sql.join(Object.values(getTableColumns(artSessions)).map(column => sql.identifier(column.name)), sql`, `)}, 1 as tier
         FROM ${artSessions}
         WHERE ${artSessions.isLibrary} = true
           ${orientation ? sql`AND ${artSessions.orientation} = ${orientation}` : sql``}
-          AND ${artSessions.styles} @> ${styleArray}
+          AND ${artSessions.styles} @> ${exactStyleArray}
           
         UNION ALL
         
-        -- Tier 2: Partial match (ANY style tag overlap, excluding exact matches)
+        -- Tier 2: Related match (ANY related style overlap, excluding exact matches)
         SELECT DISTINCT ${sql.join(Object.values(getTableColumns(artSessions)).map(column => sql.identifier(column.name)), sql`, `)}, 2 as tier
         FROM ${artSessions}
         WHERE ${artSessions.isLibrary} = true
           ${orientation ? sql`AND ${artSessions.orientation} = ${orientation}` : sql``}
-          AND ${artSessions.styles} && ${styleArray}
-          AND NOT (${artSessions.styles} @> ${styleArray})
-          
-        UNION ALL
-        
-        -- Tier 3: Global (any library artwork, orientation filter dropped)
-        SELECT DISTINCT ${sql.join(Object.values(getTableColumns(artSessions)).map(column => sql.identifier(column.name)), sql`, `)}, 3 as tier
-        FROM ${artSessions}
-        WHERE ${artSessions.isLibrary} = true
+          AND ${artSessions.styles} && ${relatedStyleArray}
+          AND NOT (${artSessions.styles} @> ${exactStyleArray})
       )
       SELECT *
       FROM tiered_artworks
@@ -1771,17 +1774,66 @@ export class PostgresStorage implements IStorage {
     
     const results = await this.db.execute<ArtSession & { tier: number }>(query);
     
-    // Determine tier from minimum tier in results
-    let tier: 'exact' | 'partial' | 'global' = 'global';
+    // Check if we got results from Tier 1 or 2
     if (results.rows.length > 0) {
       const minTier = Math.min(...results.rows.map(r => r.tier));
-      tier = minTier === 1 ? 'exact' : minTier === 2 ? 'partial' : 'global';
+      const tier = minTier === 1 ? 'exact' : 'related';
+      const artworks = results.rows.map(({ tier: _, ...artwork }) => artwork as ArtSession);
+      const latencyMs = Date.now() - startTime;
+      return { artworks, tier, latencyMs };
     }
     
-    // Strip tier field from results
-    const artworks = results.rows.map(({ tier: _, ...artwork }) => artwork as ArtSession);
+    // Check latency budget before proceeding to Tier 3/4
+    let elapsedMs = Date.now() - startTime;
+    if (elapsedMs > 180) {
+      // Timeout: skip global tier, return procedural bridge immediately
+      const proceduralData = generateProceduralBridge(styleTags, orientation);
+      return {
+        artworks: [],
+        tier: 'procedural',
+        latencyMs: elapsedMs,
+        proceduralData
+      };
+    }
     
-    return { artworks, tier };
+    // Tier 3: Global fallback (any library artwork, orientation filter dropped)
+    // Last chance to find library content before falling back to procedural bridge
+    const globalResults = await this.db.execute<ArtSession>(sql`
+      SELECT ${sql.join(Object.values(getTableColumns(artSessions)).map(column => sql.identifier(column.name)), sql`, `)}
+      FROM ${artSessions}
+      WHERE ${artSessions.isLibrary} = true
+        ${safeExcludeIds.length > 0 ? sql`AND ${artSessions.id} NOT IN (${sql.join(safeExcludeIds.map(id => sql`${id}`), sql`, `)})` : sql``}
+        AND NOT EXISTS (
+          SELECT 1 FROM ${userArtImpressions}
+          WHERE ${userArtImpressions.artworkId} = ${artSessions.id}
+            AND ${userArtImpressions.userId} = ${userId}
+        )
+      ORDER BY ${artSessions.createdAt} DESC
+      LIMIT ${limit}
+    `);
+    
+    // If global tier found results, return them
+    if (globalResults.rows.length > 0) {
+      const latencyMs = Date.now() - startTime;
+      return { artworks: globalResults.rows, tier: 'global', latencyMs };
+    }
+    
+    // Tier 4: Procedural Bridge (ultimate fallback - no library content available at all)
+    // Generate deterministic gradient parameters for instant display
+    // This is only reached when:
+    // - No exact matches (Tier 1)
+    // - No related matches (Tier 2)  
+    // - No global library artwork exists (Tier 3)
+    // - OR we exceeded the 180ms timeout
+    const proceduralData = generateProceduralBridge(styleTags, orientation);
+    const proceduralLatencyMs = Date.now() - startTime;
+    
+    return {
+      artworks: [],
+      tier: 'procedural',
+      latencyMs: proceduralLatencyMs,
+      proceduralData
+    };
   }
 
   // Storage Metrics

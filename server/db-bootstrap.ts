@@ -27,6 +27,16 @@ export async function bootstrapDatabase() {
     
     console.log('[DB Bootstrap] ✓ GIN index on styles created/verified');
     
+    // Create composite index for cascading fallback queries (orientation + created_at)
+    // This accelerates the cascade's library search across all tiers
+    await db.execute(sql`
+      CREATE INDEX IF NOT EXISTS art_sessions_orientation_created_at_idx
+      ON art_sessions (orientation, created_at DESC)
+      WHERE is_library = true
+    `);
+    
+    console.log('[DB Bootstrap] ✓ Composite index on orientation+created_at created/verified');
+    
     // Future: Add more bootstrap operations here (extensions, functions, etc.)
     
   } catch (error) {
