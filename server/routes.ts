@@ -991,21 +991,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
         try {
           // First try: Re-fetch fresh queue WITHOUT recently-served filter
-          const emergencyFresh = allFreshSessions.slice(0, Math.min(20, allFreshSessions.length));
+          const emergencyFresh = sessionId 
+            ? await storage.getFreshArtworks(sessionId, userId, 20)
+            : [];
           
           if (emergencyFresh.length > 0) {
             combinedArtworks = emergencyFresh;
             console.warn(`[EmergencyFallback] Using ${combinedArtworks.length} fresh artworks (recently-served filter bypassed) for user ${userId} session ${sessionId}`);
           } else {
-            // Second try: Get ANY unseen storage artworks (ignore all filters)
+            // Second try: Get ANY storage artworks without recently-served filter
             const emergencyStorage = await storage.getUnseenArtworks(userId, {
               limit: 20,
               orientation,
               styleTags: [], // Remove style filter in emergency
               artistTags: [], // Remove artist filter in emergency
             });
-            combinedArtworks = emergencyStorage;
-            console.warn(`[EmergencyFallback] Using ${combinedArtworks.length} storage artworks (all filters removed) for user ${userId} session ${sessionId}`);
+            
+            if (emergencyStorage.length > 0) {
+              combinedArtworks = emergencyStorage;
+              console.warn(`[EmergencyFallback] Using ${combinedArtworks.length} storage artworks (filters relaxed) for user ${userId} session ${sessionId}`);
+            }
           }
           
           // Update telemetry
