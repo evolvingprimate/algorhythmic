@@ -179,6 +179,9 @@ class CatalogueSeedRunner {
         qualityScore: 70,
         motifs: [job.style, job.genre, job.mood],
         
+        // Style tags for filtering (CRITICAL FIX)
+        styles: [job.style],
+        
         // Catalogue metadata
         isLibrary: true,
         orientation: job.orientation,
