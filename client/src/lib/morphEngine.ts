@@ -1,4 +1,5 @@
 import { DNAVector, DNAFrame, interpolateDNA, applyAudioReactivity, smoothstepBellCurve, sigmoid, smootherstep } from './dna';
+import { MorphScheduler } from './MorphScheduler';
 import type { AudioAnalysis } from '@shared/schema';
 
 export type MorphPhase = 'hold' | 'ramp' | 'morph';
@@ -58,7 +59,7 @@ export class MorphEngine {
   private phaseStartTime: number = 0;
   private isRunning: boolean = false;
   private animationFrameId: number | null = null;
-  private pendingJumpIndex: number | null = null; // Request frame jump via state machine
+  private scheduler: MorphScheduler = new MorphScheduler(); // FSM for phase-safe transitions
   
   // Per-frame Ken Burns progress trackers (keyed by imageUrl for stability)
   private frameTrackers: Map<string, FrameTracker> = new Map();
@@ -113,6 +114,9 @@ export class MorphEngine {
       });
     }
     
+    // Send frame to scheduler for FSM management
+    this.scheduler.enqueueFreshFrame(frame);
+    
     // CRITICAL: Reset timing when first frame is added to prevent starting at 11.6% progress
     if (this.frames.length === 1) {
       this.phaseStartTime = Date.now();
@@ -135,6 +139,7 @@ export class MorphEngine {
     // Special case: first frame
     if (this.frames.length === 0) {
       this.frames.push(frame);
+      this.scheduler.enqueueFreshFrame(frame); // Add to scheduler FSM
       this.phaseStartTime = Date.now();
       console.log(`[MorphEngine] First frame inserted, timing reset`);
       return;
@@ -144,11 +149,11 @@ export class MorphEngine {
     const insertIndex = this.currentIndex + 1;
     this.frames.splice(insertIndex, 0, frame);
     
-    // CRITICAL: Request immediate jump via state machine to show fresh artwork
-    // This prevents users from waiting up to 1 minute for current cycle to finish
+    // CRITICAL: Use scheduler FSM to handle fresh frames properly
+    // FSM will queue frame and wait for phase boundary to transition
     if (this.isRunning) {
-      this.pendingJumpIndex = insertIndex; // Request jump through state machine
-      console.log(`[MorphEngine] 🚀 Requested immediate jump to fresh frame at index ${insertIndex}`);
+      this.scheduler.enqueueFreshFrame(frame);
+      console.log(`[MorphEngine] 🎨 Fresh frame queued in scheduler, will transition at next phase boundary`);
     }
     
     console.log(`[MorphEngine] 🎨 Inserted fresh frame after position ${insertIndex - 1}. Total frames: ${this.frames.length}`);
@@ -235,8 +240,16 @@ export class MorphEngine {
     this.currentIndex = 0;
     this.phaseStartTime = Date.now();
     this.frameTrackers.clear(); // Clear all trackers on reset
+    this.scheduler.reset(); // Reset the scheduler FSM
     this.stop();
     console.log('[MorphEngine] Reset');
+  }
+  
+  // Update scheduler state - should be called regularly
+  tick(deltaTime: number = 16): void {
+    if (this.isRunning) {
+      this.scheduler.tick(deltaTime);
+    }
   }
   
   // Calculate per-frame Ken Burns progress (0-1), updating tracker
@@ -304,37 +317,16 @@ export class MorphEngine {
   getMorphState(audioAnalysis?: AudioAnalysis): MorphState {
     const defaultDNA = Array(50).fill(0.5);
     
-    // Service pending jump request before computing state
-    if (this.pendingJumpIndex !== null && this.frames.length > 0) {
-      const targetIndex = Math.max(0, Math.min(this.pendingJumpIndex, this.frames.length - 1));
-      console.log(`[MorphEngine] 🎬 Servicing jump request: ${this.currentIndex} → ${targetIndex}`);
-      
-      this.currentIndex = targetIndex;
-      this.phaseStartTime = Date.now();
-      
-      // Reset Ken Burns trackers for clean transition
-      const currentFrame = this.frames[this.currentIndex];
-      const nextFrame = this.frames[(this.currentIndex + 1) % this.frames.length];
-      
-      if (currentFrame && this.frameTrackers.has(currentFrame.imageUrl)) {
-        const tracker = this.frameTrackers.get(currentFrame.imageUrl)!;
-        tracker.cycleStart = Date.now();
-        tracker.progress = 0;
-        tracker.zoomDirection = 'out'; // Frame A starts zooming out
-      }
-      
-      if (nextFrame && this.frameTrackers.has(nextFrame.imageUrl)) {
-        const tracker = this.frameTrackers.get(nextFrame.imageUrl)!;
-        tracker.cycleStart = Date.now();
-        tracker.progress = 0;
-        tracker.zoomDirection = 'in'; // Frame B starts zooming in
-      }
-      
-      this.pendingJumpIndex = null; // Clear request
-      console.log(`[MorphEngine] ✅ Jump complete, Ken Burns reset, renderer will detect new frameIds`);
+    // Update scheduler FSM state before computing morph state
+    if (this.isRunning) {
+      this.scheduler.tick(16); // Tick scheduler with ~16ms frame time
     }
     
-    if (this.frames.length === 0) {
+    // Get active frames from scheduler FSM
+    const activeFrames = this.scheduler.getActiveFrames();
+    
+    // Handle no frames case
+    if (!activeFrames || this.frames.length === 0) {
       return {
         phase: 'hold',
         currentFrameIndex: 0,
@@ -359,8 +351,9 @@ export class MorphEngine {
       };
     }
 
-    const currentFrame = this.getCurrentFrame();
-    const nextFrame = this.getNextFrame();
+    // Use frames from scheduler FSM or fall back to legacy method
+    const currentFrame = activeFrames ? activeFrames.frameA : this.getCurrentFrame();
+    const nextFrame = activeFrames ? activeFrames.frameB : this.getNextFrame();
     
     if (!currentFrame) {
       return {
@@ -393,12 +386,20 @@ export class MorphEngine {
       console.log('[MorphEngine] phaseStartTime was 0, resetting to current time');
     }
 
+    // Use scheduler's phase info if available, else fall back to legacy timing
+    const phaseInfo = this.scheduler.getCurrentPhase();
+    const schedulerProgress = activeFrames ? activeFrames.progress : phaseInfo.progress;
+    
     let elapsed = Date.now() - this.phaseStartTime;
     const cyclePosition = Math.min(elapsed, this.TOTAL_CYCLE); // Cap at TOTAL_CYCLE for final state
     
-    // Advance frame AFTER computing state (allows morphProgress to reach 1.0)
-    if (elapsed >= this.TOTAL_CYCLE && this.frames.length > 1) {
-      // Set elapsed to TOTAL_CYCLE for this frame, then advance on next call
+    // If scheduler is in TRANSITIONING state, use its progress for smooth transition
+    const schedulerState = this.scheduler.getState();
+    const isTransitioning = schedulerState === 'TRANSITIONING';
+    
+    // No need to advance frames manually when scheduler is managing them
+    if (!activeFrames && elapsed >= this.TOTAL_CYCLE && this.frames.length > 1) {
+      // Legacy frame advancement (only if scheduler not active)
       if (elapsed > this.TOTAL_CYCLE + 100) { // 100ms grace period for final state
         this.currentIndex = (this.currentIndex + 1) % this.frames.length;
         this.phaseStartTime = Date.now();

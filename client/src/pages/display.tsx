@@ -1470,6 +1470,9 @@ export default function Display() {
         animationFrameRef.current = requestAnimationFrame(renderLoop);
         return;
       }
+      
+      // Update MorphScheduler FSM state
+      morphEngineRef.current.tick(16); // ~16ms frame time
 
       // FPS tracking
       const now = performance.now();
