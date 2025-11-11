@@ -47,6 +47,7 @@ import { DebugOverlay, type DebugStats } from "@/components/debug-overlay";
 import { EffectsControlMenu, type EffectsConfig } from "@/components/effects-control-menu";
 import { useToast } from "@/hooks/use-toast";
 import { useImpressionRecorder } from "@/hooks/useImpressionRecorder";
+import { telemetryService } from "@/lib/maestro/telemetry/TelemetryService";
 import { AudioAnalyzer } from "@/lib/audio-analyzer";
 import { WebSocketClient } from "@/lib/websocket-client";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -1131,6 +1132,30 @@ export default function Display() {
     };
   }, []);
 
+  // ============================================================================
+  // TASK 9: Initialize TelemetryService session with serialized lifecycle
+  // ============================================================================
+  
+  useEffect(() => {
+    // Gate: Wait for auth state to settle before initializing telemetry
+    // This prevents unnecessary session transitions when user is still loading
+    if (user === undefined) {
+      return;
+    }
+    
+    // Transition to new session (serialized end→start via internal queue)
+    // This ensures previous session fully ends before new one starts
+    telemetryService.transitionSession(user?.id || null);
+    
+    return () => {
+      // Clear session on unmount (flushes remaining events)
+      // Note: React can't await in cleanup, but clearSession() ensures flush completes
+      telemetryService.clearSession().catch(err => {
+        console.error('[Display] Failed to clear telemetry session:', err);
+      });
+    };
+  }, [user?.id]);
+
   // Initialize WebSocket
   useEffect(() => {
     wsClientRef.current = new WebSocketClient();
@@ -1165,12 +1190,32 @@ export default function Display() {
       // ============================================================================
       
       const frameId = artwork.id || artwork.imageUrl.split('/').pop() || artwork.imageUrl;
+      const handoffStartTime = Date.now();
+      
       console.log(`[WebSocket] 🔥 Step 1/3: Prewarming texture for ${frameId}...`);
       
+      // TELEMETRY: Record prewarm start
+      telemetryService.recordEvent('handoff.prewarm_start', {
+        frameId,
+      });
+      
+      const prewarmStartTime = Date.now();
       try {
         await safePrewarmFrame(artwork.imageUrl, frameId, 'websocket-swap');
+        
+        // TELEMETRY: Record prewarm success
+        telemetryService.recordEvent('handoff.prewarm_complete', {
+          frameId,
+          prewarmDurationMs: Date.now() - prewarmStartTime,
+        });
       } catch (error) {
         console.error(`[WebSocket] ❌ Prewarm failed for ${frameId}:`, error);
+        
+        // TELEMETRY: Record handoff error
+        telemetryService.recordEvent('handoff.error', {
+          handoffError: `Prewarm failed: ${error instanceof Error ? error.message : String(error)}`,
+        });
+        
         // Continue anyway - JIT fallback will handle it
       }
       
@@ -1180,22 +1225,36 @@ export default function Display() {
       
       console.log(`[WebSocket] ⏳ Step 2/3: Waiting for texture readiness...`);
       
+      // TELEMETRY: Record ready wait start
+      telemetryService.recordEvent('handoff.ready_wait', {
+        frameId,
+      });
+      
       // Poll for readiness with timeout
       const maxWait = 2000; // 2s max wait
       const pollInterval = 50; // Check every 50ms
-      const startTime = Date.now();
+      const readyStartTime = Date.now();
       
-      while (Date.now() - startTime < maxWait) {
+      while (Date.now() - readyStartTime < maxWait) {
         if (rendererRef.current?.isFrameReady(frameId)) {
-          console.log(`[WebSocket] ✅ Texture ready in ${Date.now() - startTime}ms`);
+          console.log(`[WebSocket] ✅ Texture ready in ${Date.now() - readyStartTime}ms`);
           break;
         }
         // Wait 50ms before next check
         await new Promise(resolve => setTimeout(resolve, pollInterval));
       }
       
-      if (!rendererRef.current?.isFrameReady(frameId)) {
+      const waitDuration = Date.now() - readyStartTime;
+      const timedOut = !rendererRef.current?.isFrameReady(frameId);
+      
+      if (timedOut) {
         console.warn(`[WebSocket] ⚠️ Texture not ready after ${maxWait}ms timeout - proceeding anyway (JIT fallback)`);
+        
+        // TELEMETRY: Record ready timeout
+        telemetryService.recordEvent('handoff.ready_timeout', {
+          waitDurationMs: waitDuration,
+          timedOut: true,
+        });
       }
       
       // ============================================================================
@@ -1212,11 +1271,25 @@ export default function Display() {
       // Deduplication: Skip if already in morphEngine
       if (morphEngineRef.current.hasFrameById(artwork.id)) {
         console.log(`[WebSocket] ⏭️ Skipping duplicate frame (already in engine): ${artwork.id}`);
+        
+        // TELEMETRY: Record duplicate prevention
+        telemetryService.recordEvent('duplicate_prevented', {
+          duplicateType: 'artwork_id',
+          preventedFrameId: artwork.id,
+        });
+        
         return;
       }
       
       if (morphEngineRef.current.hasImageUrl(artwork.imageUrl)) {
         console.log(`[WebSocket] ⏭️ Skipping duplicate imageUrl (already in engine): ${artwork.imageUrl}`);
+        
+        // TELEMETRY: Record duplicate prevention
+        telemetryService.recordEvent('duplicate_prevented', {
+          duplicateType: 'image_url',
+          preventedFrameId: artwork.id,
+        });
+        
         return;
       }
       
@@ -1237,7 +1310,14 @@ export default function Display() {
         audioAnalysis: artwork.audioAnalysis || null,
       });
       
+      const totalHandoffDuration = Date.now() - handoffStartTime;
       console.log(`[WebSocket] ✅ GPU-ready handoff complete for ${frameId} - frame added to morphEngine`);
+      
+      // TELEMETRY: Record handoff swap complete
+      telemetryService.recordEvent('handoff.swap_complete', {
+        swapSuccess: true,
+        totalHandoffMs: totalHandoffDuration,
+      });
       
       // Start morphEngine if this is the first frame
       if (morphEngineRef.current.getFrameCount() === 1) {
@@ -1839,6 +1919,13 @@ export default function Display() {
     catalogueBridgeAbortRef.current = new AbortController();
     const abortSignal = catalogueBridgeAbortRef.current.signal;
     
+    // TELEMETRY: Record catalogue bridge request
+    telemetryService.recordEvent('catalogue_bridge.request', {
+      requestedStyles: styles,
+      requestedOrientation: 'landscape',
+      sessionId: sessionId.current,
+    });
+    
     // Fetch catalogue artworks immediately (target: <100ms)
     const bridgeStartTime = Date.now();
     fetch('/api/catalogue-bridge', {
@@ -1862,6 +1949,18 @@ export default function Display() {
       .then((data: { artworks: ArtSession[]; tier: string; latency: number }) => {
         const bridgeLatency = Date.now() - bridgeStartTime;
         console.log(`[CatalogueBridge] ✅ Retrieved ${data.artworks.length} artworks (tier: ${data.tier}, latency: ${bridgeLatency}ms)`);
+        
+        // TELEMETRY: Record catalogue bridge success/fallback based on tier
+        const tierNumber = parseInt(data.tier.replace('tier_', ''));
+        const eventType = tierNumber === 1 
+          ? 'catalogue_bridge.success' as const
+          : `catalogue_bridge.fallback_tier_${tierNumber}` as const;
+        
+        telemetryService.recordEvent(eventType, {
+          tier: tierNumber,
+          frameCount: data.artworks.length,
+          latencyMs: bridgeLatency,
+        });
         
         // Add catalogue artworks to morphEngine for instant display
         for (const artwork of data.artworks) {
@@ -1904,6 +2003,11 @@ export default function Display() {
           console.log('[CatalogueBridge] Request aborted (style changed)');
           return;
         }
+        
+        // TELEMETRY: Record catalogue bridge error
+        telemetryService.recordEvent('catalogue_bridge.error', {
+          errorMessage: error.message || String(error),
+        });
         
         console.error('[CatalogueBridge] Error fetching catalogue:', error);
         // Graceful degradation: Continue with normal flow, wait for fresh generation

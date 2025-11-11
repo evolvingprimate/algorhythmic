@@ -252,7 +252,7 @@ export const telemetryEvents = pgTable("telemetry_events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   sessionId: varchar("session_id").notNull().references(() => raiSessions.id, { onDelete: "cascade" }),
   userId: varchar("user_id").references(() => users.id, { onDelete: "cascade" }),
-  eventType: text("event_type").notNull(), // session_start, session_end, artwork_impression, user_action, control_adjustment, climax_detected, vision_analyzed
+  eventType: text("event_type").notNull(), // session_start, session_end, artwork_impression, user_action, control_adjustment, climax_detected, vision_analyzed, catalogue_bridge.*, handoff.*, duplicate_prevented
   eventData: text("event_data").notNull(), // JSON: type-specific payload
   audioFeatures: text("audio_features"), // JSON snapshot: {rms, onsetStrength, beatConfidence, bpm}
   visualState: text("visual_state"), // JSON snapshot: {currentFrame, effectsActive, parameterValues}

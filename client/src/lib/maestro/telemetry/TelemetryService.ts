@@ -13,7 +13,23 @@ export type TelemetryEventType =
   | "user_action"
   | "control_adjustment"
   | "climax_detected"
-  | "vision_analyzed";
+  | "vision_analyzed"
+  // ============================================================================
+  // TASK 9: Catalogue Bridge & GPU Handoff Telemetry Events
+  // ============================================================================
+  | "catalogue_bridge.request"
+  | "catalogue_bridge.success"
+  | "catalogue_bridge.fallback_tier_1"
+  | "catalogue_bridge.fallback_tier_2"
+  | "catalogue_bridge.fallback_tier_3"
+  | "catalogue_bridge.error"
+  | "handoff.prewarm_start"
+  | "handoff.prewarm_complete"
+  | "handoff.ready_wait"
+  | "handoff.ready_timeout"
+  | "handoff.swap_complete"
+  | "handoff.error"
+  | "duplicate_prevented";
 
 interface TelemetryEventData {
   // session_start/session_end
@@ -42,6 +58,50 @@ interface TelemetryEventData {
     cached: boolean;
     processingTime: number;
   };
+  
+  // ============================================================================
+  // TASK 9: Catalogue Bridge Telemetry Data
+  // ============================================================================
+  
+  // catalogue_bridge.request
+  requestedStyles?: string[];
+  requestedOrientation?: string;
+  sessionId?: string;
+  
+  // catalogue_bridge.success / fallback_tier_*
+  tier?: number; // 1 (exact), 2 (partial), 3 (global)
+  frameCount?: number;
+  latencyMs?: number;
+  
+  // catalogue_bridge.error
+  errorMessage?: string;
+  
+  // ============================================================================
+  // TASK 9: GPU Handoff Telemetry Data
+  // ============================================================================
+  
+  // handoff.prewarm_start / prewarm_complete
+  frameId?: string;
+  prewarmDurationMs?: number;
+  
+  // handoff.ready_wait / ready_timeout
+  waitDurationMs?: number;
+  timedOut?: boolean;
+  
+  // handoff.swap_complete
+  swapSuccess?: boolean;
+  totalHandoffMs?: number;
+  
+  // handoff.error
+  handoffError?: string;
+  
+  // ============================================================================
+  // TASK 9: Duplicate Prevention Telemetry Data
+  // ============================================================================
+  
+  // duplicate_prevented
+  duplicateType?: "artwork_id" | "image_url";
+  preventedFrameId?: string;
   
   // Generic metadata
   [key: string]: any;
@@ -78,6 +138,11 @@ export class TelemetryService {
   private currentSessionId: string | null = null;
   private currentUserId: string | null = null;
   private isFlushing = false;
+  
+  // ============================================================================
+  // TASK 9: Session lifecycle queue for serialized transitions
+  // ============================================================================
+  private sessionTransitionQueue: Promise<void> = Promise.resolve();
 
   constructor() {
     console.log('[TelemetryService] Initialized');
@@ -158,6 +223,44 @@ export class TelemetryService {
     this.isInitialized = false;
 
     console.log('[TelemetryService] Session ended');
+  }
+
+  /**
+   * TASK 9: Transition to a new session (serialized end→start)
+   * This ensures previous session fully ends before new one starts
+   */
+  transitionSession(userId: string | null): void {
+    // Chain onto existing queue to ensure serialization
+    this.sessionTransitionQueue = this.sessionTransitionQueue
+      .then(async () => {
+        // End current session if one exists
+        if (this.isInitialized && this.currentSessionId) {
+          console.log(`[TelemetryService] Transition: ending session ${this.currentSessionId}`);
+          await this.endSession();
+        }
+        
+        // Start new session
+        console.log(`[TelemetryService] Transition: starting new session for userId=${userId}`);
+        await this.startSession(userId);
+      })
+      .catch(error => {
+        console.error('[TelemetryService] Session transition failed:', error);
+      });
+  }
+
+  /**
+   * TASK 9: Clear current session (unmount cleanup)
+   * This ensures all events are flushed before component unmounts
+   */
+  async clearSession(): Promise<void> {
+    // Wait for any pending transitions to complete
+    await this.sessionTransitionQueue;
+    
+    // End current session if one exists
+    if (this.isInitialized && this.currentSessionId) {
+      console.log(`[TelemetryService] Clearing session ${this.currentSessionId}`);
+      await this.endSession();
+    }
   }
 
   /**
