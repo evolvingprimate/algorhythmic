@@ -521,6 +521,64 @@ export default function Display() {
   };
 
   /**
+   * Phase 3D: Validate artwork frame before adding to morphEngine
+   * Filters out frames with invalid/missing imageUrl values
+   * Logs filtered frames for debugging
+   */
+  const isValidArtworkFrame = (artwork: any): boolean => {
+    // Check for null/undefined artwork
+    if (!artwork) {
+      console.error('[FrameFilter] Artwork is null/undefined - filtering out');
+      return false;
+    }
+    
+    // Check for missing imageUrl
+    if (!artwork.imageUrl) {
+      console.error(`[FrameFilter] Artwork ${artwork.id} has no imageUrl - filtering out`);
+      telemetryService.trackEvent('frame_filtered', {
+        reason: 'missing_imageUrl',
+        artworkId: artwork.id,
+        prompt: artwork.prompt?.substring(0, 50),
+      });
+      return false;
+    }
+    
+    // Check for empty string imageUrl
+    if (typeof artwork.imageUrl === 'string' && artwork.imageUrl.trim() === '') {
+      console.error(`[FrameFilter] Artwork ${artwork.id} has empty imageUrl - filtering out`);
+      telemetryService.trackEvent('frame_filtered', {
+        reason: 'empty_imageUrl',
+        artworkId: artwork.id,
+      });
+      return false;
+    }
+    
+    // Check for invalid URL patterns
+    const urlPattern = /^(\/public-objects\/|https?:\/\/|\/)/;
+    if (!urlPattern.test(artwork.imageUrl)) {
+      console.error(`[FrameFilter] Artwork ${artwork.id} has invalid imageUrl format: ${artwork.imageUrl} - filtering out`);
+      telemetryService.trackEvent('frame_filtered', {
+        reason: 'invalid_url_format',
+        artworkId: artwork.id,
+        imageUrl: artwork.imageUrl,
+      });
+      return false;
+    }
+    
+    // Check for placeholder URLs that shouldn't be displayed
+    if (artwork.imageUrl.includes('placeholder') && !artwork.imageUrl.includes('PLACEHOLDER_IMAGE_URL')) {
+      console.warn(`[FrameFilter] Artwork ${artwork.id} has placeholder URL - filtering out`);
+      telemetryService.trackEvent('frame_filtered', {
+        reason: 'placeholder_url',
+        artworkId: artwork.id,
+      });
+      return false;
+    }
+    
+    return true;
+  };
+
+  /**
    * BUG FIX: Safe prewarm helper with null checks, readiness gate, and error handling
    * Prevents crashes from prewarming before renderer initialization completes
    */
@@ -620,9 +678,9 @@ export default function Display() {
             continue;
           }
           
-          // CRITICAL FIX: Validate artwork has imageUrl before using it
-          if (!artwork.imageUrl) {
-            console.error(`[Display] ❌ CRITICAL: Artwork ${artwork.id} has no imageUrl!`);
+          // Phase 3D: Use comprehensive validation to filter invalid frames
+          if (!isValidArtworkFrame(artwork)) {
+            console.error(`[Display] ❌ Frame filtered: Artwork ${artwork.id} failed validation`);
             continue; // Skip this invalid artwork
           }
           
@@ -951,6 +1009,16 @@ export default function Display() {
       
       // Parse DNA vector and add frame to MorphEngine
       if (data.session && morphEngineRef.current) {
+        // Phase 3D: Validate generated frame before adding
+        if (!isValidArtworkFrame(data.session)) {
+          console.error(`[GenerateMutation] Generated artwork ${data.session.id} failed validation - not adding to morphEngine`);
+          telemetryService.trackEvent('generated_frame_invalid', {
+            artworkId: data.session.id,
+            imageUrl: data.imageUrl,
+          });
+          return; // Don't add invalid frame
+        }
+        
         const dnaVector = parseDNAFromSession(data.session);
         if (dnaVector) {
           morphEngineRef.current.addFrame({
@@ -2197,6 +2265,12 @@ export default function Display() {
             artist: artwork.musicArtist || '',
             album: artwork.musicAlbum || undefined,
           } : null;
+          
+          // Phase 3D: Validate catalogue frame before adding
+          if (!isValidArtworkFrame(artwork)) {
+            console.error(`[CatalogueBridge] Catalogue artwork ${artwork.id} failed validation - skipping`);
+            continue; // Skip this invalid artwork
+          }
           
           morphEngineRef.current.addFrame({
             imageUrl: artwork.imageUrl,

@@ -253,9 +253,20 @@ export class MemStorage implements IStorage {
 
   // Art Sessions
   async createArtSession(insertSession: InsertArtSession): Promise<ArtSession> {
-    // Defensive validation - ensure imageUrl is never null or empty
+    // Phase 3C: Transaction-like rollback pattern for MemStorage
+    console.log('[MemStorage] Creating art session with validation pattern');
+    
+    // Pre-creation validation (cheap fail-fast)
     if (!insertSession.imageUrl || insertSession.imageUrl.trim() === '') {
+      console.error('[MemStorage] Rejected art session: empty/null imageUrl');
       throw new Error('imageUrl is required and cannot be empty');
+    }
+    
+    // Additional validation - check URL format
+    const urlPattern = /^(\/public-objects\/|https?:\/\/|\/)/;
+    if (!urlPattern.test(insertSession.imageUrl)) {
+      console.error(`[MemStorage] Rejected art session: Invalid imageUrl format: ${insertSession.imageUrl}`);
+      throw new Error(`Invalid imageUrl format: ${insertSession.imageUrl}`);
     }
     
     const id = randomUUID();
@@ -908,16 +919,47 @@ export class PostgresStorage implements IStorage {
 
   // Art Sessions
   async createArtSession(insertSession: InsertArtSession): Promise<ArtSession> {
-    // Defensive validation - ensure imageUrl is never null or empty
+    // Phase 3C: Transaction with rollback pattern for data integrity
+    console.log('[Storage] Creating art session with transaction rollback pattern');
+    
+    // Pre-transaction validation (cheap fail-fast)
     if (!insertSession.imageUrl || insertSession.imageUrl.trim() === '') {
+      console.error('[Storage] Rejected art session: empty/null imageUrl');
       throw new Error('imageUrl is required and cannot be empty');
     }
     
-    const created = await this.db
-      .insert(artSessions)
-      .values(insertSession)
-      .returning();
-    return created[0];
+    try {
+      // Use Drizzle transaction for atomic operation
+      const result = await this.db.transaction(async (tx) => {
+        // Step 1: Insert the record
+        const [created] = await tx
+          .insert(artSessions)
+          .values(insertSession)
+          .returning();
+        
+        // Step 2: Post-insert validation (ensure DB didn't corrupt the data)
+        if (!created || !created.imageUrl) {
+          console.error('[Storage] Transaction rollback: DB returned null imageUrl after insert');
+          throw new Error('Database corruption detected: imageUrl became null after insert');
+        }
+        
+        // Step 3: Additional validation - check URL format
+        const urlPattern = /^(\/public-objects\/|https?:\/\/|\/)/;
+        if (!urlPattern.test(created.imageUrl)) {
+          console.error(`[Storage] Transaction rollback: Invalid imageUrl format: ${created.imageUrl}`);
+          throw new Error(`Invalid imageUrl format: ${created.imageUrl}`);
+        }
+        
+        console.log(`[Storage] Art session created successfully: ${created.id} with imageUrl: ${created.imageUrl.substring(0, 50)}...`);
+        return created;
+      });
+      
+      return result;
+    } catch (error) {
+      // Transaction automatically rolled back on error
+      console.error('[Storage] Art session creation failed, transaction rolled back:', error);
+      throw error;
+    }
   }
 
   async getSessionHistory(sessionId: string, limit: number = 20): Promise<ArtSession[]> {
