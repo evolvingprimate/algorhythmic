@@ -4,6 +4,27 @@
 Algorhythmic is a revenue-generating web application that transforms sound into real-time, AI-generated artwork. It allows users to select artistic styles and artists, generating audio-reactive visualizations that continuously improve personalization through user voting. The project aims to be a cross-platform web app with future plans for native TV applications and social features, operating on a freemium model.
 
 ## Recent Changes
+### 2025-11-11: Telemetry Dashboard Implementation ✅
+- **Feature**: Added comprehensive performance monitoring dashboard at /admin/telemetry
+- **Backend**: 
+  - New storage method `getCatalogueBridgeTelemetry(cutoffTime)` with database-level filtering for catalogue_bridge events
+  - API endpoint GET /api/telemetry/catalogue-bridge/stats returns:
+    - Tier distribution percentages (exact, related, global, procedural)
+    - Latency statistics (avg, p50, p95, p99, min, max)
+    - Per-tier latency breakdowns
+    - Pre-computed histogram buckets (0-50ms, 50-100ms, 100-200ms, 200-400ms, 400ms+)
+    - Alert when Tier-3/4 usage exceeds 20% threshold
+  - Auto-refresh every 30 seconds
+- **Frontend**:
+  - Summary cards: Total requests, avg latency, instant match rate, fallback rate
+  - Tier distribution visualization with color-coded progress bars
+  - Latency histogram with 5 buckets showing actual request distribution
+  - Latency percentiles display (min, p50, p95, p99, max)
+  - Alert badge for high Tier-3/4 usage with actionable recommendations
+  - Responsive grid layout with proper data-testid attributes
+- **Impact**: Real-time visibility into catalogue bridge performance, enabling data-driven library expansion decisions
+- **Files Changed**: server/storage.ts (getCatalogueBridgeTelemetry method), server/routes.ts (telemetry API endpoint), client/src/pages/telemetry.tsx (dashboard UI), client/src/App.tsx (route registration)
+
 ### 2025-11-11: Catalogue Bridge Performance Fix (Transaction Overhead Elimination) ✅
 - **Issue**: Catalogue bridge returning 292-549ms latencies (7× over 40ms tier-1 budget)
 - **Root Cause**: Neon's serverless driver opens fresh HTTP transaction for every `this.db.transaction()` call, causing ~250ms overhead per tier (4 sequential round-trips)
