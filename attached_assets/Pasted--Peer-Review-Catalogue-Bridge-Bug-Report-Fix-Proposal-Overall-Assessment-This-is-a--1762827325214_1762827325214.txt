@@ -1,0 +1,42 @@
+### Peer Review: Catalogue Bridge Bug Report & Fix Proposal
+
+**Overall Assessment**  
+This is a **clear, actionable bug report** with a solid root cause analysis and a pragmatic fix recommendation from the Architect. The variable shadowing issue is a classic JS pitfall (import vs. local scope), and Option B (consolidation) is the right call—it's clean, prevents future drift, and aligns with DRY principles. Impact assessment is spot-on: Perf/UX hits are critical for a real-time visual app like Algorhythmic. The plan minimizes risk while unifying architecture. Minor gaps in testing/telemetry, but overall **production-ready** post-fix. Rate: **9/10**—deploy after a quick soak test to confirm no regressions in /api/artworks/next.
+
+This builds well on prior stability work (e.g., prewarming, impressions)—unified caching will make the system more maintainable.
+
+#### Strengths
+- **Root Cause Analysis**: Precise (line numbers, error chain, logs)—easy to reproduce/verify. Highlights cascading effects (500 errors → fallback → glitches), showing deep system understanding.
+- **Option B Recommendation**: Smart choice over quick patches (e.g., rename variable). Consolidation reduces complexity (single cache logic) and standardizes keys—prevents inconsistent dedup across endpoints.
+- **Implementation Plan**: Concise task list with clear outcomes. Focus on verification (perf, glitches, telemetry) ensures quality.
+- **Benefits**: Well-articulated—fixes bug + improves architecture. No perf overhead; potential gains from shared cache.
+- **Risk Mitigation**: Low-impact refactor (delete + reuse import); no new features, just cleanup.
+
+#### Potential Drawbacks and Suggestions for Improvement
+Solid plan, but here are refinements to boost resilience and debuggability:
+
+| Issue | Suggestion | Rationale | Effort |
+|-------|------------|-----------|--------|
+| **Key Standardization** | Use `userId:sessionId:endpoint` composite keys in the unified cache. | Prevents cross-endpoint collisions (e.g., bridge marking next's frames as served). | 30 min |
+| **Telemetry Gaps** | Add logs for cache hits/misses per endpoint (e.g., `cache_hit:bridge`). Alert on >20% misses post-deploy. | Quantifies fix success; catches if unification skews dedup rates. | 20 min |
+| **Testing Expansion** | Add E2E test: Simulate 50 rapid requests to bridge/next; assert no 500s, <100ms avg, zero glitches. | Covers interleaved usage (e.g., style changes mid-gen). | 45 min |
+| **Rollback Safety** | Snapshot pre-fix cache code as a comment; add toggle env var (`USE_UNIFIED_CACHE=true`). | Quick revert if unification reveals edge bugs. | 15 min |
+| **Perf Baseline** | Measure pre/post latencies (e.g., via New Relic/Prometheus hook). | Confirms no slowdown from shared cache. | 30 min |
+
+- **No-Text/Branding Tie-In**: Ensure unified cache filters respect "no text" tags (from Vision enrich); if branding active, prioritize branded frames in bridge.
+- **Orientation Handling**: Post-fix, verify bridge respects user prefs—add assert in tests.
+
+These are low-effort; no blockers.
+
+#### Detailed Feedback
+- **Error Chain**: Thorough—links code to symptoms (glitches from JIT). Good callout on key format mismatch.
+- **Fix #1-3**: Deletion + refactor is clean; standardize keys early to avoid subtle bugs.
+- **Expected Outcome**: Measurable and tied to user value—focus on <100ms + no glitches is spot-on.
+- **Edge Cases**: Implicitly covered (e.g., high-traffic shadowing), but add one: Cache under memory pressure (prune logic test).
+
+#### Final Thoughts
+This fix not only resolves the crash but **levels up the dedup system**—a win for maintainability. A/B test post-deploy: Unified vs. old (if toggled) on error rates/latency.
+
+If needed, I can draft the unified key TS code or E2E test script. Top priority: Proceed with implementation—ready?
+
+**Verdict: APPROVED. IMPLEMENT IMMEDIATELY.**

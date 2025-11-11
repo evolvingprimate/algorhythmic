@@ -1,0 +1,156 @@
+Great catch and a clean write-up. The diagnosis (variable shadowing of `recentlyServedCache`) fits the stacktrace and the downstream UX symptoms (no prewarm → JIT texture load → visible glitch). Here’s a focused review + a hardened fix plan so the Architect can land it safely and prevent regressions.
+
+# Verdict
+
+* **Root cause is correct.** An in-file `const recentlyServedCache = new Map(...)` shadows the imported cache object that exposes `getRecentIds()`, causing `TypeError: getRecentIds is not a function` → 500 → procedural fallback.
+* **Option B (Consolidate) is the right remediation.** One cache, one API, consistent keying.
+
+---
+
+# What to change (beyond deleting the duplicate)
+
+1. **Single source of truth + explicit interface**
+
+   * Define a small interface in `recently-served-cache.ts` and export a **singleton** instance. This avoids accidental re-construction.
+
+   ```ts
+   // server/recently-served-cache.ts
+   export type RecentKey = string; // `${userId}:${sessionId}`
+
+   export interface RecentlyServedCache {
+     getRecentIds(key: RecentKey, limit?: number): string[];
+     push(key: RecentKey, artworkId: string): void;
+     clear(key?: RecentKey): void;
+     size(): number;
+   }
+
+   class RecentlyServedCacheImpl implements RecentlyServedCache {
+     private lru = new Map<RecentKey, string[]>(); // or real LRU with ttl
+     getRecentIds(key: RecentKey, limit = 50) { return (this.lru.get(key) ?? []).slice(0, limit); }
+     push(key: RecentKey, id: string) { const arr = this.lru.get(key) ?? []; arr.unshift(id); this.lru.set(key, arr.slice(0, 200)); }
+     clear(key?: RecentKey) { key ? this.lru.delete(key) : this.lru.clear(); }
+     size() { return this.lru.size; }
+   }
+
+   export const recentlyServedCache: RecentlyServedCache = new RecentlyServedCacheImpl();
+
+   export const makeRecentKey = (userId: string, sessionId: string): RecentKey =>
+     `${userId}:${sessionId}`;
+   ```
+
+2. **Standardize the key format**
+
+   * Use a **composite key** `${userId}:${sessionId}` everywhere. This avoids cross-user collisions if session ids are not globally unique.
+   * Export `makeRecentKey()` so routes can’t drift.
+
+3. **Kill the shadowing Map and fix the route**
+
+   * Remove the local `const recentlyServedCache = new Map(...)` from `server/routes.ts`.
+   * Always import and use the singleton + `makeRecentKey`.
+
+   ```diff
+   // server/routes.ts
+   - import { recentlyServedCache } from "./recently-served-cache";
+   + import { recentlyServedCache, makeRecentKey } from "./recently-served-cache";
+
+   ...
+   - const recentlyServedCache = new Map<string, string[]>(); // ❌ shadowing
+   ...
+   export async function getNextArtwork(req, res) {
+     const { userId, sessionId } = req.ctx;
+   - const recent = recentlyServedCache.get(sessionId) ?? [];
+   + const key = makeRecentKey(userId, sessionId);
+   + const recent = recentlyServedCache.getRecentIds(key, 50);
+     // pass `recent` to catalogue bridge / dedupe
+   }
+   ```
+
+4. **Type-safe guard**
+
+   * Add a runtime assert once in route bootstrap (dev builds) to catch future shadowing:
+
+   ```ts
+   if (typeof (recentlyServedCache as any).getRecentIds !== 'function') {
+     throw new Error('recentlyServedCache wiring error: getRecentIds missing (shadowing?)');
+   }
+   ```
+
+5. **Lint rule to prevent recurrence**
+
+   * Enable and enforce:
+
+     * `eslint`: `"no-shadow": "error"`
+     * `@typescript-eslint/no-shadow`: `"error"`
+     * `import/no-duplicates`: `"error"`
+   * Consider naming convention rule: **do not** declare local consts that match imported bindings.
+
+6. **Eviction & memory**
+
+   * If this cache grows, implement TTL/LRU (e.g., `lru-cache` with `max: 10_000`, `ttl: 15 * 60 * 1000`). This prevents memory bloat under many sessions and ensures “recent” actually means recent.
+
+7. **Telemetry normalization**
+
+   * Add a counter `catalogue_bridge_shadowing_detected` (should remain zero).
+   * Keep `catalogue_bridge_latency_ms` histogram; verify return to **<100 ms p95** after fix.
+   * Record `render_path{mode=prewarmed|jit}`; goal is **prewarmed > 95%**.
+
+---
+
+# Test plan (catch both the bug and future regressions)
+
+**Unit**
+
+* Route uses imported methods:
+
+  * Mock `recentlyServedCache.getRecentIds` → route must call it with `makeRecentKey(userId, sessionId)`.
+* Key shape:
+
+  * Sessions with same `sessionId` but different `userId` do not share recent list.
+
+**Integration**
+
+* Start server with a fake local `const recentlyServedCache = ...` in a test route: build should fail lint.
+* `/api/artworks/next`:
+
+  * With seeded `recentlyServedCache.push(key, id)`, ensure the handler excludes `id`.
+  * Latency ≤ 100 ms without JIT fallback.
+  * GPU prewarm path observed in logs/metrics.
+
+**E2E**
+
+* Rapid transitions (20 frames) show no visible hitch; `render_path=prewarmed`.
+* Error rate for `/api/artworks/next` returns to baseline (<0.5%).
+
+---
+
+# Rollout steps
+
+1. Patch + lint rules; build pipeline must fail on future shadowing.
+2. Canary 10% traffic; watch:
+
+   * 5xx rate,
+   * p95 route latency,
+   * `render_path` distribution.
+3. Full rollout; keep canary guard for 1 hour.
+4. Post-deploy: clear historical “false” error events from dashboard (to avoid alert fatigue).
+
+---
+
+# Optional niceties
+
+* **DI container**: Inject `recentlyServedCache` into route constructors; makes shadowing impossible.
+* **TS types on route ctx**: `ctx.recentKey = makeRecentKey(userId, sessionId)` once, pass around.
+* **Runtime warning**: If a local variable has the same name as an import, log a dev warning (can be done via a Babel/ts-transform plugin in dev).
+
+---
+
+# Go / No-Go
+
+**Go.** Your Option B consolidation + the hardening above will:
+
+* remove the crash,
+* restore catalogue prewarm (<100 ms),
+* improve reliability,
+* and make the regression impossible to reintroduce silently.
+
+If you want, I can also produce a tiny PR-style patch (diff) tailored to your repo layout—including the lint config updates and a Jest test that reproduces the original failure and proves the fix.
