@@ -654,6 +654,94 @@ export class GenerationHealthService implements GenerationHealthPort {
       totalSuccesses: fullMetrics.totalSuccesses
     };
   }
+
+  /**
+   * Force the circuit breaker open for testing purposes
+   * @param durationMs - How long to keep the breaker open (defaults to OPEN_DURATION_MS)
+   * @returns Previous breaker state
+   */
+  forceOpen(durationMs?: number): 'closed' | 'open' | 'half-open' {
+    const previousState = this.getBreakerState();
+    const duration = durationMs || this.OPEN_DURATION_MS;
+    
+    // Force the breaker open
+    this.openUntil = Date.now() + duration;
+    this.tokens = this.OPEN_TOKENS;
+    this.consecutiveRecoverySuccesses = 0;
+    this.recoveryBatchSize = 1;
+    
+    telemetryService.recordEvent({
+      event: 'test.breaker_forced_open',
+      category: 'test',
+      severity: 'warning',
+      metrics: {
+        previous_state: previousState,
+        duration_ms: duration,
+        tokens: this.tokens
+      }
+    });
+    
+    return previousState;
+  }
+
+  /**
+   * Force the circuit breaker closed for testing purposes
+   * @returns Previous breaker state
+   */
+  forceClosed(): 'closed' | 'open' | 'half-open' {
+    const previousState = this.getBreakerState();
+    
+    // Reset the breaker to closed state
+    this.openUntil = 0;
+    this.tokens = 0;
+    this.consecutiveFailures = 0;
+    this.consecutiveRecoverySuccesses = 0;
+    this.recoveryBatchSize = 5;
+    this.slidingWindow = [];
+    
+    telemetryService.recordEvent({
+      event: 'test.breaker_reset',
+      category: 'test',
+      severity: 'info',
+      metrics: {
+        previous_state: previousState,
+        tokens_cleared: true,
+        failures_reset: true
+      }
+    });
+    
+    return previousState;
+  }
+
+  /**
+   * Get extended status for testing/monitoring
+   */
+  getDetailedStatus() {
+    this.refill();
+    
+    const fullMetrics = this.getHealthMetrics();
+    
+    return {
+      state: this.getBreakerState(),
+      tokens: this.tokens,
+      openUntil: this.openUntil > Date.now() ? new Date(this.openUntil).toISOString() : null,
+      timeoutMs: this.getTimeout(),
+      metrics: fullMetrics,
+      slidingWindowSize: this.slidingWindow.length,
+      slidingWindowFailures: this.slidingWindow.filter(r => !r).length,
+      recoveryProgress: {
+        consecutiveSuccesses: this.consecutiveRecoverySuccesses,
+        requiredSuccesses: this.RECOVERY_SUCCESS_COUNT,
+        batchSize: this.recoveryBatchSize
+      },
+      tokenBucket: {
+        currentTokens: this.tokens,
+        maxTokens: this.OPEN_TOKENS,
+        refillRateMs: this.REFILL_MS,
+        lastRefillTime: new Date(this.lastRefill).toISOString()
+      }
+    };
+  }
 }
 
 // Singleton instance

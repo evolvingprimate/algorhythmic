@@ -4,7 +4,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { raw } from "express";
 import Stripe from "stripe";
 import { storage } from "./storage";
-import { generateArtPrompt, generateArtImage, queueController } from "./bootstrap";
+import { generateArtPrompt, generateArtImage, queueController, generationHealthService, recoveryManager } from "./bootstrap";
 import { identifyMusic } from "./music-service";
 import { insertArtVoteSchema, insertArtPreferenceSchema, type AudioAnalysis, type MusicIdentification, telemetryEvents } from "@shared/schema";
 import { and, sql } from "drizzle-orm";
@@ -167,6 +167,180 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error("Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ============================================================================
+  // Circuit Breaker Test Endpoints (Development/Testing Only)
+  // ============================================================================
+
+  // Test endpoint to force circuit breaker open
+  app.post('/api/test/force-breaker-open', async (req: any, res) => {
+    try {
+      // Check if testing is allowed
+      if (process.env.NODE_ENV === 'production' && 
+          req.headers['x-test-service-token'] !== process.env.TEST_SERVICE_TOKEN) {
+        return res.status(403).json({ message: "Test endpoints disabled in production" });
+      }
+
+      const { durationMs } = req.body;
+      const previousState = generationHealthService.forceOpen(durationMs);
+      const newStatus = generationHealthService.getDetailedStatus();
+
+      // Record telemetry
+      telemetryService.recordEvent({
+        event: 'test.breaker_forced_open',
+        category: 'test',
+        severity: 'warning',
+        metrics: {
+          previous_state: previousState,
+          new_state: newStatus.state,
+          duration_ms: durationMs || 300000
+        }
+      });
+
+      console.log('[Test API] Forced circuit breaker open', { previousState, newState: newStatus.state });
+
+      res.json({
+        success: true,
+        previousState,
+        currentState: newStatus.state,
+        status: newStatus
+      });
+    } catch (error: any) {
+      console.error("Error forcing breaker open:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Test endpoint to reset circuit breaker to closed
+  app.post('/api/test/force-breaker-closed', async (req: any, res) => {
+    try {
+      // Check if testing is allowed
+      if (process.env.NODE_ENV === 'production' && 
+          req.headers['x-test-service-token'] !== process.env.TEST_SERVICE_TOKEN) {
+        return res.status(403).json({ message: "Test endpoints disabled in production" });
+      }
+
+      const previousState = generationHealthService.forceClosed();
+      const newStatus = generationHealthService.getDetailedStatus();
+
+      // Record telemetry
+      telemetryService.recordEvent({
+        event: 'test.breaker_reset',
+        category: 'test',
+        severity: 'info',
+        metrics: {
+          previous_state: previousState,
+          new_state: newStatus.state
+        }
+      });
+
+      console.log('[Test API] Reset circuit breaker to closed', { previousState, newState: newStatus.state });
+
+      res.json({
+        success: true,
+        previousState,
+        currentState: newStatus.state,
+        status: newStatus
+      });
+    } catch (error: any) {
+      console.error("Error resetting breaker:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Test endpoint to get circuit breaker status
+  app.get('/api/test/breaker-status', async (req: any, res) => {
+    try {
+      // Check if testing is allowed
+      if (process.env.NODE_ENV === 'production' && 
+          req.headers['x-test-service-token'] !== process.env.TEST_SERVICE_TOKEN) {
+        return res.status(403).json({ message: "Test endpoints disabled in production" });
+      }
+
+      const status = generationHealthService.getDetailedStatus();
+      res.json(status);
+    } catch (error: any) {
+      console.error("Error getting breaker status:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ============================================================================
+  // Resilience Monitoring Endpoint
+  // ============================================================================
+
+  // Comprehensive resilience monitoring endpoint
+  app.get('/api/monitoring/resilience', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      
+      // Get circuit breaker status
+      const breakerStatus = generationHealthService.getDetailedStatus();
+      
+      // Get recent generation attempts from telemetry
+      const recentGenerations = await storage.getRecentGenerations(userId, 10);
+      
+      // Get fallback cascade metrics from storage
+      const fallbackMetrics = await storage.getFallbackMetrics(userId);
+      
+      // Get queue controller status
+      const queueState = queueController.getState();
+      const queueDecision = queueController.getGenerationDecision();
+      
+      // Get recovery manager status  
+      const recoveryStatus = recoveryManager.getStatus();
+      
+      // Compile comprehensive resilience status
+      const resilienceStatus = {
+        circuitBreaker: {
+          state: breakerStatus.state,
+          tokens: breakerStatus.tokenBucket,
+          timeoutMs: breakerStatus.timeoutMs,
+          openUntil: breakerStatus.openUntil,
+          metrics: breakerStatus.metrics,
+          slidingWindow: {
+            size: breakerStatus.slidingWindowSize,
+            failures: breakerStatus.slidingWindowFailures
+          },
+          recovery: breakerStatus.recoveryProgress
+        },
+        queueController: {
+          state: queueState,
+          decision: queueDecision,
+          targetFrames: queueController.TARGET_FRAMES,
+          minFrames: queueController.MIN_FRAMES,
+          maxFrames: queueController.MAX_FRAMES
+        },
+        recoveryManager: {
+          isRecovering: recoveryStatus.isRecovering,
+          recoveryQueue: recoveryStatus.recoveryQueue,
+          lastRecoveryAttempt: recoveryStatus.lastRecoveryAttempt
+        },
+        fallbackCascade: {
+          catalogHits: fallbackMetrics?.catalogHits || 0,
+          proceduralHits: fallbackMetrics?.proceduralHits || 0,
+          totalFallbacks: fallbackMetrics?.totalFallbacks || 0,
+          lastFallbackTier: fallbackMetrics?.lastTier || null,
+          lastFallbackTime: fallbackMetrics?.lastFallbackTime || null
+        },
+        recentGenerations: recentGenerations.map(gen => ({
+          id: gen.id,
+          timestamp: gen.createdAt,
+          status: gen.status,
+          source: gen.metadata?.source || 'fresh',
+          latencyMs: gen.metadata?.latencyMs || null,
+          fallbackTier: gen.metadata?.fallbackTier || null,
+          error: gen.metadata?.error || null
+        })),
+        timestamp: new Date().toISOString()
+      };
+      
+      res.json(resilienceStatus);
+    } catch (error: any) {
+      console.error("Error getting resilience status:", error);
       res.status(500).json({ message: error.message });
     }
   });
