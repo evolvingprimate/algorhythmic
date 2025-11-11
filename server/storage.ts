@@ -171,6 +171,16 @@ export interface IStorage {
   getGenerationJob(id: string): Promise<GenerationJob | undefined>;
   updateGenerationJob(id: string, updates: Partial<GenerationJob>): Promise<GenerationJob>;
   getPoolCandidates(userId: string, limit?: number, minQuality?: number): Promise<ArtSession[]>;
+  
+  // Queue management (for Queue Controller)
+  getFreshQueueSize(sessionId: string): Promise<number>;
+  getQueueMetrics(sessionId: string): Promise<{
+    freshCount: number;
+    totalCount: number;
+    oldestTimestamp: Date | null;
+    consumptionRate: number;
+    generationRate: number;
+  }>;
 }
 
 export class MemStorage implements IStorage {
@@ -769,6 +779,53 @@ export class MemStorage implements IStorage {
     
     // Return limited results
     return shuffled.slice(0, limit);
+  }
+  
+  // Queue management methods (for Queue Controller)
+  async getFreshQueueSize(sessionId: string): Promise<number> {
+    // Count art sessions for this session that haven't been consumed yet
+    // In MemStorage, we'll approximate this by counting recent sessions
+    const recentSessions = Array.from(this.sessions.values())
+      .filter(session => {
+        if (session.sessionId !== sessionId) return false;
+        // Check if created within last hour (fresh queue)
+        const hourAgo = new Date(Date.now() - 60 * 60 * 1000);
+        return session.createdAt > hourAgo;
+      });
+    
+    return recentSessions.length;
+  }
+  
+  async getQueueMetrics(sessionId: string): Promise<{
+    freshCount: number;
+    totalCount: number;
+    oldestTimestamp: Date | null;
+    consumptionRate: number;
+    generationRate: number;
+  }> {
+    // Get all sessions for this sessionId
+    const sessionArtworks = Array.from(this.sessions.values())
+      .filter(session => session.sessionId === sessionId)
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+    
+    // Fresh count: artworks created in last hour
+    const hourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const freshCount = sessionArtworks.filter(s => s.createdAt > hourAgo).length;
+    
+    // Get oldest timestamp
+    const oldestTimestamp = sessionArtworks.length > 0 ? sessionArtworks[0].createdAt : null;
+    
+    // Calculate rates based on recent activity (simplified for MemStorage)
+    const minuteAgo = new Date(Date.now() - 60 * 1000);
+    const recentGenerations = sessionArtworks.filter(s => s.createdAt > minuteAgo).length;
+    
+    return {
+      freshCount,
+      totalCount: sessionArtworks.length,
+      oldestTimestamp,
+      consumptionRate: 0, // Would need tracking of consumption events
+      generationRate: recentGenerations // Approximation: recent generations per minute
+    };
   }
 }
 
@@ -2212,6 +2269,88 @@ export class PostgresStorage implements IStorage {
       .limit(limit);
     
     return results;
+  }
+  
+  // Queue management methods (for Queue Controller)
+  async getFreshQueueSize(sessionId: string): Promise<number> {
+    // Count fresh, unconsumed artworks for this session
+    // Consider "fresh" as artworks created in last hour that haven't been marked as consumed
+    const hourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    
+    const result = await this.db
+      .select({ count: sql<number>`COUNT(*)` })
+      .from(artSessions)
+      .where(
+        and(
+          eq(artSessions.sessionId, sessionId),
+          gte(artSessions.createdAt, hourAgo),
+          // Could add a 'consumed' flag in the future for more accurate tracking
+        )
+      );
+    
+    return Number(result[0]?.count ?? 0);
+  }
+  
+  async getQueueMetrics(sessionId: string): Promise<{
+    freshCount: number;
+    totalCount: number;
+    oldestTimestamp: Date | null;
+    consumptionRate: number;
+    generationRate: number;
+  }> {
+    // Get total count and oldest timestamp for this session
+    const sessionStats = await this.db
+      .select({
+        totalCount: sql<number>`COUNT(*)`,
+        oldestTimestamp: sql<Date | null>`MIN(${artSessions.createdAt})`,
+      })
+      .from(artSessions)
+      .where(eq(artSessions.sessionId, sessionId));
+    
+    // Get fresh count (last hour)
+    const hourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const freshResult = await this.db
+      .select({ count: sql<number>`COUNT(*)` })
+      .from(artSessions)
+      .where(
+        and(
+          eq(artSessions.sessionId, sessionId),
+          gte(artSessions.createdAt, hourAgo)
+        )
+      );
+    
+    // Calculate generation rate (last minute)
+    const minuteAgo = new Date(Date.now() - 60 * 1000);
+    const recentGenResult = await this.db
+      .select({ count: sql<number>`COUNT(*)` })
+      .from(artSessions)
+      .where(
+        and(
+          eq(artSessions.sessionId, sessionId),
+          gte(artSessions.createdAt, minuteAgo)
+        )
+      );
+    
+    // Note: Consumption rate would require tracking actual consumption events
+    // For now, we'll estimate based on impression records
+    const recentConsumptionResult = await this.db
+      .select({ count: sql<number>`COUNT(*)` })
+      .from(userArtImpressions)
+      .innerJoin(artSessions, eq(userArtImpressions.artworkId, artSessions.id))
+      .where(
+        and(
+          eq(artSessions.sessionId, sessionId),
+          gte(userArtImpressions.viewedAt, minuteAgo)
+        )
+      );
+    
+    return {
+      freshCount: Number(freshResult[0]?.count ?? 0),
+      totalCount: Number(sessionStats[0]?.totalCount ?? 0),
+      oldestTimestamp: sessionStats[0]?.oldestTimestamp ?? null,
+      consumptionRate: Number(recentConsumptionResult[0]?.count ?? 0), // Frames consumed per minute
+      generationRate: Number(recentGenResult[0]?.count ?? 0), // Frames generated per minute
+    };
   }
 }
 

@@ -14,6 +14,7 @@ import { generateWithFallback, resolveAutoMode, buildContextualPrompt } from "./
 import { createDefaultAudioAnalysis } from "./generation/audioAnalyzer";
 import { findBestCatalogMatch, type CatalogMatchRequest } from "./generation/catalogMatcher";
 import { recentlyServedCache, makeRecentKey } from "./recently-served-cache";
+import { queueController } from "./queue-controller";
 
 // Initialize Stripe only if keys are available (optional for MVP)
 let stripe: Stripe | null = null;
@@ -1577,6 +1578,190 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     }
   }
+
+  // ============================================================================
+  // Artwork Generation with Queue Controller
+  // ============================================================================
+  
+  app.post('/api/artwork/generate', testAuthBypass, isAuthenticated, async (req: any, res) => {
+    try {
+      const { sessionId, audioAnalysis, preferences } = req.body;
+      
+      if (!sessionId) {
+        return res.status(400).json({ message: "sessionId is required" });
+      }
+      
+      const userId = req.user.claims.sub;
+      
+      // Get queue metrics for the Queue Controller
+      const queueMetrics = await storage.getQueueMetrics(sessionId);
+      
+      // Prepare metrics for the Queue Controller
+      const metrics = {
+        queueSize: queueMetrics.freshCount,
+        targetSize: queueController.TARGET_FRAMES,
+        minSize: queueController.MIN_FRAMES,
+        maxSize: queueController.MAX_FRAMES,
+        generationRate: queueMetrics.generationRate,
+        consumptionRate: queueMetrics.consumptionRate
+      };
+      
+      // Process tick and get current state
+      const state = queueController.tick(metrics);
+      
+      // Record telemetry
+      const shouldGenerate = queueController.shouldGenerateFrame();
+      const batchSize = queueController.getRecommendedBatchSize();
+      queueController.recordTelemetry(
+        queueMetrics.freshCount,
+        shouldGenerate ? 'generate' : 'skip',
+        batchSize
+      );
+      
+      console.log('[Queue Controller] State:', state, 'Queue size:', queueMetrics.freshCount, 
+                  'Should generate:', shouldGenerate, 'Batch size:', batchSize);
+      
+      // Check if we should generate
+      if (!shouldGenerate) {
+        return res.json({
+          status: 'queue_full',
+          state,
+          metrics: queueController.getMetrics(),
+          message: 'Queue is full, waiting for frames to be consumed'
+        });
+      }
+      
+      // Generate frames based on batch size
+      const generatedFrames = [];
+      
+      for (let i = 0; i < batchSize; i++) {
+        try {
+          // Use the existing generation orchestrator
+          const generationResult = await generateWithFallback(
+            {
+              sessionId,
+              userId,
+              preferences: preferences || { styles: [], artists: [] },
+              audioAnalysis: audioAnalysis || createDefaultAudioAnalysis(),
+              musicIdentification: null
+            },
+            'auto' // Use auto mode for generation
+          );
+          
+          if (generationResult.success && generationResult.artwork) {
+            // Store the generated artwork
+            const artSession = await storage.createArtSession({
+              sessionId,
+              userId,
+              imageUrl: generationResult.artwork.imageUrl,
+              prompt: generationResult.artwork.prompt,
+              audioFeatures: audioAnalysis ? JSON.stringify(audioAnalysis) : null,
+              generationExplanation: generationResult.artwork.explanation || null,
+              styles: preferences?.styles || [],
+              artists: preferences?.artists || []
+            });
+            
+            generatedFrames.push({
+              id: artSession.id,
+              imageUrl: artSession.imageUrl,
+              prompt: artSession.prompt
+            });
+            
+            // Record generation for rate tracking
+            queueController.recordGeneration(1);
+          }
+        } catch (genError) {
+          console.error(`[Queue Controller] Failed to generate frame ${i + 1}:`, genError);
+          // Continue with other frames even if one fails
+        }
+      }
+      
+      // Return response with generated frames and queue state
+      res.json({
+        status: 'success',
+        state,
+        batchSize,
+        framesGenerated: generatedFrames.length,
+        frames: generatedFrames,
+        metrics: queueController.getMetrics(),
+        queueState: {
+          current: queueMetrics.freshCount,
+          target: queueController.TARGET_FRAMES,
+          min: queueController.MIN_FRAMES,
+          max: queueController.MAX_FRAMES
+        }
+      });
+      
+    } catch (error: any) {
+      console.error('[Queue Controller] Generation error:', error);
+      res.status(500).json({ 
+        message: 'Failed to generate artwork',
+        error: error.message 
+      });
+    }
+  });
+  
+  // Queue Controller Status Endpoint
+  app.get('/api/queue/status/:sessionId', async (req, res) => {
+    try {
+      const { sessionId } = req.params;
+      
+      // Get queue metrics
+      const queueMetrics = await storage.getQueueMetrics(sessionId);
+      
+      // Get controller state
+      const controllerMetrics = queueController.getMetrics();
+      
+      res.json({
+        sessionId,
+        queue: {
+          freshCount: queueMetrics.freshCount,
+          totalCount: queueMetrics.totalCount,
+          oldestTimestamp: queueMetrics.oldestTimestamp,
+          generationRate: queueMetrics.generationRate,
+          consumptionRate: queueMetrics.consumptionRate
+        },
+        controller: {
+          state: controllerMetrics.currentState,
+          stateChangeCounter: controllerMetrics.stateChangeCounter,
+          targetState: controllerMetrics.lastTargetState,
+          thresholds: {
+            min: queueController.MIN_FRAMES,
+            target: queueController.TARGET_FRAMES,
+            max: queueController.MAX_FRAMES
+          }
+        },
+        telemetry: queueController.getTelemetryHistory(10)
+      });
+    } catch (error: any) {
+      console.error('[Queue Controller] Status error:', error);
+      res.status(500).json({ 
+        message: 'Failed to get queue status',
+        error: error.message 
+      });
+    }
+  });
+  
+  // Queue Controller Telemetry Endpoint
+  app.get('/api/queue/telemetry', (req, res) => {
+    try {
+      const limit = parseInt(req.query.limit as string) || 50;
+      const telemetry = queueController.getTelemetryHistory(limit);
+      
+      res.json({
+        count: telemetry.length,
+        telemetry,
+        currentState: queueController.getState(),
+        metrics: queueController.getMetrics()
+      });
+    } catch (error: any) {
+      console.error('[Queue Controller] Telemetry error:', error);
+      res.status(500).json({ 
+        message: 'Failed to get telemetry',
+        error: error.message 
+      });
+    }
+  });
 
   wss.on('connection', (ws: WebSocket) => {
     console.log('Client connected to WebSocket');
