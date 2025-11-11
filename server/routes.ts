@@ -1008,24 +1008,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
               artistTags: [], // Remove artist filter in emergency
             });
             
-            // FIX: Don't apply recently-served filter if it would leave <2 frames
-            const unfiltered = emergencyStorage;
-            const filtered = emergencyStorage.filter((a: any) => !recentlyServedIds.has(a.id));
+            // CRITICAL VALIDATION: Filter out any artworks without imageUrl
+            const validStorage = emergencyStorage.filter((a: any) => {
+              if (!a.imageUrl) {
+                console.error(`[EmergencyFallback] ❌ Artwork ${a.id} missing imageUrl!`);
+                return false;
+              }
+              return true;
+            });
             
-            if (filtered.length >= 2) {
-              // Use filtered if we have enough frames
-              combinedArtworks = filtered.slice(0, 20);
-              console.warn(`[EmergencyFallback] Using ${combinedArtworks.length} filtered storage artworks for user ${userId}`);
-            } else if (unfiltered.length >= 2) {
-              // CRITICAL: Use unfiltered to prevent glitch (bypass recently-served)
-              combinedArtworks = unfiltered.slice(0, Math.max(2, filtered.length));
-              console.warn(`[EmergencyFallback] GLITCH PREVENTION: Using ${combinedArtworks.length} unfiltered artworks (bypassing recently-served) for user ${userId}`);
-              // Don't cache these to allow fresh rotation next time
-              (telemetry as any).cache_bypassed = true;
+            if (validStorage.length === 0) {
+              console.error(`[EmergencyFallback] ❌ CRITICAL: No valid artworks with imageUrl found!`);
+              // Generate procedural fallback artwork
+              combinedArtworks = [{
+                id: `procedural-emergency-${Date.now()}`,
+                sessionId: sessionId || 'emergency',
+                userId,
+                imageUrl: '/assets/fallback-art.jpg', // Use a default fallback image
+                prompt: 'Emergency procedural fallback',
+                dnaVector: JSON.stringify(Array(50).fill(0).map(() => Math.random() * 3)),
+                createdAt: new Date(),
+                styles: [],
+                artists: [],
+                orientation: orientation || 'landscape'
+              }];
             } else {
-              // Last resort: Use whatever we have
-              combinedArtworks = unfiltered;
-              console.error(`[EmergencyFallback] CRITICAL: Only ${combinedArtworks.length} artworks available for user ${userId}`);
+              // FIX: Don't apply recently-served filter if it would leave <2 frames
+              const unfiltered = validStorage;
+              const filtered = validStorage.filter((a: any) => !recentlyServedIds.has(a.id));
+              
+              if (filtered.length >= 2) {
+                // Use filtered if we have enough frames
+                combinedArtworks = filtered.slice(0, 20);
+                console.warn(`[EmergencyFallback] Using ${combinedArtworks.length} filtered storage artworks for user ${userId}`);
+              } else if (unfiltered.length >= 2) {
+                // CRITICAL: Use unfiltered to prevent glitch (bypass recently-served)
+                combinedArtworks = unfiltered.slice(0, Math.max(2, filtered.length));
+                console.warn(`[EmergencyFallback] GLITCH PREVENTION: Using ${combinedArtworks.length} unfiltered artworks (bypassing recently-served) for user ${userId}`);
+                // Don't cache these to allow fresh rotation next time
+                (telemetry as any).cache_bypassed = true;
+              } else {
+                // Last resort: Use whatever we have
+                combinedArtworks = unfiltered;
+                console.error(`[EmergencyFallback] CRITICAL: Only ${combinedArtworks.length} artworks available for user ${userId}`);
+              }
             }
           }
           
