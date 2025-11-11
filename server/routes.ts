@@ -1008,13 +1008,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
             combinedArtworks = emergencyFresh;
             console.warn(`[EmergencyFallback] Using ${combinedArtworks.length} fresh artworks (recently-served filter bypassed) for user ${userId} session ${sessionId}`);
           } else {
-            // Second try: Get ANY storage artworks without recently-served filter
-            // CRITICAL FIX: Bypass recently-served filter in emergency to ensure 2+ frames
-            const emergencyStorage = await storage.getUnseenArtworks(userId, {
+            // Second try: Use randomized emergency fallback for variety
+            // CRITICAL FIX: Use new method with ORDER BY RANDOM() to prevent same 2 frames
+            const emergencyStorage = await storage.getEmergencyFallbackArtworks(userId, {
               limit: 50, // Get more to survive filtering
               orientation,
-              styleTags: [], // Remove style filter in emergency
-              artistTags: [], // Remove artist filter in emergency
             });
             
             // CRITICAL VALIDATION: Filter out any artworks without imageUrl

@@ -1176,6 +1176,46 @@ export class PostgresStorage implements IStorage {
     return results.slice(0, limit); // Ensure we don't exceed limit
   }
 
+  // CRITICAL FIX: Emergency fallback with randomization to prevent cycling same frames
+  async getEmergencyFallbackArtworks(
+    userId: string, 
+    options?: {
+      limit?: number;
+      orientation?: string;
+    }
+  ): Promise<ArtSession[]> {
+    const limit = options?.limit ?? 20;
+    const orientation = options?.orientation;
+    
+    try {
+      // Use ORDER BY RANDOM() for variety instead of same 2 frames every time
+      const result = await this.db.execute<ArtSession>(sql`
+        SELECT ${sql.join(Object.values(getTableColumns(artSessions)).map(column => sql.identifier(column.name)), sql`, `)}
+        FROM ${artSessions}
+        WHERE ${artSessions.imageUrl} IS NOT NULL
+          ${orientation ? sql`AND ${artSessions.orientation} = ${orientation}` : sql``}
+        ORDER BY RANDOM()
+        LIMIT ${limit}
+      `);
+      
+      console.log(`[EmergencyFallback] Retrieved ${result.rows.length} random artworks for variety`);
+      return result.rows;
+    } catch (error) {
+      console.error('[EmergencyFallback] Random query failed:', error);
+      // Last resort: return any artworks we can find
+      try {
+        const fallback = await this.db
+          .select()
+          .from(artSessions)
+          .where(sql`${artSessions.imageUrl} IS NOT NULL`)
+          .limit(limit);
+        return fallback;
+      } catch (e) {
+        return [];
+      }
+    }
+  }
+
   async getFreshArtworks(sessionId: string, userId: string, limit: number = 20): Promise<ArtSession[]> {
     // Fresh artwork: created in this session within last 15 minutes
     // BUG FIX #5: NOW FILTERS BY IMPRESSIONS - ensures "never repeat" guarantee
