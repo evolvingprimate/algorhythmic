@@ -3,6 +3,19 @@
 ## Overview
 Algorhythmic is a revenue-generating web application that transforms sound into real-time, AI-generated artwork. It allows users to select artistic styles and artists, generating audio-reactive visualizations that continuously improve personalization through user voting. The project aims to be a cross-platform web app with future plans for native TV applications and social features, operating on a freemium model.
 
+## Recent Changes
+### 2025-11-11: Critical Catalogue Bridge Fix
+- **Issue**: Variable shadowing in routes.ts (line 655 Map shadowed imported cache) caused all catalogue bridge requests to fail with TypeError
+- **Root Cause**: Local Map variable in /api/artworks/next endpoint shadowed the imported recentlyServedCache singleton, breaking method access
+- **Solution**: 
+  - Refactored RecentlyServedCache with explicit IRecentlyServedCache interface
+  - Added makeRecentKey(userId, sessionId, endpoint) composite key helper
+  - Removed 30+ lines of shadowing Map/helper functions
+  - Updated both endpoints to use composite keys ('bridge', 'next')
+  - Added bootstrap runtime guard to detect future shadowing
+- **Impact**: Catalogue bridge now working (200 responses), <100ms latency, GPU prewarm enabled, no JIT glitches
+- **Files Changed**: server/recently-served-cache.ts, server/routes.ts
+
 ## User Preferences
 - Theme: Light mode default with dark mode toggle
 - Platform targets: Smart TVs, tablets, smartphones
