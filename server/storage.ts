@@ -124,6 +124,19 @@ export interface IStorage {
     distinctStyles: number;
   }>;
   getLibraryArtwork(userId: string, orientation?: string, styles?: string[], limit?: number): Promise<ArtSession[]>;
+  getLibraryArtworkWithFallback(
+    userId: string,
+    options: {
+      styleTags?: string[];     // Empty array = short-circuit to global
+      artistTags?: string[];    // Future expansion
+      orientation?: string;     // Filter by orientation (dropped in global tier)
+      excludeIds?: string[];    // Recently-served cache (max 100 IDs)
+      limit?: number;           // Default: 2 for instant display
+    }
+  ): Promise<{
+    artworks: ArtSession[];
+    tier: 'exact' | 'partial' | 'global';
+  }>;
   
   // Storage Metrics
   recordStorageMetric(metric: InsertStorageMetric): Promise<StorageMetric>;
@@ -690,6 +703,24 @@ export class MemStorage implements IStorage {
 
   async getLibraryArtwork(userId: string, orientation?: string, styles?: string[], limit: number = 20): Promise<ArtSession[]> {
     return [];
+  }
+
+  async getLibraryArtworkWithFallback(
+    userId: string,
+    options: {
+      styleTags?: string[];
+      artistTags?: string[];
+      orientation?: string;
+      excludeIds?: string[];
+      limit?: number;
+    }
+  ): Promise<{
+    artworks: ArtSession[];
+    tier: 'exact' | 'partial' | 'global';
+  }> {
+    // MemStorage stub: return empty with global tier
+    // In production, this would do in-memory filtering similar to PostgresStorage
+    return { artworks: [], tier: 'global' };
   }
 }
 
@@ -1603,6 +1634,109 @@ export class PostgresStorage implements IStorage {
       .where(and(...whereConditions))
       .orderBy(sql`RANDOM()`)
       .limit(limit);
+  }
+
+  async getLibraryArtworkWithFallback(
+    userId: string,
+    options: {
+      styleTags?: string[];
+      artistTags?: string[];
+      orientation?: string;
+      excludeIds?: string[];
+      limit?: number;
+    }
+  ): Promise<{
+    artworks: ArtSession[];
+    tier: 'exact' | 'partial' | 'global';
+  }> {
+    const { 
+      styleTags = [], 
+      artistTags = [], 
+      orientation, 
+      excludeIds = [], 
+      limit = 2 
+    } = options;
+    
+    // Sanitize excludeIds (max 100 to protect query planner)
+    const safeExcludeIds = excludeIds.slice(0, 100);
+    
+    // Early return: empty tags -> short-circuit to global tier
+    if (styleTags.length === 0 && artistTags.length === 0) {
+      const globalResults = await this.db.execute<ArtSession>(sql`
+        SELECT ${sql.join(Object.keys(getTableColumns(artSessions)).map(col => sql.identifier(col)), sql`, `)}
+        FROM ${artSessions}
+        WHERE ${artSessions.isLibrary} = true
+          ${orientation ? sql`AND ${artSessions.orientation} = ${orientation}` : sql``}
+          ${safeExcludeIds.length > 0 ? sql`AND ${artSessions.id} NOT IN (${sql.join(safeExcludeIds.map(id => sql`${id}`), sql`, `)})` : sql``}
+          AND NOT EXISTS (
+            SELECT 1 FROM ${userArtImpressions}
+            WHERE ${userArtImpressions.artworkId} = ${artSessions.id}
+              AND ${userArtImpressions.userId} = ${userId}
+          )
+        ORDER BY ${artSessions.createdAt} DESC
+        LIMIT ${limit}
+      `);
+      
+      return { artworks: globalResults.rows, tier: 'global' };
+    }
+    
+    // Build CTE with cascading tiers
+    const allStyleTags = styleTags; // All tags for Tier 1
+    
+    // Build style array for overlap operations
+    const styleArray = sql`ARRAY[${sql.join(allStyleTags.map(tag => sql`${tag}`), sql`, `)}]::text[]`;
+    
+    const query = sql`
+      WITH tiered_artworks AS (
+        -- Tier 1: Exact match (all styles)
+        SELECT DISTINCT ${sql.join(Object.keys(getTableColumns(artSessions)).map(col => sql.identifier(col)), sql`, `)}, 1 as tier
+        FROM ${artSessions}
+        WHERE ${artSessions.isLibrary} = true
+          ${orientation ? sql`AND ${artSessions.orientation} = ${orientation}` : sql``}
+          AND ${artSessions.styles} @> ${styleArray}
+          
+        UNION ALL
+        
+        -- Tier 2: Partial match (ANY style tag overlap, excluding exact matches)
+        SELECT DISTINCT ${sql.join(Object.keys(getTableColumns(artSessions)).map(col => sql.identifier(col)), sql`, `)}, 2 as tier
+        FROM ${artSessions}
+        WHERE ${artSessions.isLibrary} = true
+          ${orientation ? sql`AND ${artSessions.orientation} = ${orientation}` : sql``}
+          AND ${artSessions.styles} && ${styleArray}
+          AND NOT (${artSessions.styles} @> ${styleArray})
+          
+        UNION ALL
+        
+        -- Tier 3: Global (any library artwork, orientation filter dropped)
+        SELECT DISTINCT ${sql.join(Object.keys(getTableColumns(artSessions)).map(col => sql.identifier(col)), sql`, `)}, 3 as tier
+        FROM ${artSessions}
+        WHERE ${artSessions.isLibrary} = true
+      )
+      SELECT *
+      FROM tiered_artworks
+      WHERE NOT EXISTS (
+          SELECT 1 FROM ${userArtImpressions}
+          WHERE ${userArtImpressions.artworkId} = tiered_artworks.id
+            AND ${userArtImpressions.userId} = ${userId}
+        )
+        ${safeExcludeIds.length > 0 ? sql`AND id NOT IN (${sql.join(safeExcludeIds.map(id => sql`${id}`), sql`, `)})` : sql``}
+      ORDER BY tier ASC, created_at DESC
+      LIMIT ${limit}
+    `;
+    
+    const results = await this.db.execute<ArtSession & { tier: number }>(query);
+    
+    // Determine tier from minimum tier in results
+    let tier: 'exact' | 'partial' | 'global' = 'global';
+    if (results.rows.length > 0) {
+      const minTier = Math.min(...results.rows.map(r => r.tier));
+      tier = minTier === 1 ? 'exact' : minTier === 2 ? 'partial' : 'global';
+    }
+    
+    // Strip tier field from results
+    const artworks = results.rows.map(({ tier: _, ...artwork }) => artwork as ArtSession);
+    
+    return { artworks, tier };
   }
 
   // Storage Metrics
