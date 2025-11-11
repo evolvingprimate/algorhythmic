@@ -985,9 +985,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       console.log(`[Style Filtering] Result breakdown:`, telemetry);
       
-      // EMERGENCY FALLBACK: NEVER return empty array - re-fetch without recently-served filter
-      if (telemetry.pool_exhausted) {
-        console.error(`[ALERT] 🚨 Pool exhausted for user ${userId} session ${sessionId} - EMERGENCY FALLBACK ACTIVATED`);
+      // EMERGENCY FALLBACK: NEVER return <2 frames - morphEngine needs at least 2 to prevent glitches
+      if (telemetry.pool_exhausted || combinedArtworks.length < 2) {
+        console.error(`[ALERT] 🚨 Pool exhausted or insufficient frames (<2) for user ${userId} session ${sessionId} - EMERGENCY FALLBACK ACTIVATED`);
         
         try {
           // First try: Re-fetch fresh queue WITHOUT recently-served filter
@@ -995,35 +995,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
             ? await storage.getFreshArtworks(sessionId, userId, 20)
             : [];
           
-          if (emergencyFresh.length > 0) {
+          if (emergencyFresh.length >= 2) {
             combinedArtworks = emergencyFresh;
             console.warn(`[EmergencyFallback] Using ${combinedArtworks.length} fresh artworks (recently-served filter bypassed) for user ${userId} session ${sessionId}`);
           } else {
             // Second try: Get ANY storage artworks without recently-served filter
+            // CRITICAL FIX: Bypass recently-served filter in emergency to ensure 2+ frames
             const emergencyStorage = await storage.getUnseenArtworks(userId, {
-              limit: 20,
+              limit: 50, // Get more to survive filtering
               orientation,
               styleTags: [], // Remove style filter in emergency
               artistTags: [], // Remove artist filter in emergency
             });
             
-            if (emergencyStorage.length > 0) {
-              combinedArtworks = emergencyStorage;
-              console.warn(`[EmergencyFallback] Using ${combinedArtworks.length} storage artworks (filters relaxed) for user ${userId} session ${sessionId}`);
+            // FIX: Don't apply recently-served filter if it would leave <2 frames
+            const unfiltered = emergencyStorage;
+            const filtered = emergencyStorage.filter((a: any) => !recentlyServedIds.has(a.id));
+            
+            if (filtered.length >= 2) {
+              // Use filtered if we have enough frames
+              combinedArtworks = filtered.slice(0, 20);
+              console.warn(`[EmergencyFallback] Using ${combinedArtworks.length} filtered storage artworks for user ${userId}`);
+            } else if (unfiltered.length >= 2) {
+              // CRITICAL: Use unfiltered to prevent glitch (bypass recently-served)
+              combinedArtworks = unfiltered.slice(0, Math.max(2, filtered.length));
+              console.warn(`[EmergencyFallback] GLITCH PREVENTION: Using ${combinedArtworks.length} unfiltered artworks (bypassing recently-served) for user ${userId}`);
+              // Don't cache these to allow fresh rotation next time
+              (telemetry as any).cache_bypassed = true;
+            } else {
+              // Last resort: Use whatever we have
+              combinedArtworks = unfiltered;
+              console.error(`[EmergencyFallback] CRITICAL: Only ${combinedArtworks.length} artworks available for user ${userId}`);
             }
           }
           
           // Update telemetry
           telemetry.total_returned = combinedArtworks.length;
-          telemetry.pool_exhausted = combinedArtworks.length === 0;
+          telemetry.pool_exhausted = combinedArtworks.length < 2;
           
-          // Still cache these IDs to prevent immediate re-serving
-          if (cacheKey && combinedArtworks.length > 0) {
+          // Only cache if we didn't bypass filters
+          if (cacheKey && combinedArtworks.length > 0 && !(telemetry as any).cache_bypassed) {
             recentlyServedCache.markRecent(cacheKey, combinedArtworks.map(a => a.id));
           }
         } catch (fallbackError: any) {
           console.error(`[EmergencyFallback] Failed to fetch fallback artworks:`, fallbackError);
-          // Continue with empty array (will trigger generation)
+          // Continue with what we have
         }
       }
       
