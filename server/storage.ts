@@ -1705,7 +1705,7 @@ export class PostgresStorage implements IStorage {
     // Early return: empty tags -> short-circuit to global tier
     if (styleTags.length === 0 && artistTags.length === 0) {
       const globalResults = await this.db.execute<ArtSession>(sql`
-        SELECT ${sql.join(Object.keys(getTableColumns(artSessions)).map(col => sql.identifier(col)), sql`, `)}
+        SELECT ${sql.join(Object.values(getTableColumns(artSessions)).map(column => sql.identifier(column.name)), sql`, `)}
         FROM ${artSessions}
         WHERE ${artSessions.isLibrary} = true
           ${orientation ? sql`AND ${artSessions.orientation} = ${orientation}` : sql``}
@@ -1731,7 +1731,7 @@ export class PostgresStorage implements IStorage {
     const query = sql`
       WITH tiered_artworks AS (
         -- Tier 1: Exact match (all styles)
-        SELECT DISTINCT ${sql.join(Object.keys(getTableColumns(artSessions)).map(col => sql.identifier(col)), sql`, `)}, 1 as tier
+        SELECT DISTINCT ${sql.join(Object.values(getTableColumns(artSessions)).map(column => sql.identifier(column.name)), sql`, `)}, 1 as tier
         FROM ${artSessions}
         WHERE ${artSessions.isLibrary} = true
           ${orientation ? sql`AND ${artSessions.orientation} = ${orientation}` : sql``}
@@ -1740,7 +1740,7 @@ export class PostgresStorage implements IStorage {
         UNION ALL
         
         -- Tier 2: Partial match (ANY style tag overlap, excluding exact matches)
-        SELECT DISTINCT ${sql.join(Object.keys(getTableColumns(artSessions)).map(col => sql.identifier(col)), sql`, `)}, 2 as tier
+        SELECT DISTINCT ${sql.join(Object.values(getTableColumns(artSessions)).map(column => sql.identifier(column.name)), sql`, `)}, 2 as tier
         FROM ${artSessions}
         WHERE ${artSessions.isLibrary} = true
           ${orientation ? sql`AND ${artSessions.orientation} = ${orientation}` : sql``}
@@ -1750,7 +1750,7 @@ export class PostgresStorage implements IStorage {
         UNION ALL
         
         -- Tier 3: Global (any library artwork, orientation filter dropped)
-        SELECT DISTINCT ${sql.join(Object.keys(getTableColumns(artSessions)).map(col => sql.identifier(col)), sql`, `)}, 3 as tier
+        SELECT DISTINCT ${sql.join(Object.values(getTableColumns(artSessions)).map(column => sql.identifier(column.name)), sql`, `)}, 3 as tier
         FROM ${artSessions}
         WHERE ${artSessions.isLibrary} = true
       )
