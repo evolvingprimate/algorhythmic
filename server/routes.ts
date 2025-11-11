@@ -24,6 +24,46 @@ if (process.env.STRIPE_SECRET_KEY) {
   console.warn('Stripe not configured - payment features will be unavailable');
 }
 
+// ============================================================================
+// Test-only auth bypass middleware (gated behind non-production env)
+// ============================================================================
+const testAuthBypass = (req: any, res: any, next: any) => {
+  // Only allow in development/test environments
+  if (process.env.NODE_ENV === 'production') {
+    console.log('[TestAuthBypass] Skipping - production mode');
+    return next();
+  }
+  
+  // Check for TEST_SERVICE_TOKEN header
+  const testToken = req.headers['x-test-service-token'];
+  const validToken = process.env.TEST_SERVICE_TOKEN || 'test-e2e-bypass-token-dev-only';
+  
+  console.log('[TestAuthBypass] Checking auth bypass:', {
+    hasTestToken: !!testToken,
+    tokenMatches: testToken === validToken,
+    validToken: validToken.slice(0, 10) + '...',
+    receivedToken: testToken ? testToken.slice(0, 10) + '...' : 'none',
+    nodeEnv: process.env.NODE_ENV
+  });
+  
+  if (testToken && testToken === validToken) {
+    // Bypass auth - create minimal mock user
+    const userId = `test-user-${testToken.slice(0, 8)}`;
+    req.user = {
+      claims: {
+        sub: userId,
+        email: 'test@e2e.local'
+      }
+    };
+    console.log('[TestAuthBypass] ✓ Auth bypassed, mockUser:', userId);
+    return next();
+  }
+  
+  console.log('[TestAuthBypass] No valid test token, continuing to normal auth');
+  // No test token, continue to normal auth
+  next();
+};
+
 export async function registerRoutes(app: Express): Promise<Server> {
   // ============================================================================
   // TASK FIX: Bootstrap runtime guard - Detect future shadowing
@@ -159,7 +199,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Catalogue Bridge: Instant artwork display via cascading library search
   // ============================================================================
   
-  app.post("/api/catalogue-bridge", isAuthenticated, async (req: any, res) => {
+  app.post("/api/catalogue-bridge", testAuthBypass, isAuthenticated, async (req: any, res) => {
     try {
       const { sessionId, styleTags = [], artistTags = [], orientation, limit = 2 } = req.body;
       
