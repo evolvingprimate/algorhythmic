@@ -256,6 +256,7 @@ export default function Display() {
     needsGeneration: boolean;
     onboardingState?: 'complete' | 'incomplete';
     tier?: string;
+    selectedStyles?: string[];
   }>({
     queryKey: ["/api/artworks/next", sessionId.current, impressionVersionTrigger],
     queryFn: async () => {
@@ -332,7 +333,7 @@ export default function Display() {
   }, [unseenResponse?.artworks, pinnedArtwork]);
 
   // First-Time Setup Wizard: Check if user has preferences
-  // BUG FIX #3: Guard against refetch race conditions that reset the wizard
+  // PROGRESSIVE ENHANCEMENT: Use server's onboardingState as primary source of truth
   useEffect(() => {
     // CRITICAL: Handle loading and error states to prevent blank screen
     if (isLoadingPreferences) {
@@ -346,45 +347,70 @@ export default function Display() {
       return;
     }
     
-    if (preferencesError) {
-      // Preferences query failed - show wizard as fallback and warn user
-      console.error('[Display] Failed to load preferences - showing wizard as fallback');
-      toast({
-        title: "Preferences Unavailable",
-        description: "Couldn't load your saved preferences. You can select new ones now.",
-        variant: "default",
-      });
-      // BUG FIX #3: Only reset if wizard is IDLE (not mid-flow)
-      if (setupStep === SetupStep.IDLE) {
-        wizardActiveRef.current = true;
-        setSetupStep(SetupStep.STYLE);
-        setSetupComplete(false);
-      }
+    // Primary: Use server's onboardingState if available (progressive enhancement)
+    const serverOnboardingState = unseenResponse?.onboardingState;
+    if (serverOnboardingState === 'incomplete' && setupStep === SetupStep.IDLE) {
+      console.log('[Display] Server indicates incomplete onboarding - showing wizard');
+      wizardActiveRef.current = true;
+      setSetupStep(SetupStep.STYLE);
+      setSetupComplete(false); // Local flag for UI state
       return;
     }
     
-    // Tight type guard: Show wizard if no preferences or empty styles
-    if (!preferences || !preferences.styles?.length) {
-      // BUG FIX #3: Only reset if wizard is IDLE (prevents loop during refetch)
-      if (setupStep === SetupStep.IDLE) {
-        console.log('[Display] First-time user detected - showing style selector wizard');
-        wizardActiveRef.current = true;
-        setSetupStep(SetupStep.STYLE);
-        setSetupComplete(false);
+    // Server says complete - use styles from server response (includes defaults)
+    if (serverOnboardingState === 'complete') {
+      console.log('[Display] Server indicates complete onboarding - using server styles');
+      // Use styles from server (which includes defaults if no preferences)
+      if (unseenResponse?.selectedStyles) {
+        setSelectedStyles(unseenResponse.selectedStyles);
+      } else if (preferences?.styles) {
+        // Fallback to local preferences if server didn't send styles
+        setSelectedStyles(preferences.styles);
+      }
+      if (preferences?.dynamicMode !== undefined) {
+        setDynamicMode(preferences.dynamicMode);
+      }
+      setSetupComplete(true); // Enable local UI features
+      return;
+    }
+    
+    // Fallback: Use local preferences check if server state not available yet
+    if (!serverOnboardingState) {
+      if (preferencesError) {
+        // Preferences query failed - show wizard as fallback and warn user
+        console.error('[Display] Failed to load preferences - showing wizard as fallback');
+        toast({
+          title: "Preferences Unavailable",
+          description: "Couldn't load your saved preferences. You can select new ones now.",
+          variant: "default",
+        });
+        if (setupStep === SetupStep.IDLE) {
+          wizardActiveRef.current = true;
+          setSetupStep(SetupStep.STYLE);
+          setSetupComplete(false);
+        }
+        return;
+      }
+      
+      // Check local preferences
+      if (!preferences || !preferences.styles?.length) {
+        if (setupStep === SetupStep.IDLE) {
+          console.log('[Display] No preferences found locally - showing wizard');
+          wizardActiveRef.current = true;
+          setSetupStep(SetupStep.STYLE);
+          setSetupComplete(false);
+        }
       } else {
-        console.log('[Display] Wizard in progress - skipping reset during refetch');
+        // Has local preferences
+        console.log('[Display] Loading local preferences');
+        setSelectedStyles(preferences.styles);
+        if (preferences.dynamicMode !== undefined) {
+          setDynamicMode(preferences.dynamicMode);
+        }
+        setSetupComplete(true);
       }
-      return;
     }
-    
-    // Returning user - preferences is guaranteed to exist here with styles
-    console.log('[Display] Returning user - loading saved preferences');
-    setSelectedStyles(preferences.styles);
-    if (preferences.dynamicMode !== undefined) {
-      setDynamicMode(preferences.dynamicMode);
-    }
-    setSetupComplete(true); // Allow artwork loading
-  }, [preferences, isLoadingPreferences, preferencesError, setupStep]);
+  }, [preferences, isLoadingPreferences, preferencesError, setupStep, unseenResponse?.onboardingState]);
 
   // Auto-generate artwork when unseen pool runs low (Freshness Pipeline)
   useEffect(() => {

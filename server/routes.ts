@@ -1280,6 +1280,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const sessionId = req.query.sessionId as string;
       const limit = req.query.limit ? parseInt(req.query.limit as string) : 20;
       
+      // Default styles for users without preferences (popular, accessible styles)
+      const DEFAULT_STYLES = ['abstract', 'surrealism', 'landscape', 'digital-art'];
+      
       // TASK FIX: Use composite key to prevent cross-endpoint/user collisions
       const cacheKey = sessionId ? makeRecentKey(userId, sessionId, 'next') : null;
       const recentlyServedIds = cacheKey ? new Set(recentlyServedCache.getRecentIds(cacheKey)) : new Set<string>();
@@ -1291,8 +1294,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const user = await storage.getUser(userId);
       
-      // Normalize preference filters (empty arrays = no filtering)
-      const styleTags = preferences?.styles || [];
+      // Compute onboarding state server-side (source of truth)
+      const hasPreferences = preferences?.styles && preferences.styles.length > 0;
+      const onboardingState: 'complete' | 'incomplete' = hasPreferences ? 'complete' : 'incomplete';
+      
+      // Use default styles if no preferences exist (progressive enhancement)
+      const styleTags = hasPreferences ? preferences.styles : DEFAULT_STYLES;
       const artistTags = preferences?.artists || [];
       const orientation = user?.preferredOrientation || undefined;
       
@@ -1416,12 +1423,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.setHeader('Pragma', 'no-cache');
       res.setHeader('Expires', '0');
       
+      // Determine tier for telemetry
+      let tier = 'fresh'; // Default if we have fresh artworks
+      if (freshArtworks.length === 0 && combinedArtworks.length > 0) {
+        tier = 'storage';
+      } else if ((telemetry as any).fallback_tier) {
+        tier = (telemetry as any).fallback_tier;
+      } else if (combinedArtworks.length === 0) {
+        tier = 'empty';
+      }
+      
       res.json({
         artworks: combinedArtworks,
         poolSize: combinedArtworks.length,
         freshCount: freshArtworks.length,
         storageCount: combinedArtworks.length - freshArtworks.length,
         needsGeneration,
+        onboardingState, // Server-computed onboarding state
+        tier, // Which cascade tier served the frames
+        selectedStyles: styleTags, // Return actual styles being used (defaults or user prefs)
         telemetry, // BUG FIX #2: Include telemetry in response for client monitoring
       });
     } catch (error: any) {
