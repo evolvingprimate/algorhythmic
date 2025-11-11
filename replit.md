@@ -4,6 +4,23 @@
 Algorhythmic is a revenue-generating web application that transforms sound into real-time, AI-generated artwork. It allows users to select artistic styles and artists, generating audio-reactive visualizations that continuously improve personalization through user voting. The project aims to be a cross-platform web app with future plans for native TV applications and social features, operating on a freemium model.
 
 ## Recent Changes
+### 2025-11-11: Critical SQL Upsert Fix for Replit Auth
+- **Issue**: PostgreSQL syntax error "syntax error at or near ," during OIDC authentication callback crashed server
+- **Root Cause**: COALESCE with sql template literals in onConflictDoUpdate generated malformed SQL in Drizzle ORM
+- **Solution**: 
+  - Conditional update set that only includes defined fields from userData
+  - Preserves user preferences (preferredOrientation, controllerState) on re-auth
+  - Prevents null/undefined overwrites while keeping SQL valid
+  - Always updates updatedAt timestamp
+- **Impact**: Authentication flow now works without crashes, user data persists across logins
+- **Files Changed**: server/storage.ts (upsertUser function, lines 1325-1346)
+
+### 2025-11-11: Library Image Generation
+- **Generated**: 52 FAL.ai SDXL Turbo images (20 landscape, 16 portrait, 16 square)
+- **Cost**: ~$0.04 total ($0.0008 per image)
+- **Status**: Sufficient for testing catalogue bridge, target 1,400 for production
+- **Script**: scripts/catalogue-seed.ts with proper orientation distribution
+
 ### 2025-11-11: Critical Catalogue Bridge Fix
 - **Issue**: Variable shadowing in routes.ts (line 655 Map shadowed imported cache) caused all catalogue bridge requests to fail with TypeError
 - **Root Cause**: Local Map variable in /api/artworks/next endpoint shadowed the imported recentlyServedCache singleton, breaking method access
