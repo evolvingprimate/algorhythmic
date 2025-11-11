@@ -170,6 +170,7 @@ export default function Display() {
   const catalogueBridgeAbortRef = useRef<AbortController | null>(null);
   const sessionId = useRef(crypto.randomUUID());
   const lastGenerationTime = useRef<number>(0);
+  const lastRenderedArtworkIdsRef = useRef<Set<string>>(new Set()); // Track displayed frames for render-ack
   const historyIndexRef = useRef<number>(-1);
   const isGeneratingRef = useRef<boolean>(false);
   const isFallbackGeneratingRef = useRef<boolean>(false); // Guard to prevent infinite validation loop
@@ -1267,6 +1268,54 @@ export default function Display() {
           scaledAudio || undefined
         );
 
+        // ============================================================================
+        // RENDER-ACK: Record impressions only when frames are actually displayed
+        // ============================================================================
+        
+        // Collect artworkIds that are currently visible on screen
+        const visibleArtworkIds: string[] = [];
+        
+        // Add currentFrame if it has significant opacity (>10%)
+        if (currentFrame.artworkId && currentOpacity > 0.1 && !lastRenderedArtworkIdsRef.current.has(currentFrame.artworkId)) {
+          visibleArtworkIds.push(currentFrame.artworkId);
+        }
+        
+        // Add nextFrame if it has significant opacity (>10%) during morph phase
+        if (nextFrame?.artworkId && nextOpacity > 0.1 && !lastRenderedArtworkIdsRef.current.has(nextFrame.artworkId)) {
+          visibleArtworkIds.push(nextFrame.artworkId);
+        }
+        
+        // Call render-ack endpoint if we have new visible artworks
+        if (visibleArtworkIds.length > 0 && user) {
+          // CRITICAL: Only mark as recorded AFTER successful network request
+          // This ensures failed requests will retry on next frame (auto-retry pattern)
+          fetch('/api/impressions/rendered', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              artworkIds: visibleArtworkIds,
+              source: 'fresh', // TODO: Track which frames came from catalogue bridge vs fresh generation
+            }),
+          })
+            .then(res => {
+              if (res.ok) {
+                // SUCCESS: Mark as recorded to prevent duplicate recording
+                for (const id of visibleArtworkIds) {
+                  lastRenderedArtworkIdsRef.current.add(id);
+                }
+                console.log(`[RenderAck] ✅ Recorded ${visibleArtworkIds.length} rendered impressions`);
+              } else {
+                // FAILURE: Don't mark as recorded - will retry on next frame
+                console.warn(`[RenderAck] ⚠️ Failed to record impressions (${res.status}) - will retry`);
+              }
+            })
+            .catch(error => {
+              // NETWORK ERROR: Don't mark as recorded - will retry on next frame
+              console.error('[RenderAck] Error recording impressions (will retry):', error);
+            });
+        }
+
         // Update debug stats for morphing mode (using ref to avoid render loop restart)
         if (showDebugOverlayRef.current) {
           const config = effectsConfigRef.current;
@@ -1353,6 +1402,39 @@ export default function Display() {
           staticMorphState,
           undefined
         );
+
+        // ============================================================================
+        // RENDER-ACK: Record impression for static frame (single frame mode)
+        // ============================================================================
+        
+        if (currentFrame.artworkId && !lastRenderedArtworkIdsRef.current.has(currentFrame.artworkId) && user) {
+          const artworkId = currentFrame.artworkId;
+          
+          // CRITICAL: Only mark as recorded AFTER successful network request
+          fetch('/api/impressions/rendered', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              artworkIds: [artworkId],
+              source: 'fresh',
+            }),
+          })
+            .then(res => {
+              if (res.ok) {
+                // SUCCESS: Mark as recorded to prevent duplicate recording
+                lastRenderedArtworkIdsRef.current.add(artworkId);
+                console.log(`[RenderAck] ✅ Recorded static frame impression: ${artworkId}`);
+              } else {
+                // FAILURE: Don't mark as recorded - will retry on next frame
+                console.warn(`[RenderAck] ⚠️ Failed to record static frame impression (${res.status}) - will retry`);
+              }
+            })
+            .catch(error => {
+              // NETWORK ERROR: Don't mark as recorded - will retry on next frame
+              console.error('[RenderAck] Error recording static frame impression (will retry):', error);
+            });
+        }
 
         // Update debug stats for static mode (using ref to avoid render loop restart)
         if (showDebugOverlayRef.current) {
@@ -1632,6 +1714,10 @@ export default function Display() {
     // This prevents showing old "cartoon landscape" when user selects "landscape/Escher"
     console.log('[Display] 🧹 Clearing morphEngine frames for fresh artwork with new style');
     morphEngineRef.current.reset();
+    
+    // Clear render-ack tracking (prevent memory leak across sessions)
+    lastRenderedArtworkIdsRef.current.clear();
+    console.log('[Display] 🧹 Cleared render-ack tracking');
     
     // ============================================================================
     // CATALOGUE BRIDGE: Instant <100ms artwork display while fresh gen happens in background
