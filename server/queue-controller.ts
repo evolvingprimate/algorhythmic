@@ -1,9 +1,12 @@
 /**
  * Queue Controller with Hysteresis
  * Manages frame generation state with 2-tick hysteresis to prevent oscillation
+ * Enhanced with DALL-E health awareness and backpressure control
  */
 
 import { telemetryService } from "./telemetry-service";
+import { generationHealthService } from "./generation-health";
+import { recoveryManager } from "./recovery-manager";
 
 // State types for queue management
 export type QueueState = 'HUNGRY' | 'SATISFIED' | 'OVERFULL';
@@ -126,8 +129,30 @@ export class QueueController {
   
   /**
    * Determine if we should generate a frame based on current state
+   * Now integrates with DALL-E health service and circuit breaker
    */
   shouldGenerateFrame(): boolean {
+    // Check DALL-E health first (circuit breaker state)
+    const dalleHealthy = generationHealthService.shouldAttemptGeneration();
+    
+    if (!dalleHealthy) {
+      console.log('[QueueController] DALL-E unhealthy, skipping generation');
+      
+      // Track this decision in telemetry
+      telemetryService.recordEvent({
+        category: 'generation',
+        event: 'generation_skipped_health',
+        metrics: {
+          state: this.currentState,
+          breaker_state: generationHealthService.getBreakerState(),
+          reason: 'dalle_unhealthy'
+        },
+        severity: 'warning'
+      });
+      
+      return false;
+    }
+    
     switch (this.currentState) {
       case 'HUNGRY':
         return true; // Always generate when hungry
@@ -142,8 +167,23 @@ export class QueueController {
   
   /**
    * Get recommended batch size based on current state
+   * Now considers recovery batch size when in degraded mode
    */
   getRecommendedBatchSize(): number {
+    // If circuit breaker is in recovery, use recovery batch size
+    const breakerState = generationHealthService.getBreakerState();
+    if (breakerState === 'half-open') {
+      const recoveryBatch = recoveryManager.getRecoveryBatchSize();
+      console.log(`[QueueController] Using recovery batch size: ${recoveryBatch}`);
+      return recoveryBatch;
+    }
+    
+    // If breaker is open, no generation
+    if (breakerState === 'open') {
+      return 0;
+    }
+    
+    // Normal operation - base on queue state
     switch (this.currentState) {
       case 'HUNGRY':
         // Aggressive generation: 2-3 frames

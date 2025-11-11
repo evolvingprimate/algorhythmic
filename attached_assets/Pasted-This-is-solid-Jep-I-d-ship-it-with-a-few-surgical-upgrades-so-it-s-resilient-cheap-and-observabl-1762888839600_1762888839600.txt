@@ -1,0 +1,200 @@
+This is solid, Jep. I’d ship it—with a few surgical upgrades so it’s resilient, cheap, and observable.
+
+---
+
+## Quick answers to your review questions
+
+**60s timeout?**
+✅ Yes, with guardrails. Make it **adaptive**: `timeout = clamp( P95*1.25 , 45_000, 90_000 )`. If your current week’s P95 ≈ 48–52s, this resolves to ~60s anyway, and automatically tracks drift.
+
+**Breaker window: counter vs sliding window?**
+Prefer a **sliding time window** (e.g., last 10 minutes) over a simple consecutive counter. Use a **token-bucket breaker**: 3 “failure tokens” open the breaker; tokens decay at 1 per 3 minutes. This avoids flapping during sporadic blips and still reacts quickly to clusters.
+
+**Recovery strategy edge cases?**
+
+* Use a **half-open** state with a **probabilistic sampler**: allow only `min( 1 , floor(QPS*0.05) )` generation jobs through while broken. Everything else goes to fallback.
+* Cap probe rate with **jitter** (±20%) to prevent thundering herds.
+* If a probe returns after timeout with a late success, **discard-but-log** to avoid double-inserting.
+
+**Better health probes?**
+
+* If you have any lighter-weight image endpoint variant, use that; otherwise keep your **short-timeout image probe** but:
+
+  * mark it as `probe=true` in metadata and route to a **separate queue** so it never blocks user work.
+  * hard-cap probe cost per hour (e.g., 10 attempts/hour).
+* Also track a **control metric** (HTTP success latency from SDK) to distinguish API connectivity from model-side stalls.
+
+**Missing telemetry?**
+Add: **queue depth**, **age of oldest pending job**, **abandon rate** (late results dropped), **distinct user impact** (users affected during degraded mode), and **catalogue-bridge mode share** (combo/proxy/decoupled). See schema below.
+
+---
+
+## Targeted improvements (drop-in)
+
+### 1) Adaptive timeout + cancellable jobs
+
+```ts
+function computeTimeoutMs(hist: {p95: number}) {
+  return Math.max(45_000, Math.min(90_000, Math.round(hist.p95 * 1.25)));
+}
+
+async function generateWithTimeout(prompt: string, hist:{p95:number}) {
+  const timeout = computeTimeoutMs(hist);
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeout);
+
+  try {
+    return await generateArtImage(prompt, { signal: ctrl.signal }); // ensure your client supports abort
+  } catch (e:any) {
+    if (e.name === 'AbortError') {
+      telemetry.recordTimeout('dalle', timeout);
+      throw new GenerationFailure('timeout', e);
+    }
+    throw e;
+  } finally {
+    clearTimeout(t);
+  }
+}
+```
+
+### 2) Token-bucket circuit breaker (sliding window)
+
+```ts
+class GenerationHealthService {
+  private tokens = 0;                    // failure tokens
+  private lastRefill = Date.now();
+  private openUntil = 0;
+  private readonly REFILL_MS = 180_000;  // 1 token drained every 3 min
+  private readonly OPEN_TOKENS = 3;      // open when tokens >= 3
+  private readonly OPEN_MS = 300_000;    // 5 min
+
+  private refill() {
+    const now = Date.now();
+    const drained = Math.floor((now - this.lastRefill)/this.REFILL_MS);
+    if (drained > 0) {
+      this.tokens = Math.max(0, this.tokens - drained);
+      this.lastRefill = now;
+    }
+  }
+
+  recordSuccess() { this.refill(); this.tokens = Math.max(0, this.tokens - 1); }
+  recordTimeout() { this.refill(); this.tokens++; if (this.tokens >= this.OPEN_TOKENS) this.openBreaker(); }
+
+  isHealthy() { return Date.now() > this.openUntil; }
+
+  private openBreaker() {
+    this.openUntil = Date.now() + this.OPEN_MS;
+    telemetry.emit('circuit_breaker_opened', { service: 'dalle', duration: this.OPEN_MS, tokens: this.tokens });
+  }
+}
+```
+
+### 3) Half-open recovery with jittered probes
+
+```ts
+class RecoveryManager {
+  private batch = 1;
+
+  async maybeProbe(health: GenerationHealthService) {
+    if (health.isHealthy()) return false;       // breaker still open
+
+    const jitter = 0.8 + Math.random()*0.4;     // ±20%
+    await sleep(120_000 * jitter);
+
+    try {
+      await generateWithTimeout('[probe] minimal test', {p95:45_000});
+      this.batch = Math.min(this.batch * 2, 5);
+      telemetry.emit('dalle_recovery_detected', { batch: this.batch });
+      return true;
+    } catch {
+      telemetry.emit('dalle_recovery_failed', {});
+      return false;
+    }
+  }
+
+  getRecoveryBatch() { return this.batch; }     // queue can read this
+}
+```
+
+### 4) Queue controller: backpressure + late result handling
+
+* When breaker opens, **freeze fresh requests** and flush the **catalogue-bridge decoupled** path.
+* Tag every generation job with an **idempotency key** and `expiresAt`. Late returns after `expiresAt` are **ignored** (but logged as `late_success`).
+
+### 5) Fallback tiers (wired to your catalogue bridge)
+
+Use your existing 3-tier, but explicitly name them in metrics:
+
+* `fresh` (real generation)
+* `style_matched` (same style from catalogue)
+* `global` (universal safe set)
+
+---
+
+## Observability package (add these now)
+
+**Events**
+
+* `generation_start|success|timeout|error` (with `latency_ms`, `prompt_class`, `size`, `idempotency_key`)
+* `circuit_breaker_opened|closed`
+* `fallback_triggered` `{ tier, reason }`
+* `bridge_mode` `{ combo|proxy|decoupled }`
+* `late_success_dropped` (counts waste)
+* `recovery_probe_start|success|fail`
+* `queue_state` `{ depth, oldest_ms, dalleHealthy }`
+
+**Gauges / counters**
+
+* `gen_latency_ms_{p50,p95,p99}`
+* `timeout_rate`, `error_rate`
+* `consecutive_timeouts` (still useful for dashboards)
+* `breaker_open_seconds_total`
+* `recovery_attempts`, `recovery_success_rate`
+* `time_in_degraded_mode`
+* `fallback_tier_usage_{fresh,style_matched,global}`
+* **User impact**: `distinct_users_impacted_degraded{1m,5m,60m}`
+
+**Alerts (starter SLOs)**
+
+* `timeout_rate > 8% for 10m` → WARN
+* `breaker_open_seconds_total increases for 20m` → WARN
+* `queue.oldest_ms > 120s` while `dalleHealthy=true` → CRIT (indicates internal deadlock)
+* `late_success_dropped > 10/hour` → INFO (tune timeout or expiry)
+* `frame_availability < 99% (5m rollup)` → CRIT
+
+---
+
+## UX safeguards during degraded mode
+
+* Always enter **Decoupled Pair Mode** instantly (A/B from selected styles via fallbacks).
+* Apply **palette harmonization** and **synchronized motion** so it feels intentional.
+* Show a **subtle “Generating blend…”** toaster (no spinner loops).
+* If breaker is open, **do not queue** new generations for that user/session; just serve catalogue. Reduce perceived lag to zero.
+
+---
+
+## Ops guardrails
+
+* **Dead-letter queue** for jobs that time out >N times; surface in ops UI.
+* **Budget cap** for probes during outages (e.g., $1/hour).
+* **Process-level watchdog**: if worker hasn’t emitted `generation_success|timeout` in 5 minutes while having queued items, restart worker (prevents zombie promises).
+
+---
+
+## How this ties back to your catalogue-bridge
+
+* Your `QueueController.shouldGenerateFresh()` already checks `dalleHealthy`. Gate it with **half-open sampler** from `RecoveryManager`.
+* On timeout, call `handleGenerationFailure(...)` which routes to `resolveEmergencyFallback()` → the bridge returns **decoupled** frames (or style/global fallbacks) within <2s.
+* Log `bridge_mode` and `fallback_tier_usage` on every user-visible frame so you can prove **>99% availability** even during outages.
+
+---
+
+### Final callouts
+
+* Keep the 60s **adaptive**, but start with 60s today.
+* Switch to **token-bucket breaker** (sliding window) to avoid flapping.
+* Add **idempotency + expiration** to kill late ghosts.
+* Probe in **half-open** with jitter and tight caps.
+* Instrument the **user impact** + **availability**—that’s what leadership will care about.
+
+If you want, I’ll bundle these into a tiny `dalle-health/` module (TS types, breaker, recovery, metrics hooks, and the adaptive timeout helper) that matches your file layout.

@@ -3,12 +3,36 @@ import type { ArtSession } from "../shared/schema";
 import type { IStorage } from "./storage";
 import { recentlyServedCache } from "./recently-served-cache";
 import { telemetryService } from "./telemetry-service";
+import { GenerationFailure } from "./openai-service";
 
 export interface FallbackResult {
   artworks: ArtSession[];
   tier: 'fresh' | 'style-matched' | 'global';
   reason: string;
   bypassedCache: boolean;
+  bridgeMode?: 'combo' | 'proxy' | 'decoupled'; // Track bridge mode for telemetry
+}
+
+// Track handled idempotency keys to prevent double processing
+const handledIdempotencyKeys = new Set<string>();
+
+/**
+ * Mark an idempotency key as handled to prevent double processing of late results
+ */
+export function markIdempotencyHandled(idempotencyKey: string): void {
+  handledIdempotencyKeys.add(idempotencyKey);
+  
+  // Clean up old keys after 5 minutes
+  setTimeout(() => {
+    handledIdempotencyKeys.delete(idempotencyKey);
+  }, 300000);
+}
+
+/**
+ * Check if an idempotency key has already been handled
+ */
+export function isIdempotencyHandled(idempotencyKey: string): boolean {
+  return handledIdempotencyKeys.has(idempotencyKey);
 }
 
 // Validate artworks have imageUrl and are accessible
@@ -291,4 +315,107 @@ export function emitFallbackTelemetry(result: FallbackResult, userId: string, se
   // if (result.tier !== 'fresh') {
   //   metrics.increment('fallback.non_fresh_served');
   // }
+}
+
+/**
+ * Handle generation failure by immediately triggering fallback
+ * Integrates with circuit breaker and idempotency tracking
+ * Based on Grok/ChatGPT recommendations for graceful degradation
+ */
+export async function handleGenerationFailure(
+  storage: IStorage,
+  userId: string,
+  sessionId: string | null,
+  failure: GenerationFailure,
+  options: {
+    orientation?: string;
+    styleTags?: string[];
+    artistTags?: string[];
+  } = {}
+): Promise<FallbackResult> {
+  // Check if this failure was already handled (prevent double processing)
+  const idempotencyKey = failure.details.idempotencyKey;
+  if (idempotencyKey && isIdempotencyHandled(idempotencyKey)) {
+    console.log(`[FallbackHandler] Idempotency key ${idempotencyKey} already handled, skipping`);
+    throw new Error('Failure already handled');
+  }
+  
+  // Mark as handled to prevent double processing
+  if (idempotencyKey) {
+    markIdempotencyHandled(idempotencyKey);
+  }
+  
+  // Log the failure
+  console.error(`[FallbackHandler] Handling generation failure: ${failure.reason}`, {
+    userId,
+    sessionId,
+    idempotencyKey,
+    reason: failure.reason
+  });
+  
+  // Record telemetry about the failure
+  telemetryService.recordEvent({
+    event: 'generation_failed_fallback_triggered',
+    category: 'fallback',
+    severity: 'warning',
+    metrics: {
+      failure_reason: failure.reason,
+      idempotency_key: idempotencyKey || 'none',
+      has_session: !!sessionId,
+      user_id: userId
+    },
+    sessionId: sessionId || undefined,
+    userId
+  });
+  
+  // Immediately trigger emergency fallback (skip Tier 1 fresh generation)
+  try {
+    const result = await resolveEmergencyFallback(storage, sessionId, userId, {
+      ...options,
+      useCache: true,
+      minFrames: 2 // Ensure we get at least 2 frames for morphing
+    });
+    
+    // Add bridge mode to indicate we're in decoupled mode due to failure
+    result.bridgeMode = 'decoupled';
+    result.reason = `Fallback due to ${failure.reason}: ${result.reason}`;
+    
+    // Track distinct users impacted by degraded mode
+    telemetryService.recordEvent({
+      event: 'user_impacted_degraded_mode',
+      category: 'fallback',
+      severity: 'warning',
+      metrics: {
+        trigger_reason: failure.reason,
+        fallback_tier: result.tier,
+        frame_count: result.artworks.length,
+        bridge_mode: 'decoupled'
+      },
+      sessionId: sessionId || undefined,
+      userId
+    });
+    
+    console.log(`[FallbackHandler] Successfully resolved fallback with ${result.artworks.length} frames from tier: ${result.tier}`);
+    
+    return result;
+    
+  } catch (error) {
+    // Critical failure - couldn't even get fallback frames
+    console.error(`[FallbackHandler] CRITICAL: Failed to resolve fallback after generation failure`, error);
+    
+    telemetryService.recordEvent({
+      event: 'fallback_resolution_failed',
+      category: 'fallback',
+      severity: 'critical',
+      metrics: {
+        original_failure: failure.reason,
+        fallback_error: error instanceof Error ? error.message : 'unknown',
+        user_id: userId
+      },
+      sessionId: sessionId || undefined,
+      userId
+    });
+    
+    throw error;
+  }
 }

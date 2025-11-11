@@ -553,22 +553,192 @@ Provide structured output with ARTISTIC CONTEXT, SONG INSIGHT, VISUAL LANGUAGE, 
   }
 }
 
-export async function generateArtImage(prompt: string): Promise<string> {
-  try {
-    // CRITICAL FIX: Add universal "no text" directive to prevent unwanted text/letters in artwork
-    const enhancedPrompt = `${prompt} IMPORTANT: absolutely no text, no letters, no words, no typography, no signage, pure abstract visual art only.`;
-    
-    const response = await openai.images.generate({
-      model: "dall-e-3",
-      prompt: enhancedPrompt,
-      n: 1,
-      size: "1024x1024",
-      quality: "standard",
-    });
+// Import required modules (add these at the top of the file)
+// import { generationHealthService } from './generation-health';
+// import { nanoid } from 'nanoid';
 
+// Custom error classes for generation failures
+export class GenerationTimeout extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'GenerationTimeout';
+  }
+}
+
+export class GenerationFailure extends Error {
+  constructor(
+    public reason: 'timeout' | 'error' | 'unavailable',
+    public details: { idempotencyKey?: string; error?: Error } = {}
+  ) {
+    super(`Generation failed: ${reason}`);
+    this.name = 'GenerationFailure';
+  }
+}
+
+/**
+ * Generate art image with timeout, circuit breaker, and retry logic
+ * Based on recommendations from Grok and ChatGPT:
+ * - Adaptive timeout (P95 * 1.25, clamped to 45-90s)
+ * - AbortController for cancellable jobs
+ * - Exponential backoff retry (15s, 30s)
+ * - Circuit breaker integration
+ */
+export async function generateArtImage(
+  prompt: string,
+  options?: {
+    isProbe?: boolean;
+    retryCount?: number;
+    skipTextDirective?: boolean;
+  }
+): Promise<string> {
+  // Import inside function to avoid circular dependency
+  const { generationHealthService } = require('./generation-health');
+  const { nanoid } = require('nanoid');
+  
+  const jobId = nanoid();
+  const isProbe = options?.isProbe || false;
+  const retryCount = options?.retryCount || 0;
+  const maxRetries = 2;
+  
+  // Check circuit breaker state
+  if (!generationHealthService.shouldAttemptGeneration()) {
+    console.log(`[GenerationHealth] Circuit breaker open, skipping DALL-E generation`);
+    throw new GenerationFailure('unavailable', { idempotencyKey: jobId });
+  }
+  
+  // Register job with health service
+  generationHealthService.registerJob(jobId, isProbe);
+  
+  // Get adaptive timeout
+  const timeout = generationHealthService.getTimeout();
+  console.log(`[GenerationHealth] Attempting DALL-E generation with ${timeout}ms timeout (job: ${jobId})`);
+  
+  // Add "no text" directive unless explicitly skipped (for probes)
+  const enhancedPrompt = options?.skipTextDirective 
+    ? prompt
+    : `${prompt} IMPORTANT: absolutely no text, no letters, no words, no typography, no signage, pure abstract visual art only.`;
+  
+  const startTime = Date.now();
+  
+  // Create AbortController for proper request cancellation
+  const controller = new AbortController();
+  let timeoutId: NodeJS.Timeout | null = null;
+  let abortSignalFired = false;
+  
+  // Track when the abort signal is triggered
+  controller.signal.addEventListener('abort', () => {
+    abortSignalFired = true;
+    console.log(`[GenerationHealth] ✅ AbortSignal fired for job ${jobId} - HTTP request being cancelled`);
+  });
+  
+  try {
+    // Create a promise that aborts the request after timeout
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => {
+        // Abort the actual HTTP request
+        console.log(`[GenerationHealth] Aborting DALL-E request for job ${jobId} after ${timeout}ms`);
+        controller.abort();
+        reject(new GenerationTimeout(`DALL-E generation timeout after ${timeout}ms`));
+      }, timeout);
+    });
+    
+    // Race between DALL-E call (with AbortSignal) and timeout
+    const response = await Promise.race([
+      openai.images.generate({
+        model: "dall-e-3",
+        prompt: enhancedPrompt,
+        n: 1,
+        size: "1024x1024",
+        quality: isProbe ? "standard" : "standard", // Use standard quality for all (probes and regular)
+      }, {
+        // Pass AbortSignal as second parameter to OpenAI API
+        signal: controller.signal
+      }),
+      timeoutPromise
+    ]);
+    
+    // Clear timeout timer to avoid stray rejections
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
+    
+    // Record success with health service
+    const latency = Date.now() - startTime;
+    generationHealthService.recordSuccess(latency, jobId);
+    
+    console.log(`[GenerationHealth] DALL-E generation successful in ${latency}ms`);
+    
+    // Check if result is still valid (not expired)
+    if (!generationHealthService.isJobValid(jobId)) {
+      console.warn(`[GenerationHealth] Job ${jobId} completed but expired, dropping result`);
+      throw new GenerationFailure('timeout', { idempotencyKey: jobId });
+    }
+    
     return response.data?.[0]?.url || "";
-  } catch (error) {
-    console.error("Error generating art image:", error);
-    throw new Error("Failed to generate artwork");
+    
+  } catch (error: any) {
+    // Clear timeout timer if it hasn't fired yet
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
+    const latency = Date.now() - startTime;
+    
+    // Handle timeout error or abort error
+    if (error instanceof GenerationTimeout || 
+        error.name === 'AbortError' || 
+        error.constructor?.name === 'APIUserAbortError') {
+      const wasAborted = abortSignalFired || error.name === 'AbortError' || error.constructor?.name === 'APIUserAbortError';
+      console.error(`[GenerationHealth] DALL-E generation ${wasAborted ? 'ABORTED' : 'TIMEOUT'} after ${latency}ms (job: ${jobId})`);
+      if (wasAborted) {
+        console.log(`[GenerationHealth] ✅ Request was properly cancelled via AbortController`);
+      }
+      generationHealthService.recordTimeout(jobId, 'timeout');
+      
+      // Retry with exponential backoff if we haven't exceeded retry limit
+      if (retryCount < maxRetries) {
+        const backoffMs = (retryCount === 0 ? 15000 : 30000); // 15s, then 30s
+        console.log(`[GenerationHealth] Retrying in ${backoffMs}ms (attempt ${retryCount + 1}/${maxRetries})`);
+        
+        await new Promise(resolve => setTimeout(resolve, backoffMs));
+        
+        return generateArtImage(prompt, {
+          ...options,
+          retryCount: retryCount + 1
+        });
+      }
+      
+      throw new GenerationFailure('timeout', { idempotencyKey: jobId });
+    }
+    
+    // Handle other errors (API errors, network issues, etc.)
+    console.error(`[GenerationHealth] DALL-E generation error:`, error);
+    generationHealthService.recordTimeout(jobId, 'error');
+    
+    // Check for transient errors that should be retried
+    const isTransient = 
+      error.status === 429 || // Rate limited
+      error.status >= 500 || // Server errors
+      error.code === 'ECONNRESET' || // Connection reset
+      error.code === 'ETIMEDOUT' || // Network timeout
+      error.message?.includes('network'); // Network issues
+    
+    if (isTransient && retryCount < maxRetries) {
+      const backoffMs = (retryCount === 0 ? 15000 : 30000);
+      console.log(`[GenerationHealth] Retrying transient error in ${backoffMs}ms`);
+      
+      await new Promise(resolve => setTimeout(resolve, backoffMs));
+      
+      return generateArtImage(prompt, {
+        ...options,
+        retryCount: retryCount + 1
+      });
+    }
+    
+    throw new GenerationFailure('error', { 
+      idempotencyKey: jobId,
+      error 
+    });
   }
 }
