@@ -134,7 +134,7 @@ export class Morpheus03Renderer implements IMorphRenderer {
     gl.bindTexture(gl.TEXTURE_2D, frameB.texture);
     gl.uniform1i(gl.getUniformLocation(this.program, 'u_imageB'), 1);
     
-    // Calculate zoom progress (0 to 1 over 5 minutes)
+    // Calculate zoom progress (0 to 1 over 1 minute)
     // phaseProgress is already 0-1 from morphEngine
     const zoomProgress = morphState.phaseProgress;
     

@@ -99,9 +99,9 @@ export default function Display() {
   const [currentExplanation, setCurrentExplanation] = useState<string>("");
   const [showExplanation, setShowExplanation] = useState(false);
   const [isIdentifyingMusic, setIsIdentifyingMusic] = useState(false);
-  const [generationInterval, setGenerationInterval] = useState(5); // minutes (Frame A to Frame B duration)
+  const [generationInterval, setGenerationInterval] = useState(1); // minutes (Frame A to Frame B duration)
   const [timeUntilNext, setTimeUntilNext] = useState<number>(0); // seconds
-  const [showCountdown, setShowCountdown] = useState(false); // hide countdown timer (using 5min morph cycle)
+  const [showCountdown, setShowCountdown] = useState(false); // hide countdown timer (using 1min morph cycle)
   const [selectedEngine, setSelectedEngine] = useState<string>(() => {
     const registry = EngineRegistry.getInstance();
     return registry.getDefaultEngine();
