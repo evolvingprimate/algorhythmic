@@ -263,12 +263,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       })();
       
-      // Mark returned artworks as recently-served (prevent echoing back within 30s)
+      // REMOVED: Don't mark as recently-served here - wait for render-ack
+      // This prevents artwork from being filtered out before client can display it
       if (result.artworks.length > 0) {
         const artworkIds = result.artworks.map(art => art.id);
-        recentlyServedCache.markRecent(cacheKey, artworkIds);
-        
-        console.log(`[Catalogue Bridge] Served ${result.artworks.length} artworks (tier: ${result.tier}, ${result.latencyMs}ms), marked as recent: [${artworkIds.join(', ')}]`);
+        console.log(`[Catalogue Bridge] Served ${result.artworks.length} artworks (tier: ${result.tier}, ${result.latencyMs}ms): [${artworkIds.join(', ')}]`);
       } else {
         console.log(`[Catalogue Bridge] No library artworks, using ${result.tier} tier (${result.latencyMs}ms)`);
       }
@@ -292,7 +291,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   app.post("/api/impressions/rendered", isAuthenticated, async (req: any, res) => {
     try {
-      const { artworkIds = [], source } = req.body as { artworkIds?: string[]; source?: 'bridge' | 'fresh' };
+      const { artworkIds = [], source, sessionId } = req.body as { 
+        artworkIds?: string[]; 
+        source?: 'bridge' | 'fresh';
+        sessionId?: string;
+      };
       
       // Validation: check array exists
       if (!Array.isArray(artworkIds) || artworkIds.length === 0) {
@@ -324,6 +327,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const recordedCount = validIds.length > 0
         ? await storage.recordRenderedImpressions(userId, validIds, source)
         : 0;
+      
+      // CRITICAL FIX: Mark artworks as recently-served ONLY after client confirms render
+      // This prevents fresh artwork from being filtered out before display
+      if (validIds.length > 0 && sessionId) {
+        const cacheKey = `${userId}-${sessionId}`;
+        recentlyServedCache.markRecent(cacheKey, validIds);
+        console.log(`[Render-Ack] Marked ${validIds.length} artworks as recently-served AFTER render confirmation for session ${sessionId}`);
+      }
       
       console.log(`[Render-Ack] Recorded ${recordedCount} impressions (source: ${source || 'unknown'}) for user ${userId}`);
       
@@ -964,10 +975,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const needsGeneration = combinedArtworks.length < 5;
       
-      // TASK FIX: Cache served IDs for next request (30s window) using composite key
-      if (cacheKey && combinedArtworks.length > 0) {
-        recentlyServedCache.markRecent(cacheKey, combinedArtworks.map(a => a.id));
-      }
+      // REMOVED: Don't mark as recently-served here - wait for render-ack
+      // This fixes fresh artwork being filtered out before display
       
       // BUG FIX #2: Enhanced telemetry with validator metrics
       const telemetry = {
@@ -1056,10 +1065,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           telemetry.total_returned = combinedArtworks.length;
           telemetry.pool_exhausted = combinedArtworks.length < 2;
           
-          // Only cache if we didn't bypass filters
-          if (cacheKey && combinedArtworks.length > 0 && !(telemetry as any).cache_bypassed) {
-            recentlyServedCache.markRecent(cacheKey, combinedArtworks.map(a => a.id));
-          }
+          // REMOVED: Don't mark as recently-served in emergency fallback
+          // Let the client confirm render first to avoid filtering out frames
         } catch (fallbackError: any) {
           console.error(`[EmergencyFallback] Failed to fetch fallback artworks:`, fallbackError);
           // Continue with what we have
