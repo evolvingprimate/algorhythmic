@@ -1139,6 +1139,112 @@ export default function Display() {
     wsClientRef.current.on('audio-update', (data) => {
       console.log('Received audio update from another device:', data);
     });
+    
+    // ============================================================================
+    // TASK 8: GPU-ready handoff logic for fresh artwork (prewarm→ready→swap)
+    // ============================================================================
+    
+    wsClientRef.current.on('artwork.swap', async (data) => {
+      console.log('[WebSocket] 🎨 Received artwork.swap event:', data);
+      
+      // Ignore failures
+      if (data.status === 'failed') {
+        console.warn('[WebSocket] ⚠️ Artwork generation failed:', data.error);
+        return;
+      }
+      
+      // Extract artwork from event
+      const artwork = data.artwork;
+      if (!artwork || !artwork.imageUrl) {
+        console.warn('[WebSocket] ⚠️ Invalid artwork data in swap event');
+        return;
+      }
+      
+      // ============================================================================
+      // STEP 1: PREWARM - Load texture into GPU
+      // ============================================================================
+      
+      const frameId = artwork.id || artwork.imageUrl.split('/').pop() || artwork.imageUrl;
+      console.log(`[WebSocket] 🔥 Step 1/3: Prewarming texture for ${frameId}...`);
+      
+      try {
+        await safePrewarmFrame(artwork.imageUrl, frameId, 'websocket-swap');
+      } catch (error) {
+        console.error(`[WebSocket] ❌ Prewarm failed for ${frameId}:`, error);
+        // Continue anyway - JIT fallback will handle it
+      }
+      
+      // ============================================================================
+      // STEP 2: READY - Wait for texture to be GPU-ready
+      // ============================================================================
+      
+      console.log(`[WebSocket] ⏳ Step 2/3: Waiting for texture readiness...`);
+      
+      // Poll for readiness with timeout
+      const maxWait = 2000; // 2s max wait
+      const pollInterval = 50; // Check every 50ms
+      const startTime = Date.now();
+      
+      while (Date.now() - startTime < maxWait) {
+        if (rendererRef.current?.isFrameReady(frameId)) {
+          console.log(`[WebSocket] ✅ Texture ready in ${Date.now() - startTime}ms`);
+          break;
+        }
+        // Wait 50ms before next check
+        await new Promise(resolve => setTimeout(resolve, pollInterval));
+      }
+      
+      if (!rendererRef.current?.isFrameReady(frameId)) {
+        console.warn(`[WebSocket] ⚠️ Texture not ready after ${maxWait}ms timeout - proceeding anyway (JIT fallback)`);
+      }
+      
+      // ============================================================================
+      // STEP 3: SWAP - Atomically add to morphEngine
+      // ============================================================================
+      
+      console.log(`[WebSocket] 🔄 Step 3/3: Adding frame to morphEngine...`);
+      
+      if (!morphEngineRef.current) {
+        console.error('[WebSocket] ❌ MorphEngine not initialized');
+        return;
+      }
+      
+      // Deduplication: Skip if already in morphEngine
+      if (morphEngineRef.current.hasFrameById(artwork.id)) {
+        console.log(`[WebSocket] ⏭️ Skipping duplicate frame (already in engine): ${artwork.id}`);
+        return;
+      }
+      
+      if (morphEngineRef.current.hasImageUrl(artwork.imageUrl)) {
+        console.log(`[WebSocket] ⏭️ Skipping duplicate imageUrl (already in engine): ${artwork.imageUrl}`);
+        return;
+      }
+      
+      // Parse DNA vector
+      const dnaVector = parseDNAFromSession(artwork);
+      if (!dnaVector) {
+        console.warn(`[WebSocket] ⚠️ Artwork ${artwork.id} missing DNA vector, generating default`);
+      }
+      
+      // Atomically add frame (insertFrameAfterCurrent for immediate display)
+      morphEngineRef.current.insertFrameAfterCurrent({
+        imageUrl: artwork.imageUrl,
+        dnaVector: dnaVector || Array(50).fill(0.5),
+        prompt: artwork.prompt || '',
+        explanation: artwork.explanation || '',
+        artworkId: artwork.id,
+        musicInfo: artwork.musicInfo || null,
+        audioAnalysis: artwork.audioAnalysis || null,
+      });
+      
+      console.log(`[WebSocket] ✅ GPU-ready handoff complete for ${frameId} - frame added to morphEngine`);
+      
+      // Start morphEngine if this is the first frame
+      if (morphEngineRef.current.getFrameCount() === 1) {
+        morphEngineRef.current.start();
+        console.log('[WebSocket] MorphEngine started with first frame');
+      }
+    });
 
     return () => {
       wsClientRef.current?.disconnect();
