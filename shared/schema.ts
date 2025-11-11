@@ -72,6 +72,7 @@ export const artSessions = pgTable("art_sessions", {
   catalogueTierIdx: index("art_sessions_catalogue_tier_idx").on(table.catalogueTier),
   // Composite index for library artwork selection queries (Architect recommendation)
   libraryOrientationIdx: index("art_sessions_library_orientation_idx").on(table.isLibrary, table.orientation, table.catalogueTier),
+  // Note: GIN index on styles array created via raw SQL (Drizzle doesn't support custom index types)
 }));
 
 // User favorites for weighted rotation (future feature)
