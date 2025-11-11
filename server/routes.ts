@@ -985,9 +985,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       console.log(`[Style Filtering] Result breakdown:`, telemetry);
       
-      // BUG FIX #3: Alert if pool exhausted (critical for fallback generation trigger)
+      // EMERGENCY FALLBACK: NEVER return empty array - re-fetch without recently-served filter
       if (telemetry.pool_exhausted) {
-        console.error(`[ALERT] 🚨 Pool exhausted for user ${userId} session ${sessionId} - TRIGGER FALLBACK GENERATION`);
+        console.error(`[ALERT] 🚨 Pool exhausted for user ${userId} session ${sessionId} - EMERGENCY FALLBACK ACTIVATED`);
+        
+        try {
+          // First try: Re-fetch fresh queue WITHOUT recently-served filter
+          const emergencyFresh = allFreshSessions.slice(0, Math.min(20, allFreshSessions.length));
+          
+          if (emergencyFresh.length > 0) {
+            combinedArtworks = emergencyFresh;
+            console.warn(`[EmergencyFallback] Using ${combinedArtworks.length} fresh artworks (recently-served filter bypassed) for user ${userId} session ${sessionId}`);
+          } else {
+            // Second try: Get ANY unseen storage artworks (ignore all filters)
+            const emergencyStorage = await storage.getUnseenArtworks(userId, {
+              limit: 20,
+              orientation,
+              styleTags: [], // Remove style filter in emergency
+              artistTags: [], // Remove artist filter in emergency
+            });
+            combinedArtworks = emergencyStorage;
+            console.warn(`[EmergencyFallback] Using ${combinedArtworks.length} storage artworks (all filters removed) for user ${userId} session ${sessionId}`);
+          }
+          
+          // Update telemetry
+          telemetry.total_returned = combinedArtworks.length;
+          telemetry.pool_exhausted = combinedArtworks.length === 0;
+          
+          // Still cache these IDs to prevent immediate re-serving
+          if (cacheKey && combinedArtworks.length > 0) {
+            recentlyServedCache.markRecent(cacheKey, combinedArtworks.map(a => a.id));
+          }
+        } catch (fallbackError: any) {
+          console.error(`[EmergencyFallback] Failed to fetch fallback artworks:`, fallbackError);
+          // Continue with empty array (will trigger generation)
+        }
       }
       
       // Set no-cache headers to prevent stale data
