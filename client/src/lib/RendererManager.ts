@@ -365,6 +365,19 @@ export class RendererManager {
       return;
     }
     
+    // CRITICAL FIX: Guard against undefined/null image URLs
+    if (!imageUrlA || !imageUrlB) {
+      console.error('[RendererManager] ❌ CRITICAL: Render called with undefined imageUrl(s)', {
+        imageUrlA: imageUrlA || 'undefined',
+        imageUrlB: imageUrlB || 'undefined'
+      });
+      // Emit emergency event for display.tsx to handle
+      window.dispatchEvent(new CustomEvent('renderer-emergency', {
+        detail: { reason: 'undefined-urls', imageUrlA, imageUrlB }
+      }));
+      return;
+    }
+    
     // Update parameter animations (ramps and pulses)
     this.updateParameterAnimations();
     
