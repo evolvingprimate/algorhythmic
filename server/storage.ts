@@ -1992,6 +1992,25 @@ export class PostgresStorage implements IStorage {
     }
   }
 
+  async getCatalogueBridgeTelemetry(cutoffTime: Date): Promise<TelemetryEvent[]> {
+    try {
+      const results = await this.db
+        .select()
+        .from(telemetryEvents)
+        .where(
+          and(
+            sql`${telemetryEvents.timestamp} >= ${cutoffTime.toISOString()}`,
+            sql`${telemetryEvents.eventType} LIKE 'catalogue_bridge%'`
+          )
+        )
+        .orderBy(telemetryEvents.timestamp);
+      return results;
+    } catch (error: any) {
+      console.error('[PostgresStorage] Failed to query catalogue bridge telemetry:', error);
+      return [];
+    }
+  }
+
   async findOrCreateRaiSessionForClientSession(userId: string, clientSessionId: string): Promise<string> {
     try {
       // Look for existing RAI session with matching clientSessionId

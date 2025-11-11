@@ -10,6 +10,7 @@ import Maestro from "@/pages/maestro";
 import Gallery from "@/pages/gallery";
 import Subscribe from "@/pages/subscribe";
 import WebGLTest from "@/pages/webgl-test";
+import TelemetryDashboard from "@/pages/telemetry";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -21,6 +22,7 @@ function Router() {
       <Route path="/gallery" component={Gallery} />
       <Route path="/subscribe" component={Subscribe} />
       <Route path="/webgl-test" component={WebGLTest} />
+      <Route path="/admin/telemetry" component={TelemetryDashboard} />
       <Route component={NotFound} />
     </Switch>
   );

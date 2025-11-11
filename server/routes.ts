@@ -388,9 +388,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const hoursBack = parseInt(req.query.hours as string) || 24;
       const since = new Date(Date.now() - hoursBack * 60 * 60 * 1000);
       
-      // Query catalogue bridge telemetry events
-      const allEvents = await storage.getTelemetryEventsSince(since);
-      const events = allEvents.filter(e => e.eventType.startsWith('catalogue_bridge'));
+      // Query catalogue bridge telemetry events (database-level filtering)
+      const events = await storage.getCatalogueBridgeTelemetry(since);
       
       // Parse and aggregate data
       const tierCounts = { exact: 0, related: 0, global: 0, procedural: 0 };
@@ -486,6 +485,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
         recommendation: 'Consider expanding library coverage for frequently requested styles'
       } : null;
       
+      // Compute histogram buckets from individual event latencies
+      const histogramBuckets = [
+        { label: '0-50ms', min: 0, max: 50, count: 0 },
+        { label: '50-100ms', min: 50, max: 100, count: 0 },
+        { label: '100-200ms', min: 100, max: 200, count: 0 },
+        { label: '200-400ms', min: 200, max: 400, count: 0 },
+        { label: '400ms+', min: 400, max: Infinity, count: 0 },
+      ];
+      
+      for (const latency of latencies) {
+        for (const bucket of histogramBuckets) {
+          if (latency >= bucket.min && latency < bucket.max) {
+            bucket.count++;
+            break;
+          }
+        }
+      }
+      
       res.json({
         period: {
           since: since.toISOString(),
@@ -497,6 +514,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           latencyStats
         },
         tierStats,
+        histogramBuckets,
         alert,
         timestamp: new Date().toISOString()
       });
