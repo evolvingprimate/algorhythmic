@@ -12,7 +12,7 @@ import { ObjectStorageService } from "./objectStorage";
 import { generateWithFallback, resolveAutoMode, buildContextualPrompt } from "./generation/fallbackOrchestrator";
 import { createDefaultAudioAnalysis } from "./generation/audioAnalyzer";
 import { findBestCatalogMatch, type CatalogMatchRequest } from "./generation/catalogMatcher";
-import { recentlyServedCache } from "./recently-served-cache";
+import { recentlyServedCache, makeRecentKey } from "./recently-served-cache";
 
 // Initialize Stripe only if keys are available (optional for MVP)
 let stripe: Stripe | null = null;
@@ -25,6 +25,15 @@ if (process.env.STRIPE_SECRET_KEY) {
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // ============================================================================
+  // TASK FIX: Bootstrap runtime guard - Detect future shadowing
+  // ============================================================================
+  
+  if (typeof (recentlyServedCache as any).getRecentIds !== 'function') {
+    throw new Error('[FATAL] recentlyServedCache wiring error: getRecentIds missing (variable shadowing detected)');
+  }
+  console.log('[Bootstrap] ✓ recentlyServedCache integrity verified');
+  
   // Cache-Control headers for HTML to prevent stale bundle issues
   app.use((req, res, next) => {
     // Detect HTML requests via Accept header (works for SPA routes + deep links)
@@ -161,8 +170,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Get userId from authenticated user
       const userId = req.user.claims.sub;
       
+      // TASK FIX: Use composite key to prevent cross-endpoint/user collisions
+      const cacheKey = makeRecentKey(userId, sessionId, 'bridge');
+      
       // Get recently-served artwork IDs from cache (30s window)
-      const excludeIds = recentlyServedCache.getRecentIds(sessionId);
+      const excludeIds = recentlyServedCache.getRecentIds(cacheKey);
       
       console.log(`[Catalogue Bridge] User ${userId}, session ${sessionId}, styles: [${styleTags}], orientation: ${orientation}, excluding ${excludeIds.length} recent IDs`);
       
@@ -178,7 +190,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Mark returned artworks as recently-served (prevent echoing back within 30s)
       if (result.artworks.length > 0) {
         const artworkIds = result.artworks.map(art => art.id);
-        recentlyServedCache.markRecent(sessionId, artworkIds);
+        recentlyServedCache.markRecent(cacheKey, artworkIds);
         
         console.log(`[Catalogue Bridge] Served ${result.artworks.length} artworks (tier: ${result.tier}), marked as recent: [${artworkIds.join(', ')}]`);
       } else {
@@ -648,41 +660,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // BUG FIX #1: Server-side request-scoped deduplication cache
-  // Tracks recently-served artwork IDs per user session to prevent rapid re-serving
-  // Maps: `${userId}:${sessionId}` → Set<artworkId>
-  // TTL: 30 seconds (cleared via setTimeout)
-  const recentlyServedCache = new Map<string, { ids: Set<string>, timeout: NodeJS.Timeout }>();
-  
-  function addToServedCache(userId: string, sessionId: string, artworkIds: string[]) {
-    const key = `${userId}:${sessionId}`;
-    const existing = recentlyServedCache.get(key);
-    
-    // Clear existing timeout
-    if (existing) {
-      clearTimeout(existing.timeout);
-      artworkIds.forEach(id => existing.ids.add(id));
-    } else {
-      recentlyServedCache.set(key, {
-        ids: new Set(artworkIds),
-        timeout: setTimeout(() => {}, 0), // Placeholder, set below
-      });
-    }
-    
-    // Reset 30-second TTL
-    const entry = recentlyServedCache.get(key)!;
-    entry.timeout = setTimeout(() => {
-      recentlyServedCache.delete(key);
-      console.log(`[ServedCache] Expired cache for ${key}`);
-    }, 30000);
-    
-    console.log(`[ServedCache] Cached ${artworkIds.length} IDs for ${key} (TTL: 30s)`);
-  }
-  
-  function getServedCache(userId: string, sessionId: string): Set<string> {
-    const key = `${userId}:${sessionId}`;
-    return recentlyServedCache.get(key)?.ids || new Set();
-  }
+  // TASK FIX: Removed shadowing Map variable that was causing catalogue bridge to crash
+  // Now using the imported singleton recentlyServedCache with composite keys
 
   // GET endpoint with PRIORITY QUEUE: fresh → unseen
   // Fresh artwork (this session's last 15 min) shown FIRST, storage pool is fallback only
@@ -692,8 +671,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const sessionId = req.query.sessionId as string;
       const limit = req.query.limit ? parseInt(req.query.limit as string) : 20;
       
-      // BUG FIX #1: Get server-side recently-served IDs (30s window)
-      const recentlyServedIds = sessionId ? getServedCache(userId, sessionId) : new Set<string>();
+      // TASK FIX: Use composite key to prevent cross-endpoint/user collisions
+      const cacheKey = sessionId ? makeRecentKey(userId, sessionId, 'next') : null;
+      const recentlyServedIds = cacheKey ? new Set(recentlyServedCache.getRecentIds(cacheKey)) : new Set<string>();
       
       // BUG FIX: Fetch user preferences (session-scoped first, fallback to user-level)
       const preferences = sessionId 
@@ -764,9 +744,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const needsGeneration = combinedArtworks.length < 5;
       
-      // BUG FIX #1: Cache served IDs for next request (30s window)
-      if (sessionId && combinedArtworks.length > 0) {
-        addToServedCache(userId, sessionId, combinedArtworks.map(a => a.id));
+      // TASK FIX: Cache served IDs for next request (30s window) using composite key
+      if (cacheKey && combinedArtworks.length > 0) {
+        recentlyServedCache.markRecent(cacheKey, combinedArtworks.map(a => a.id));
       }
       
       // BUG FIX #2: Enhanced telemetry with validator metrics

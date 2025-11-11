@@ -6,19 +6,57 @@
  * fresh generation endpoints to ensure variety.
  * 
  * Architecture:
- * - Per-session tracking: Map<sessionId, Map<artworkId, expiresAt>>
+ * - Composite key tracking: Map<RecentKey, Map<artworkId, expiresAt>>
+ * - RecentKey format: `${userId}:${sessionId}:${endpoint}` (prevents cross-endpoint/user bleed)
  * - Automatic cleanup on access (lazy expiration)
  * - 30s TTL by default (configurable)
  * - Thread-safe for concurrent requests
+ * 
+ * Usage:
+ *   const key = makeRecentKey(userId, sessionId, 'bridge');
+ *   recentlyServedCache.markRecent(key, ['artwork-id-1', 'artwork-id-2']);
+ *   const excludeIds = recentlyServedCache.getRecentIds(key);
  */
+
+// ============================================================================
+// TASK FIX: Composite key type to prevent cross-route collisions
+// ============================================================================
+
+export type RecentKey = string; // Format: `${userId}:${sessionId}:${endpoint}`
+export type Endpoint = 'bridge' | 'next' | 'other';
+
+/**
+ * Create a composite cache key to prevent cross-endpoint and cross-user collisions
+ * 
+ * @param userId - User ID from authentication
+ * @param sessionId - Session ID (art session)
+ * @param endpoint - Endpoint name (e.g., 'bridge', 'next')
+ * @returns Composite key for cache isolation
+ */
+export function makeRecentKey(userId: string, sessionId: string, endpoint: Endpoint): RecentKey {
+  return `${userId}:${sessionId}:${endpoint}`;
+}
+
+// ============================================================================
+// TASK FIX: Explicit interface to prevent accidental re-instantiation
+// ============================================================================
+
+export interface IRecentlyServedCache {
+  markRecent(key: RecentKey, artworkIds: string[], ttlMs?: number): void;
+  isRecent(key: RecentKey, artworkId: string): boolean;
+  getRecentIds(key: RecentKey): string[];
+  cleanupAll(): number;
+  clear(): void;
+  getStats(): { sessions: number; totalEntries: number; avgEntriesPerSession: number };
+}
 
 interface RecentEntry {
   artworkId: string;
   expiresAt: number; // Unix timestamp in ms
 }
 
-export class RecentlyServedCache {
-  private cache: Map<string, Map<string, number>>; // sessionId -> (artworkId -> expiresAt)
+export class RecentlyServedCache implements IRecentlyServedCache {
+  private cache: Map<RecentKey, Map<string, number>>; // RecentKey -> (artworkId -> expiresAt)
   private defaultTTL: number;
   
   constructor(defaultTTLMs: number = 30000) { // 30 seconds default
@@ -27,31 +65,39 @@ export class RecentlyServedCache {
   }
   
   /**
-   * Mark artworks as recently served for a session
+   * Mark artworks as recently served for a cache key
+   * 
+   * @param key - Composite cache key (use makeRecentKey helper)
+   * @param artworkIds - Array of artwork IDs to mark
+   * @param ttlMs - Optional TTL override (default: 30s)
    */
-  markRecent(sessionId: string, artworkIds: string[], ttlMs?: number): void {
+  markRecent(key: RecentKey, artworkIds: string[], ttlMs?: number): void {
     const ttl = ttlMs ?? this.defaultTTL;
     const expiresAt = Date.now() + ttl;
     
-    let sessionCache = this.cache.get(sessionId);
+    let sessionCache = this.cache.get(key);
     if (!sessionCache) {
       sessionCache = new Map();
-      this.cache.set(sessionId, sessionCache);
+      this.cache.set(key, sessionCache);
     }
     
     for (const artworkId of artworkIds) {
       sessionCache.set(artworkId, expiresAt);
     }
     
-    // Lazy cleanup: remove expired entries for this session
-    this.cleanupSession(sessionId);
+    // Lazy cleanup: remove expired entries for this key
+    this.cleanupSession(key);
   }
   
   /**
-   * Check if artwork was recently served to this session
+   * Check if artwork was recently served for a cache key
+   * 
+   * @param key - Composite cache key
+   * @param artworkId - Artwork ID to check
+   * @returns true if artwork was recently served
    */
-  isRecent(sessionId: string, artworkId: string): boolean {
-    const sessionCache = this.cache.get(sessionId);
+  isRecent(key: RecentKey, artworkId: string): boolean {
+    const sessionCache = this.cache.get(key);
     if (!sessionCache) {
       return false;
     }
@@ -71,25 +117,28 @@ export class RecentlyServedCache {
   }
   
   /**
-   * Get all recent artwork IDs for a session (for NOT EXISTS queries)
+   * Get all recent artwork IDs for a cache key (for NOT EXISTS queries)
+   * 
+   * @param key - Composite cache key
+   * @returns Array of recently served artwork IDs
    */
-  getRecentIds(sessionId: string): string[] {
-    const sessionCache = this.cache.get(sessionId);
+  getRecentIds(key: RecentKey): string[] {
+    const sessionCache = this.cache.get(key);
     if (!sessionCache) {
       return [];
     }
     
     // Cleanup expired entries first
-    this.cleanupSession(sessionId);
+    this.cleanupSession(key);
     
     return Array.from(sessionCache.keys());
   }
   
   /**
-   * Remove expired entries for a specific session
+   * Remove expired entries for a specific cache key
    */
-  private cleanupSession(sessionId: string): void {
-    const sessionCache = this.cache.get(sessionId);
+  private cleanupSession(key: RecentKey): void {
+    const sessionCache = this.cache.get(key);
     if (!sessionCache) {
       return;
     }
@@ -103,7 +152,7 @@ export class RecentlyServedCache {
     
     // Remove empty session caches
     if (sessionCache.size === 0) {
-      this.cache.delete(sessionId);
+      this.cache.delete(key);
     }
   }
   
