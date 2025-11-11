@@ -17,12 +17,12 @@ export class ImageAnalyzer {
   private readonly MAX_RETRIES = 3;
 
   constructor() {
-    // BUG FIX: Catch unhandled promise rejection to prevent crash
-    this.initPromise = this.initOpenCV().catch((error) => {
-      console.error('[ImageAnalyzer] OpenCV init failed:', error);
-      // Graceful degradation - set cv = null so analysis can be skipped
-      this.cvReady = false;
-    });
+    // KILL SWITCH: Skip OpenCV initialization entirely - it's broken and blocks the UI
+    // OpenCV WASM module never initializes, causing 30s+ hangs
+    // App works perfectly with crossfade rendering
+    console.log('[ImageAnalyzer] ⚠️ OpenCV disabled - using crossfade fallback only');
+    this.cvReady = false;
+    this.initPromise = Promise.resolve(); // Resolve immediately, no loading
   }
 
   private async initOpenCV(): Promise<void> {

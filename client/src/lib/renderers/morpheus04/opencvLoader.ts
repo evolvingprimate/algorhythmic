@@ -8,6 +8,12 @@ let cvPromise: Promise<any> | null = null;
 let cvLoaded = false;
 
 export async function loadOpenCV(): Promise<any> {
+  // KILL SWITCH: OpenCV WASM initialization is broken - Module.onRuntimeInitialized never fires
+  // Immediately reject so app doesn't hang waiting for it
+  // App works fine with crossfade rendering - OpenCV is optional
+  console.warn('[OpenCV] 🔴 DISABLED - OpenCV loading permanently disabled due to WASM initialization failure');
+  throw new Error('OpenCV disabled - WASM module fails to initialize');
+
   // Return existing promise if already loading
   if (cvPromise) {
     return cvPromise;
