@@ -244,11 +244,21 @@ export default function Display() {
     queryKey: [`/api/preferences/${sessionId.current}`],
   });
 
+  // DEBUG: Log auth status
+  useEffect(() => {
+    console.log('[Display] Query enablement status:', {
+      isAuthenticated,
+      sessionId: sessionId.current,
+      impressionVersionTrigger,
+      enabled: isAuthenticated,
+    });
+  }, [isAuthenticated, impressionVersionTrigger]);
+
   // Fetch UNSEEN artwork only - Freshness Pipeline ensures never seeing repeats
   // PROGRESSIVE ENHANCEMENT: Frames flow immediately on auth, setup wizard enhances
   // CRITICAL: staleTime=0 forces fresh fetch on mount, cache invalidation on impressions
   // BUG FIX: Include impressionVersion in queryKey for proper cache invalidation
-  const { data: unseenResponse } = useQuery<{
+  const { data: unseenResponse, isError: artworkError, error: artworkErrorDetails } = useQuery<{
     artworks: any[];
     poolSize: number;
     freshCount?: number;
@@ -260,11 +270,18 @@ export default function Display() {
   }>({
     queryKey: ["/api/artworks/next", sessionId.current, impressionVersionTrigger],
     queryFn: async () => {
+      console.log('[Display] Query running - fetching /api/artworks/next');
       const res = await fetch(`/api/artworks/next?sessionId=${sessionId.current}`, {
         credentials: "include",
       });
-      if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
-      return await res.json();
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.error('[Display] Query failed:', res.status, errorText);
+        throw new Error(`${res.status}: ${errorText}`);
+      }
+      const data = await res.json();
+      console.log('[Display] Query success - received artworks:', data.artworks?.length);
+      return data;
     },
     enabled: isAuthenticated, // Progressive enhancement: auth is the only gate
     staleTime: 0, // Always consider data stale - refetch on mount
