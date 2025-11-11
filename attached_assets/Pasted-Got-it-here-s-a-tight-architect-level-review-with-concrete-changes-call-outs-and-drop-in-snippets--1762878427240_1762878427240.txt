@@ -1,0 +1,303 @@
+Got it—here’s a tight architect-level review with concrete changes, call-outs, and drop-in snippets. I’ve aligned this with your existing “Immediate / Next / Nice-to-Have” register so it fits the way you’re already working.
+
+# Executive Feedback (TL;DR)
+
+* ✅ Direction is solid: tiered fallback + morph scheduler + validation.
+* ⚠️ Biggest risks: race conditions at phase boundaries, validation I/O on hot paths, and server/client state drift.
+* 🧭 Make the fallback and morphing **deterministic and observable**: explicit finite state machine (FSM), quarantine lists, strict queue contracts, and telemetry you can alarm on.
+* 🚦 Enforce **“No Black Frame”** at the very edge (client) with a guard-rail placeholder and time-boxed waits.
+
+---
+
+# Must-Do Corrections & Upgrades
+
+## 1) Unify “recently-served” and fix shadowing (critical)
+
+Match your earlier bug report: ensure there’s **one** cache and one key schema.
+
+```ts
+// server/recentlyServed.ts
+export type ServedKey = `${string}:${string}`; // sessionId:userId
+
+export class RecentlyServed {
+  private lru = new Map<ServedKey, number>(); // value = lastShownEpochMs
+  private max = 2000; // tune per load
+  has(key: ServedKey) { return this.lru.has(key); }
+  touch(key: ServedKey) {
+    if (this.lru.has(key)) this.lru.delete(key);
+    this.lru.set(key, Date.now());
+    if (this.lru.size > this.max) this.lru.delete(this.lru.keys().next().value);
+  }
+  getLRU(exclude: Set<string>) {/* … */}
+}
+```
+
+* Remove *all* locally declared `recentlyServedCache` Maps. Import this class everywhere.
+* Key format must be **consistent** (recommend `sessionId:userId`).
+* Policy tweak: don’t hard-ban for 30s; use **soft pressure** via LRU weighting (see §6).
+
+## 2) Validation pipeline off the hot path
+
+Do **not** perform object store `fileExists` checks during selection. Pre-validate via a background sweeper; serve from a **validated index** only.
+
+**Pattern**
+
+* Background job populates `validated_artwork_ids` set (Redis or DB).
+* Selection queries **only** pull from `validated_artwork_ids`.
+* If a candidate fails at render (rare), mark **quarantined** and emit `validation_fail` metric.
+
+```ts
+// server/validationIndex.ts
+export const VALIDATED = "art:validated"; // Redis SET
+export const QUARANTINED = "art:quarantined"; // Redis SET
+```
+
+**Quarantine policy**
+
+* On first failure: move to `QUARANTINED`, TTL 6h.
+* Backoff re-checks with jitter; 3 consecutive fails → require human or batch repair.
+
+## 3) Client FrameBuffer contract (hard guard)
+
+Your “no black frames” guarantee must be enforceable **client-side**:
+
+```ts
+type FrameSlot = { id: string; src: string; isFresh: boolean; expiresAt: number };
+
+class FrameBuffer {
+  private fresh: FrameSlot[] = [];
+  private fallback: FrameSlot[] = [];
+  private placeholder: FrameSlot = { id:"placeholder", src:"/img/hold.jpg", isFresh:false, expiresAt:Infinity };
+
+  next(): FrameSlot {
+    return this.fresh.shift()
+        ?? this.fallback.shift()
+        ?? this.placeholder; // absolute guard-rail
+  }
+}
+```
+
+* **Never** render an empty texture: always fall back to placeholder if all else fails (should not happen, but guarantees zero black).
+
+## 4) MorphScheduler as an explicit FSM
+
+Remove “implicit timing” logic and replace with a small FSM that owns transitions.
+
+```ts
+type Phase = "RAMP" | "MORPH";
+type Mode  = "NORMAL" | "FALLBACK" | "RECOVERING";
+
+class MorphScheduler {
+  mode: Mode = "NORMAL";
+  pending?: FrameSlot; // one in-flight replacement
+  cycleMs = 60000;
+  rampMs  = 8000;
+
+  onFrameReady(f: FrameSlot) {
+    // normalize: fresh goes to pending if we're in MORPH or at late RAMP
+    this.pending = f;
+    // emit telemetry: pending_since_ms
+  }
+
+  onPhaseBoundary(phase: Phase) {
+    if (phase === "MORPH" && this.pending) {
+      this.commit(this.pending); // swap source/target textures here
+      this.pending = undefined;
+      // emit: transition_commit
+    }
+  }
+}
+```
+
+* You *can* optionally allow early commits at RAMP end when the delta to MORPH is small (<500ms) to reduce perceived latency—see §Answers.
+
+## 5) Queue Controller with watermarks + hysteresis
+
+Your MIN/TARGET/MAX are fine but add hysteresis so you don’t oscillate.
+
+```ts
+const MIN = 2, TARGET = 3, MAX = 4;
+
+function nextAction(freshCount: number){
+  if (freshCount < MIN) return "GEN_IMMEDIATE";
+  if (freshCount < TARGET) return "GEN_NORMAL";
+  if (freshCount >= MAX)   return "GEN_PAUSE";
+  return "NOOP";
+}
+```
+
+* When mode enters FALLBACK, require **two consecutive** ticks ≥ MIN to exit to RECOVERING; and two ≥ TARGET to exit back to NORMAL.
+
+## 6) Tiered Retrieval with LRU weighting
+
+Tier 2/3 should be **least-recently-shown** (LRU) with a small noise factor to avoid monotony.
+
+```ts
+// Pseudocode scoring
+score = alpha * lruAgeSeconds + beta * diversityBoost(tag/style) + noise(0..eps)
+pick top-N
+```
+
+* This replaces pure random; avoids repeating “popular” items while staying lively.
+
+## 7) Eventing and wire protocol
+
+WebSockets are fine. Standardize messages and make them idempotent.
+
+```json
+// server → client events
+{ "t":"fallback_enter", "reason":"fresh_depleted" }
+{ "t":"fresh_ready", "frameId":"...", "etaMs":1200 }
+{ "t":"fallback_exit" }
+{ "t":"music_changed", "trackId":"...", "ts":1731360000000 }
+{ "t":"transition_commit", "frameId":"...", "phase":"MORPH" }
+```
+
+* If you later add SSE for simplicity, keep the payloads identical.
+
+## 8) Music changes: “mark stale, drain gracefully”
+
+Do not flush everything immediately (causes flicker). Mark queued frames with `staleForTrack=trackId` and **drain** them unless a new fresh arrives; prioritize new fresh frames for commit.
+
+```ts
+if (frame.staleForTrack === currentTrackId && freshForTrackExists) skip(frame);
+```
+
+## 9) Telemetry & SLOs (alertable)
+
+Add these counters/gauges now (they match your task register):
+
+* `fallback_seconds_total` and `fallback_enter_count`
+* `fresh_queue_depth` (gauge), `gen_requests_inflight`
+* `transition_latency_ms` (fresh_ready → commit)
+* `validator_fail_count`, `quarantined_count`
+* `recently_served_shadowing_detected` (should be 0)
+* `morph_dropped_commits` (pending replaced before commit)
+* **Alert**: `validator_fail_rate > 0.5% for 15m` (already in your notes)
+
+## 10) Regression tests (automate E2E)
+
+* **Loop-killer**: 20 frames, no repeats with Tier2/3 (assert LRU ordering)
+* **Pool exhaustion**: force Tier3; ensure no black frames & placeholder never rendered
+* **Phase boundary**: deliver fresh at T=7.9s (just before MORPH), ensure commit at MORPH, not mid-phase
+* **Music swap mid-fallback**: assert stale drain behavior
+* **Validation fail path**: mock `fileExists=false` → quarantine & no selection
+
+---
+
+# Answers to Your Review Questions
+
+**1) 3-tier vs 2-tier?**
+Keep **3-tier**. Tier 2 (style-matched) retains aesthetic coherence; Tier 3 keeps the lights on. A 2-tier (fresh → global) degrades experience more often.
+
+**2) Queue depths MIN=2, TARGET=3, MAX=4?**
+Reasonable for 60s cycles and ~45s gen latency. Add hysteresis. If you later shorten cycles (<45s), bump TARGET to 4–5.
+
+**3) Transition points—8s ramp vs 60s boundary?**
+Primary at **60s MORPH boundary** for zero-pop artifacts. Allow an **early window** at RAMP end if the next MORPH boundary >1.5s away and you can pre-warm textures—this reduces perceived staleness without mid-phase jumps.
+
+**4) WebSocket vs SSE?**
+Stick with **WebSocket** because you may want duplex (client → server backpressure signals like GPU busy). SSE is simpler but one-way.
+
+**5) Validation synchronous vs async optimistic?**
+**Async with precomputed index** (see §2). Selection is O(1) membership in `VALIDATED`. Never block UI on object store.
+
+**6) Music handling—flush or gradual?**
+**Gradual replace**. Mark stale, prioritize new fresh; only flush if a hard scene change mode is explicitly enabled (special effect).
+
+**7) Tier2/3 selection random vs LRU?**
+**LRU with small noise**. Add a **diversity term** based on style tags to avoid local minima.
+
+**8) Client maintains its own 2-frame buffer?**
+Yes. The **client must own a 2+ frame buffer** and a hard placeholder guard. Server queues complement but can’t guarantee delivery timings.
+
+**9) Error recovery—auto quarantine?**
+Yes. First fail → quarantine with TTL; exponential backoff re-validate; after 3 fails promote to manual review.
+
+**10) Acceptable validation latency?**
+Selection path budget should be **<5ms p95** (hence membership set). Background validators can be **100–300ms** per object with concurrency and caching.
+
+---
+
+# Concrete Drop-Ins
+
+## Server: Catalogue selection with validated index + LRU
+
+```ts
+async function selectFrames(req: Req): Promise<FrameSlot[]> {
+  const { sessionId, userId, styles, limit } = req;
+  const keyPrefix = `${sessionId}:${userId}`;
+  const candidates = await repo.findByStyles(styles, limit*4); // overfetch
+  const valid = candidates.filter(c => redis.sismember(VALIDATED, c.id));
+  const scored = scoreWithLRU(valid, keyPrefix);
+  const picked = pickTop(scored, limit);
+
+  picked.forEach(p => recentlyServed.touch(`${sessionId}:${p.id}`));
+  return picked.map(toFrameSlot);
+}
+```
+
+## Client: Prevent mid-phase jumps
+
+```ts
+renderer.onPhaseBoundary((phase) => scheduler.onPhaseBoundary(phase));
+socket.on("fresh_ready", (f) => scheduler.onFrameReady(f));
+
+function renderTick(nowMs:number){
+  const frame = buffer.next(); // never returns null
+  renderer.draw(frame);
+}
+```
+
+## Generation throttler (watermark policy)
+
+```ts
+switch (nextAction(freshCount)) {
+  case "GEN_IMMEDIATE": queueGen({priority:"high"}); break;
+  case "GEN_NORMAL":    queueGen({priority:"normal"}); break;
+  case "GEN_PAUSE":     /* noop */ break;
+}
+```
+
+---
+
+# Integration with Your Current Task Register
+
+**Immediate (Blocking Bugs)**
+
+* ✅ “recentlyServedCache” shadowing: enforce single import and lint rule `no-shadow-imported-name`.
+* ✅ Telemetry counters listed above (add alert on `morph_dropped_commits > 0` for 5m).
+* ✅ FrameValidator: seed with current IDs + client placeholder guard.
+
+**Next Sprint**
+
+* Add **Redis read-through** for LRU stats and validated sets.
+* Circuit breaker for DALL-E: backoff + route Tier2/3 earlier.
+* Playwright E2E: add “Phase boundary no-pop” and “Music swap drain” cases.
+
+**Nice-to-Have**
+
+* Admin “Quarantine queue” UI with “Re-validate now” action.
+* Impression replay to analyze repeat pressure vs diversity.
+
+---
+
+# Risks & Mitigations
+
+* **State drift (server/client):** Use monotonic `sequenceId` in events; client ignores out-of-order.
+* **GPU stalls at commit:** pre-warm textures 250–500ms before MORPH boundary; measure `texture_upload_ms`.
+* **Burst track changes:** coalesce changes with a 300–500ms debounce window.
+
+---
+
+# Definition of Done (measurable)
+
+* `black_frame_count == 0` (24h, all sessions)
+* `transition_latency_ms p95 < 1500` (fresh_ready → commit)
+* `time_in_fallback_ratio < 5%` during normal ops
+* `repeat_rate_20frames < 2%` with LRU+noise
+* `validator_fail_rate < 0.5%` and `quarantined_count trend ↘`
+
+---
+
+If you want, I can turn this into a checklist PR template and a tiny “smoke-tester” script that simulates pool exhaustion + rapid track changes to stress the FSM and buffer logic.

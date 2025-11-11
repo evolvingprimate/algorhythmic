@@ -1000,75 +1000,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.error(`[ALERT] 🚨 Pool exhausted or insufficient frames (<2) for user ${userId} session ${sessionId} - EMERGENCY FALLBACK ACTIVATED`);
         
         try {
-          // First try: Re-fetch fresh queue WITHOUT recently-served filter
-          const emergencyFresh = sessionId 
-            ? await storage.getFreshArtworks(sessionId, userId, 20)
-            : [];
-          
-          if (emergencyFresh.length >= 2) {
-            combinedArtworks = emergencyFresh;
-            console.warn(`[EmergencyFallback] Using ${combinedArtworks.length} fresh artworks (recently-served filter bypassed) for user ${userId} session ${sessionId}`);
-          } else {
-            // Second try: Use randomized emergency fallback for variety
-            // CRITICAL FIX: Use new method with ORDER BY RANDOM() to prevent same 2 frames
-            const emergencyStorage = await storage.getEmergencyFallbackArtworks(userId, {
-              limit: 50, // Get more to survive filtering
+          // Use clean 3-tier fallback service
+          const { resolveEmergencyFallback, emitFallbackTelemetry } = await import('./fallback-service');
+          const fallbackResult = await resolveEmergencyFallback(
+            storage,
+            sessionId,
+            userId,
+            {
               orientation,
-            });
-            
-            // CRITICAL VALIDATION: Filter out any artworks without imageUrl
-            const validStorage = emergencyStorage.filter((a: any) => {
-              if (!a.imageUrl) {
-                console.error(`[EmergencyFallback] ❌ Artwork ${a.id} missing imageUrl!`);
-                return false;
-              }
-              return true;
-            });
-            
-            if (validStorage.length === 0) {
-              console.error(`[EmergencyFallback] ❌ CRITICAL: No valid artworks with imageUrl found!`);
-              // Try to get ANY artwork from the database, even duplicates
-              const anyArtwork = await storage.getArtSessions({ limit: 2 });
-              if (anyArtwork.length > 0) {
-                combinedArtworks = anyArtwork;
-                console.warn(`[EmergencyFallback] Using ANY ${combinedArtworks.length} artworks as last resort`);
-              } else {
-                // Absolute last resort - return empty and trigger generation
-                combinedArtworks = [];
-                console.error(`[EmergencyFallback] ❌ DATABASE EMPTY - no artworks available at all!`);
-              }
-            } else {
-              // FIX: Don't apply recently-served filter if it would leave <2 frames
-              const unfiltered = validStorage;
-              const filtered = validStorage.filter((a: any) => !recentlyServedIds.has(a.id));
-              
-              if (filtered.length >= 2) {
-                // Use filtered if we have enough frames
-                combinedArtworks = filtered.slice(0, 20);
-                console.warn(`[EmergencyFallback] Using ${combinedArtworks.length} filtered storage artworks for user ${userId}`);
-              } else if (unfiltered.length >= 2) {
-                // CRITICAL: Use unfiltered to prevent glitch (bypass recently-served)
-                combinedArtworks = unfiltered.slice(0, Math.max(2, filtered.length));
-                console.warn(`[EmergencyFallback] GLITCH PREVENTION: Using ${combinedArtworks.length} unfiltered artworks (bypassing recently-served) for user ${userId}`);
-                // Don't cache these to allow fresh rotation next time
-                (telemetry as any).cache_bypassed = true;
-              } else {
-                // Last resort: Use whatever we have
-                combinedArtworks = unfiltered;
-                console.error(`[EmergencyFallback] CRITICAL: Only ${combinedArtworks.length} artworks available for user ${userId}`);
-              }
+              styleTags,
+              artistTags,
+              recentlyServedIds,
+              minFrames: 2 // MorphEngine requirement
             }
-          }
+          );
           
-          // Update telemetry
+          combinedArtworks = fallbackResult.artworks;
+          (telemetry as any).fallback_tier = fallbackResult.tier;
+          (telemetry as any).cache_bypassed = fallbackResult.bypassedCache;
           telemetry.total_returned = combinedArtworks.length;
-          telemetry.pool_exhausted = combinedArtworks.length < 2;
+          telemetry.pool_exhausted = false; // We found frames
           
-          // REMOVED: Don't mark as recently-served in emergency fallback
-          // Let the client confirm render first to avoid filtering out frames
+          // Emit telemetry about fallback usage
+          emitFallbackTelemetry(fallbackResult, userId, sessionId);
+          
+          console.log(`[EmergencyFallback] Resolved via ${fallbackResult.tier} tier: ${combinedArtworks.length} frames`);
         } catch (fallbackError: any) {
-          console.error(`[EmergencyFallback] Failed to fetch fallback artworks:`, fallbackError);
-          // Continue with what we have
+          console.error(`[EmergencyFallback] Failed to resolve fallback:`, fallbackError);
+          // If all tiers fail, return empty array to trigger generation
+          combinedArtworks = [];
+          telemetry.pool_exhausted = true;
+          (telemetry as any).fallback_failed = true;
         }
       }
       
@@ -1564,17 +1526,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         completedAt: new Date(),
       });
       
-      // Step 5: Emit WebSocket event to notify clients
+      // Step 5: Emit WebSocket event to notify clients with sequence ID
+      const { wsSequence, WS_MESSAGE_TYPES } = await import('./websocket-sequence');
+      const message = wsSequence.createSequencedMessage(
+        WS_MESSAGE_TYPES.ARTWORK_SWAP,
+        {
+          jobId,
+          status: 'completed',
+          artwork,
+        }
+      );
+      
       wss.clients.forEach((client) => {
         if (client.readyState === WebSocket.OPEN) {
-          client.send(JSON.stringify({
-            type: 'artwork.swap',
-            data: {
-              jobId,
-              status: 'completed',
-              artwork,
-            },
-          }));
+          client.send(JSON.stringify(message));
         }
       });
       
@@ -1594,17 +1559,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // For now, we don't refund on failure to keep accounting simple
       // Future: Implement compensating transaction or retry logic
       
-      // Emit failure event
+      // Emit failure event with sequence ID
+      const { wsSequence: wsSeqFail, WS_MESSAGE_TYPES: WS_TYPES_FAIL } = await import('./websocket-sequence');
+      const failMessage = wsSeqFail.createSequencedMessage(
+        WS_TYPES_FAIL.ARTWORK_SWAP,
+        {
+          jobId,
+          status: 'failed',
+          error: error.message,
+        }
+      );
+      
       wss.clients.forEach((client) => {
         if (client.readyState === WebSocket.OPEN) {
-          client.send(JSON.stringify({
-            type: 'artwork.swap',
-            data: {
-              jobId,
-              status: 'failed',
-              error: error.message,
-            },
-          }));
+          client.send(JSON.stringify(failMessage));
         }
       });
     }

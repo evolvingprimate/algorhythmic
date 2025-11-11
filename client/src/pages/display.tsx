@@ -61,6 +61,7 @@ import { EffectLogger } from "@/lib/effectLogger";
 import { EngineRegistry } from "@/lib/renderers";
 import { FrameValidator } from "@/lib/FrameValidator";
 import { DynamicModeController } from "@/components/DynamicModeController";
+import { PLACEHOLDER_IMAGE_URL } from "@/lib/PlaceholderFrame";
 import type { AudioAnalysis, ArtVote, ArtPreference, MusicIdentification, ArtSession } from "@shared/schema";
 
 // BUG FIX: Setup step enum for sequential modal flow (prevents overlapping modals)
@@ -1483,8 +1484,33 @@ export default function Display() {
       const currentFrame = morphEngineRef.current.getCurrentFrame();
       
       if (!currentFrame) {
-        // No frames loaded yet - UI shows "Ready to Create" message
-        // (background gradient is visible, never black)
+        // CRITICAL: Use placeholder guard to prevent black frames
+        // Display placeholder immediately using the imported URL
+        if (rendererRef.current && PLACEHOLDER_IMAGE_URL) {
+          // Create a minimal morph state for static display
+          const placeholderMorphState = {
+            phase: 'hold' as const,
+            phaseProgress: 0,
+            morphProgress: 0,
+            frameForeshadowMix: 0,
+            audioIntensity: 0,
+            dna: Array(50).fill(0.5),
+            prompt: 'Loading artwork...',
+            explanation: '',
+            artworkId: 'placeholder',
+            musicInfo: null,
+            audioAnalysis: null,
+          };
+          
+          // Use static renderer mode for placeholder (same image for both frames)
+          rendererRef.current.render(
+            PLACEHOLDER_IMAGE_URL,     // current frame
+            PLACEHOLDER_IMAGE_URL,     // next frame (same for static)
+            placeholderMorphState,     // morph state
+            undefined                  // no audio analysis
+          );
+        }
+        
         animationFrameRef.current = requestAnimationFrame(renderLoop);
         return;
       }

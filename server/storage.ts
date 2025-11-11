@@ -91,6 +91,10 @@ export interface IStorage {
   ): Promise<ArtSession[]>;
   getFreshArtworks(sessionId: string, userId: string, limit?: number): Promise<ArtSession[]>; // Fresh AI-generated artwork (priority queue)
   getCatalogCandidates(userId: string, styleTags: string[], limit?: number): Promise<ArtSession[]>; // Catalog search for style switching
+  getEmergencyFallbackArtworks(userId: string, options?: {
+    limit?: number;
+    orientation?: string;
+  }): Promise<ArtSession[]>; // Emergency fallback with randomization to prevent cycling
   
   // Users (for subscription management and authentication)
   getUser(id: string): Promise<User | undefined>;
@@ -740,6 +744,31 @@ export class MemStorage implements IStorage {
     // MemStorage stub: return empty with global tier
     // In production, this would do in-memory filtering similar to PostgresStorage
     return { artworks: [], tier: 'global', latencyMs: 0 };
+  }
+
+  async getEmergencyFallbackArtworks(
+    userId: string,
+    options?: {
+      limit?: number;
+      orientation?: string;
+    }
+  ): Promise<ArtSession[]> {
+    const limit = options?.limit ?? 20;
+    const orientation = options?.orientation;
+    
+    // Get all sessions from memory, filter by imageUrl and orientation
+    const allSessions = Array.from(this.sessions.values())
+      .filter(session => {
+        if (!session.imageUrl) return false;
+        if (orientation && session.orientation !== orientation) return false;
+        return true;
+      });
+    
+    // Shuffle for variety (similar to RANDOM() in SQL)
+    const shuffled = allSessions.sort(() => Math.random() - 0.5);
+    
+    // Return limited results
+    return shuffled.slice(0, limit);
   }
 }
 
