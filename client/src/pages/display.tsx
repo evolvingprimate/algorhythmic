@@ -49,6 +49,7 @@ import { DebugOverlay, type DebugStats } from "@/components/debug-overlay";
 import { useToast } from "@/hooks/use-toast";
 import { useImpressionRecorder } from "@/hooks/useImpressionRecorder";
 import { telemetryService } from "@/lib/maestro/telemetry/TelemetryService";
+import { ClientTelemetry } from "@/lib/client-telemetry";
 import { AudioAnalyzer } from "@/lib/audio-analyzer";
 import { WebSocketClient } from "@/lib/websocket-client";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -1860,12 +1861,18 @@ export default function Display() {
         if (currentFrame.artworkId && currentOpacity > 0.1 && !lastRenderedArtworkIdsRef.current.has(currentFrame.artworkId)) {
           pendingRenderAcksRef.current.add(currentFrame.artworkId);
           lastRenderedArtworkIdsRef.current.add(currentFrame.artworkId);
+          
+          // Track frame display for telemetry
+          ClientTelemetry.getInstance().trackFrameDisplay(currentFrame.imageUrl);
         }
         
         // Add nextFrame if it has significant opacity (>10%) during morph phase
         if (nextFrame?.artworkId && nextOpacity > 0.1 && !lastRenderedArtworkIdsRef.current.has(nextFrame.artworkId)) {
           pendingRenderAcksRef.current.add(nextFrame.artworkId);
           lastRenderedArtworkIdsRef.current.add(nextFrame.artworkId);
+          
+          // Track frame display for telemetry
+          ClientTelemetry.getInstance().trackFrameDisplay(nextFrame.imageUrl);
         }
         
         // Debounce render-ack API calls (max once per second instead of 60 times per second)

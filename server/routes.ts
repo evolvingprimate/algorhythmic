@@ -2312,6 +2312,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Circuit Breaker Admin Endpoint (for emergency reset)
+  app.post('/api/admin/reset-circuit-breaker', async (req, res) => {
+    try {
+      const previousState = generationHealthService.forceClosed();
+      console.log(`[Admin] Circuit breaker reset from ${previousState} to closed`);
+      
+      res.json({ 
+        success: true,
+        previousState,
+        currentState: generationHealthService.getCurrentState(),
+        message: 'Circuit breaker has been reset to closed state'
+      });
+    } catch (error: any) {
+      console.error('[Admin] Circuit breaker reset error:', error);
+      res.status(500).json({ 
+        message: 'Failed to reset circuit breaker',
+        error: error.message 
+      });
+    }
+  });
+
+  // Get Circuit Breaker Status
+  app.get('/api/admin/circuit-breaker-status', (req, res) => {
+    try {
+      const status = generationHealthService.getDetailedStatus();
+      res.json(status);
+    } catch (error: any) {
+      console.error('[Admin] Circuit breaker status error:', error);
+      res.status(500).json({ 
+        message: 'Failed to get circuit breaker status',
+        error: error.message 
+      });
+    }
+  });
+
   // WebSocket client tracking
   const wsClients = new Map<WebSocket, string>();
   
