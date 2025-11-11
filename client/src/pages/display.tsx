@@ -343,12 +343,13 @@ export default function Display() {
 
   // Auto-generate artwork when unseen pool runs low (Freshness Pipeline)
   useEffect(() => {
+    // CRITICAL FIX: Trigger fallback generation even when frame count is 0 (empty pool scenario)
     if (
       unseenResponse?.needsGeneration && 
-      morphEngineRef.current.getFrameCount() > 0 && 
       !isGeneratingRef.current
     ) {
-      console.log('[Freshness] Pool low, auto-generating artwork to refill...');
+      const frameCount = morphEngineRef.current.getFrameCount();
+      console.log(`[Freshness] Pool ${frameCount === 0 ? 'empty' : 'low'}, auto-generating artwork to ${frameCount === 0 ? 'populate' : 'refill'}...`);
       const audioAnalysis = createDefaultAudioAnalysis();
       generateArtMutation.mutate({ audioAnalysis, musicInfo: null });
     }
