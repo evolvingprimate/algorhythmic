@@ -1,6 +1,7 @@
 // Emergency Fallback Service - Clean 3-tier fallback system for artwork retrieval
 import type { ArtSession } from "../shared/schema";
 import type { IStorage } from "./storage";
+import { recentlyServedCache } from "./recently-served-cache";
 
 export interface FallbackResult {
   artworks: ArtSession[];
@@ -24,6 +25,7 @@ export function filterValidImageUrls(artworks: ArtSession[]): ArtSession[] {
 /**
  * Resolves emergency fallback artworks using a clean 3-tier strategy
  * Guarantees to return at least 2 valid frames or throws an error
+ * Integrates with RecentlyServed cache to prevent duplicates
  */
 export async function resolveEmergencyFallback(
   storage: IStorage,
@@ -35,6 +37,7 @@ export async function resolveEmergencyFallback(
     artistTags?: string[];
     recentlyServedIds?: Set<string>;
     minFrames?: number;
+    useCache?: boolean; // Option to use the unified cache
   } = {}
 ): Promise<FallbackResult> {
   const { 
@@ -42,39 +45,61 @@ export async function resolveEmergencyFallback(
     styleTags, 
     artistTags, 
     recentlyServedIds = new Set(),
-    minFrames = 2 // MorphEngine requires at least 2 frames
+    minFrames = 2, // MorphEngine requires at least 2 frames
+    useCache = true // Use cache by default
   } = options;
 
-  console.log(`[Fallback] Starting 3-tier fallback for user ${userId}, session ${sessionId}`);
+  console.log(`[Fallback] Starting 3-tier fallback for user ${userId}, session ${sessionId}, cache: ${useCache}`);
   
   // Tier 1: Fresh Generated Frames (never seen by user)
   if (sessionId) {
     try {
       const freshArtworks = await storage.getFreshArtworks(sessionId, userId, 20);
-      const validFresh = filterValidImageUrls(freshArtworks);
+      let validFresh = filterValidImageUrls(freshArtworks);
       
-      // Apply recently-served filter but ensure we have enough frames
+      // Use unified cache if enabled
+      if (useCache && sessionId) {
+        validFresh = recentlyServedCache.filterRecentlyServed(sessionId, userId, validFresh);
+      }
+      
+      // Apply legacy recently-served filter as well if provided
       const filteredFresh = validFresh.filter(a => !recentlyServedIds.has(a.id));
       
       if (filteredFresh.length >= minFrames) {
         console.log(`[Fallback] Tier 1 SUCCESS: ${filteredFresh.length} fresh frames`);
-        return {
+        
+        // Track served artworks in cache
+        const result = {
           artworks: filteredFresh,
-          tier: 'fresh',
+          tier: 'fresh' as const,
           reason: 'Fresh generated frames available',
           bypassedCache: false
         };
+        
+        if (useCache && sessionId) {
+          const servedIds = result.artworks.map(a => a.id);
+          recentlyServedCache.addServed(sessionId, userId, servedIds, 'fresh');
+        }
+        
+        return result;
       }
       
       // If filtering leaves too few, use unfiltered to prevent glitch
       if (validFresh.length >= minFrames) {
         console.warn(`[Fallback] Tier 1 PARTIAL: Using unfiltered fresh (bypassing cache)`);
-        return {
+        const result = {
           artworks: validFresh.slice(0, Math.max(minFrames, filteredFresh.length)),
-          tier: 'fresh',
+          tier: 'fresh' as const,
           reason: 'Fresh frames with cache bypass',
           bypassedCache: true
         };
+        
+        if (useCache && sessionId) {
+          const servedIds = result.artworks.map(a => a.id);
+          recentlyServedCache.addServed(sessionId, userId, servedIds, 'fresh');
+        }
+        
+        return result;
       }
     } catch (error) {
       console.error(`[Fallback] Tier 1 failed:`, error);
@@ -85,10 +110,19 @@ export async function resolveEmergencyFallback(
   if (styleTags && styleTags.length > 0) {
     try {
       const styleMatched = await storage.getCatalogCandidates(userId, styleTags, 50);
-      const validStyled = filterValidImageUrls(styleMatched);
+      let validStyled = filterValidImageUrls(styleMatched);
       
-      // For Tier 2, we relax the recently-served restriction
-      // Use LRU ordering instead of hard filter
+      // Use unified cache if enabled (relax filtering with LRU ordering)
+      if (useCache && sessionId) {
+        // Filter but keep recently served at the end (LRU ordering)
+        const filtered = recentlyServedCache.filterRecentlyServed(sessionId, userId, validStyled);
+        const recentSet = new Set(validStyled.map(a => a.id));
+        filtered.forEach(a => recentSet.delete(a.id));
+        // Put filtered first, then recently served at the end
+        validStyled = [...filtered, ...validStyled.filter(a => recentSet.has(a.id))];
+      }
+      
+      // Apply legacy filter as secondary sorting
       const sortedByLRU = validStyled.sort((a, b) => {
         const aRecent = recentlyServedIds.has(a.id) ? 1 : 0;
         const bRecent = recentlyServedIds.has(b.id) ? 1 : 0;
@@ -97,12 +131,19 @@ export async function resolveEmergencyFallback(
       
       if (sortedByLRU.length >= minFrames) {
         console.log(`[Fallback] Tier 2 SUCCESS: ${sortedByLRU.length} style-matched frames`);
-        return {
+        const result = {
           artworks: sortedByLRU.slice(0, 20),
-          tier: 'style-matched',
+          tier: 'style-matched' as const,
           reason: 'Style-matched catalog frames',
           bypassedCache: true // Tier 2 always bypasses strict cache
         };
+        
+        if (useCache && sessionId) {
+          const servedIds = result.artworks.map(a => a.id);
+          recentlyServedCache.addServed(sessionId, userId, servedIds, 'style');
+        }
+        
+        return result;
       }
     } catch (error) {
       console.error(`[Fallback] Tier 2 failed:`, error);
@@ -117,30 +158,61 @@ export async function resolveEmergencyFallback(
       orientation
     });
     
-    const validGlobal = filterValidImageUrls(globalArtworks);
+    let validGlobal = filterValidImageUrls(globalArtworks);
+    
+    // Use unified cache if enabled (with relaxed filtering for Tier 3)
+    if (useCache && sessionId) {
+      const filtered = recentlyServedCache.filterRecentlyServed(sessionId, userId, validGlobal);
+      // If we have enough filtered, use them. Otherwise use all
+      if (filtered.length >= minFrames) {
+        validGlobal = filtered;
+      }
+    }
     
     if (validGlobal.length >= minFrames) {
       console.log(`[Fallback] Tier 3 SUCCESS: ${validGlobal.length} global frames`);
-      return {
+      const result = {
         artworks: validGlobal.slice(0, 20),
-        tier: 'global',
+        tier: 'global' as const,
         reason: 'Global fallback pool',
         bypassedCache: true
       };
+      
+      if (useCache && sessionId) {
+        const servedIds = result.artworks.map(a => a.id);
+        recentlyServedCache.addServed(sessionId, userId, servedIds, 'global');
+      }
+      
+      return result;
     }
     
     // Absolute last resort - try getRecentArt without any filters
     const recentArt = await storage.getRecentArt(50);
-    const validRecent = filterValidImageUrls(recentArt);
+    let validRecent = filterValidImageUrls(recentArt);
+    
+    // Even in last resort, try to respect cache if possible
+    if (useCache && sessionId) {
+      const filtered = recentlyServedCache.filterRecentlyServed(sessionId, userId, validRecent);
+      if (filtered.length >= minFrames) {
+        validRecent = filtered;
+      }
+    }
     
     if (validRecent.length >= minFrames) {
       console.warn(`[Fallback] Tier 3 LAST RESORT: ${validRecent.length} recent artworks`);
-      return {
+      const result = {
         artworks: validRecent.slice(0, Math.max(minFrames, 10)),
-        tier: 'global',
+        tier: 'global' as const,
         reason: 'Last resort global pool',
         bypassedCache: true
       };
+      
+      if (useCache && sessionId) {
+        const servedIds = result.artworks.map(a => a.id);
+        recentlyServedCache.addServed(sessionId, userId, servedIds, 'global');
+      }
+      
+      return result;
     }
   } catch (error) {
     console.error(`[Fallback] Tier 3 failed:`, error);
