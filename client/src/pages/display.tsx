@@ -1627,6 +1627,11 @@ export default function Display() {
     console.log('[Display] 🔥 Style change detected - immediate flush to prevent repeats');
     impressionRecorder.flush(true); // Immediate synchronous flush
     
+    // BUG FIX: Clear old artwork from morphEngine when style changes
+    // This prevents showing old "cartoon landscape" when user selects "landscape/Escher"
+    console.log('[Display] 🧹 Clearing morphEngine frames for fresh artwork with new style');
+    morphEngineRef.current.reset();
+    
     // BUG FIX #3: Advance to AUDIO step (wizard remains latched until completion)
     setSetupStep(SetupStep.AUDIO);
     
@@ -1640,6 +1645,11 @@ export default function Display() {
             console.log('[Display] First-time setup complete - enabling artwork loading');
             setSetupComplete(true);
           }
+          
+          // BUG FIX: Invalidate artwork cache to fetch fresh images with new style
+          queryClient.invalidateQueries({ queryKey: ['/api/artworks/recent'] });
+          queryClient.invalidateQueries({ queryKey: ['/api/artworks/library'] });
+          console.log('[Display] 🔄 Artwork cache invalidated - fetching fresh images');
         }
       }
     );
