@@ -76,6 +76,7 @@ export interface IStorage {
   // User Art Impressions (Freshness Pipeline)
   recordImpression(userId: string, artworkId: string, isBridge?: boolean): Promise<void>;
   recordBatchImpressions(userId: string, artworkIds: string[]): Promise<number>;
+  recordRenderedImpressions(userId: string, artworkIds: string[], source?: 'bridge' | 'fresh'): Promise<number>;
   validateArtworkVisibility(userId: string, artworkIds: string[]): Promise<string[]>; // Filter to valid IDs in global pool
   getUnseenArtworks(
     userId: string, 
@@ -310,6 +311,11 @@ export class MemStorage implements IStorage {
 
   async recordBatchImpressions(userId: string, artworkIds: string[]): Promise<number> {
     // Stub implementation (not used, DbStorage handles this)
+    return artworkIds.length;
+  }
+
+  async recordRenderedImpressions(userId: string, artworkIds: string[], source?: 'bridge' | 'fresh'): Promise<number> {
+    // Stub implementation (not used, PostgresStorage handles this)
     return artworkIds.length;
   }
 
@@ -977,6 +983,42 @@ export class PostgresStorage implements IStorage {
       .onConflictDoUpdate({
         target: [userArtImpressions.userId, userArtImpressions.artworkId],
         set: { viewedAt: sql`NOW()` } // Update timestamp on conflict (maintains cooldown logic)
+      });
+    
+    return artworkIds.length;
+  }
+
+  async recordRenderedImpressions(userId: string, artworkIds: string[], source?: 'bridge' | 'fresh'): Promise<number> {
+    if (!artworkIds.length) return 0;
+    
+    // Determine if this is a bridge impression
+    const isBridge = source === 'bridge';
+    
+    // Construct rows for batch insert (similar to recordImpression but batched)
+    const rows = artworkIds.map(artworkId => {
+      const row: any = {
+        userId,
+        artworkId,
+        viewedAt: sql`NOW()`,
+      };
+      
+      // Only set bridgeAt if this is a catalog bridge
+      if (isBridge) {
+        row.bridgeAt = sql`NOW()`;
+      }
+      
+      return row;
+    });
+    
+    // UPSERT: Insert new impressions or update existing ones
+    await this.db
+      .insert(userArtImpressions)
+      .values(rows)
+      .onConflictDoUpdate({
+        target: [userArtImpressions.userId, userArtImpressions.artworkId],
+        set: isBridge 
+          ? { viewedAt: sql`NOW()`, bridgeAt: sql`NOW()` }
+          : { viewedAt: sql`NOW()` }
       });
     
     return artworkIds.length;

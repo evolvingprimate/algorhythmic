@@ -197,6 +197,58 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ============================================================================
+  // Render-Ack Impressions: Record impressions only when artwork is displayed
+  // ============================================================================
+  
+  app.post("/api/impressions/rendered", isAuthenticated, async (req: any, res) => {
+    try {
+      const { artworkIds = [], source } = req.body as { artworkIds?: string[]; source?: 'bridge' | 'fresh' };
+      
+      // Validation: check array exists
+      if (!Array.isArray(artworkIds) || artworkIds.length === 0) {
+        return res.status(400).json({ error: "artworkIds[] required" });
+      }
+      
+      // Guardrails: max batch size (catalogue bridge returns 2, but allow buffer)
+      const MAX_BATCH = 10;
+      if (artworkIds.length > MAX_BATCH) {
+        return res.status(413).json({ error: `Limit ${MAX_BATCH} ids per call` });
+      }
+      
+      // Get userId from authenticated user
+      const userId = req.user.claims.sub;
+      
+      // Deduplication and sanitization
+      const ids = Array.from(new Set(artworkIds.map(String))).filter(Boolean);
+      
+      // Validate artwork IDs exist in global pool (security + prevent invalid IDs)
+      const validIds = await storage.validateArtworkVisibility(userId, ids);
+      const rejectedIds = ids.filter(id => !validIds.includes(id));
+      
+      // Log rejected IDs for monitoring
+      if (rejectedIds.length > 0) {
+        console.log(`[Render-Ack] Rejected ${rejectedIds.length} invalid IDs:`, rejectedIds);
+      }
+      
+      // Record impressions for valid IDs only
+      const recordedCount = validIds.length > 0
+        ? await storage.recordRenderedImpressions(userId, validIds, source)
+        : 0;
+      
+      console.log(`[Render-Ack] Recorded ${recordedCount} impressions (source: ${source || 'unknown'}) for user ${userId}`);
+      
+      res.json({
+        recordedCount,
+        rejectedIds,
+        source: source || 'unknown',
+      });
+    } catch (error: any) {
+      console.error("Error in render-ack impressions:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ============================================================================
   // PHASE 2: RAI Telemetry API Routes
   // ============================================================================
 
