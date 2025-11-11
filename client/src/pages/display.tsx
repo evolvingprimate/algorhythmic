@@ -62,6 +62,7 @@ import { EngineRegistry } from "@/lib/renderers";
 import { FrameValidator } from "@/lib/FrameValidator";
 import { DynamicModeController } from "@/components/DynamicModeController";
 import { PLACEHOLDER_IMAGE_URL } from "@/lib/PlaceholderFrame";
+import { FrameBuffer, type BufferedFrame } from "@/lib/FrameBuffer";
 import type { AudioAnalysis, ArtVote, ArtPreference, MusicIdentification, ArtSession } from "@shared/schema";
 
 // BUG FIX: Setup step enum for sequential modal flow (prevents overlapping modals)
@@ -97,6 +98,7 @@ export default function Display() {
   const [currentArtworkId, setCurrentArtworkId] = useState<string | null>(null);
   const [currentArtworkSaved, setCurrentArtworkSaved] = useState(false);
   const [currentMusicInfo, setCurrentMusicInfo] = useState<MusicIdentification | null>(null);
+  const lastMusicTrackRef = useRef<string | null>(null);
   const [currentExplanation, setCurrentExplanation] = useState<string>("");
   const [showExplanation, setShowExplanation] = useState(false);
   const [isIdentifyingMusic, setIsIdentifyingMusic] = useState(false);
@@ -176,6 +178,7 @@ export default function Display() {
   const wsClientRef = useRef<WebSocketClient | null>(null);
   const morphEngineRef = useRef<MorphEngine>(new MorphEngine()); // Initialize immediately
   const rendererRef = useRef<RendererManager | null>(null);
+  const frameBufferRef = useRef<FrameBuffer | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const hideControlsTimeoutRef = useRef<number>();
   const generationTimeoutRef = useRef<number>();
@@ -287,6 +290,30 @@ export default function Display() {
       }
     };
   }, []);
+
+  // Detect music changes and mark stale frames in FrameBuffer
+  useEffect(() => {
+    if (!currentMusicInfo?.title) return;
+    
+    const currentTrack = currentMusicInfo.title;
+    
+    // Check if music changed
+    if (lastMusicTrackRef.current && lastMusicTrackRef.current !== currentTrack) {
+      console.log(`[FrameBuffer] Music changed from "${lastMusicTrackRef.current}" to "${currentTrack}"`);
+      
+      // Mark stale frames in FrameBuffer
+      if (frameBufferRef.current) {
+        frameBufferRef.current.markStaleFrames(currentTrack);
+        
+        // Clear stale frames after a short delay
+        setTimeout(() => {
+          frameBufferRef.current?.clearStaleFrames();
+        }, 2000);
+      }
+    }
+    
+    lastMusicTrackRef.current = currentTrack;
+  }, [currentMusicInfo]);
 
   // FLICKERING FIX: Early unpin when server returns same artwork ID (smooth handoff)
   useEffect(() => {
@@ -1188,6 +1215,71 @@ export default function Display() {
     };
   }, [user?.id]);
 
+  // Initialize FrameBuffer with callback to request more frames
+  useEffect(() => {
+    frameBufferRef.current = new FrameBuffer(() => {
+      // Callback triggered when buffer is low
+      console.log('[FrameBuffer] Buffer low, requesting more frames...');
+      // Trigger generation if not already generating
+      if (!isGeneratingRef.current) {
+        const audioAnalysis = createDefaultAudioAnalysis();
+        generateArtMutation.mutate({ audioAnalysis, musicInfo: currentMusicInfo });
+      }
+    });
+    
+    console.log('[FrameBuffer] Initialized with placeholder guard');
+  }, [currentMusicInfo]);
+
+  // Periodically check if MorphEngine needs frames from buffer
+  useEffect(() => {
+    const checkAndFeedFrames = () => {
+      if (!morphEngineRef.current || !frameBufferRef.current) return;
+      
+      const frameCount = morphEngineRef.current.getFrameCount();
+      
+      // MorphEngine needs at least 2 frames for smooth morphing
+      if (frameCount < 2 && frameBufferRef.current.getBufferSize() > 0) {
+        console.log(`[FrameBuffer] MorphEngine low on frames (${frameCount}), feeding from buffer...`);
+        
+        const nextFrame = frameBufferRef.current.dequeue();
+        
+        // Parse DNA vector
+        const dnaVector = parseDNAFromSession({
+          id: nextFrame.id,
+          imageUrl: nextFrame.imageUrl,
+          prompt: nextFrame.prompt,
+        });
+        
+        // Add frame to MorphEngine
+        morphEngineRef.current.insertFrameAfterCurrent({
+          imageUrl: nextFrame.imageUrl,
+          dnaVector: dnaVector || Array(50).fill(0.5),
+          prompt: nextFrame.prompt || '',
+          explanation: nextFrame.explanation || '',
+          artworkId: nextFrame.id,
+          musicInfo: null, // Will be handled separately
+          audioAnalysis: null,
+        });
+        
+        console.log(`[FrameBuffer] Fed frame ${nextFrame.id} to MorphEngine`);
+        
+        // Start MorphEngine if this was the first frame
+        if (morphEngineRef.current.getFrameCount() === 1) {
+          morphEngineRef.current.start();
+          console.log('[FrameBuffer] Started MorphEngine with first frame');
+        }
+      }
+    };
+    
+    // Check every 2 seconds
+    const interval = setInterval(checkAndFeedFrames, 2000);
+    
+    // Also check immediately
+    checkAndFeedFrames();
+    
+    return () => clearInterval(interval);
+  }, []);
+
   // Initialize WebSocket
   useEffect(() => {
     wsClientRef.current = new WebSocketClient();
@@ -1215,6 +1307,48 @@ export default function Display() {
       if (!artwork || !artwork.imageUrl) {
         console.warn('[WebSocket] ⚠️ Invalid artwork data in swap event');
         return;
+      }
+      
+      // Create BufferedFrame for FrameBuffer
+      const bufferedFrame: BufferedFrame = {
+        id: artwork.id || artwork.imageUrl,
+        imageUrl: artwork.imageUrl,
+        timestamp: new Date(),
+        priority: data.tier === 'style' ? 'style' : 
+                  data.tier === 'global' ? 'global' : 'fresh',
+        sequenceId: data.seq || Date.now(), // Use sequence ID if available
+        musicContext: artwork.musicInfo ? {
+          track: artwork.musicInfo.title || 'Unknown',
+          artist: artwork.musicInfo.artist || 'Unknown',
+          isStale: false
+        } : undefined,
+        prompt: artwork.prompt,
+        explanation: artwork.explanation,
+      };
+      
+      // Enqueue frame in FrameBuffer
+      if (frameBufferRef.current) {
+        frameBufferRef.current.enqueue(bufferedFrame);
+        console.log('[WebSocket] 🎯 Frame enqueued in FrameBuffer with priority:', bufferedFrame.priority);
+        
+        // Check if MorphEngine needs frames (has < 2 frames)
+        const frameCount = morphEngineRef.current.getFrameCount();
+        if (frameCount < 2 && !frameBufferRef.current.hasPlaceholderActive()) {
+          // Dequeue frame and add to MorphEngine
+          const nextFrame = frameBufferRef.current.dequeue();
+          console.log('[WebSocket] 🔄 MorphEngine needs frames, dequeuing from buffer...');
+          
+          // Continue with prewarm and handoff logic for the dequeued frame
+          artwork.imageUrl = nextFrame.imageUrl;
+          artwork.id = nextFrame.id;
+          artwork.prompt = nextFrame.prompt;
+          artwork.explanation = nextFrame.explanation;
+          // Continue with existing prewarm logic below...
+        } else {
+          // Frame buffered for later use
+          console.log(`[WebSocket] 📦 Frame buffered (MorphEngine has ${frameCount} frames)`);
+          return; // Exit early - frame is in buffer
+        }
       }
       
       // ============================================================================
