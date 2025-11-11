@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>RendererManager Test</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: sans-serif;
+            background: #1a1a1a;
+            color: #fff;
+        }
+        #test-container {
+            width: 100vw;
+            height: 100vh;
+            position: relative;
+        }
+        #status {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            padding: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            border-radius: 4px;
+            z-index: 100;
+        }
+    </style>
+</head>
+<body>
+    <div id="status">Loading...</div>
+    <div id="morphing-canvas-container"></div>
+    
+    <script type="module">
+        // This is a simple test to verify that the RendererManager initialization fix works
+        import { RendererManager } from '/src/lib/RendererManager.ts';
+        import { EngineRegistry } from '/src/lib/renderers/index.ts';
+        
+        const statusEl = document.getElementById('status');
+        
+        try {
+            statusEl.textContent = 'Initializing RendererManager...';
+            
+            const registry = EngineRegistry.getInstance();
+            const defaultEngine = registry.getDefaultEngine();
+            
+            const renderer = new RendererManager('morphing-canvas-container', defaultEngine);
+            
+            // Wait for renderer to be ready
+            renderer.whenReady()
+                .then(() => {
+                    statusEl.textContent = '✅ RendererManager initialized successfully!';
+                    statusEl.style.background = 'rgba(0, 128, 0, 0.8)';
+                    
+                    // Check if canvas exists
+                    const canvas = document.getElementById('webgl-canvas');
+                    if (canvas) {
+                        statusEl.textContent += '\n✅ Canvas element created!';
+                    } else {
+                        statusEl.textContent += '\n❌ Canvas element not found!';
+                    }
+                })
+                .catch(error => {
+                    statusEl.textContent = `❌ Failed: ${error.message}`;
+                    statusEl.style.background = 'rgba(128, 0, 0, 0.8)';
+                });
+        } catch (error) {
+            statusEl.textContent = `❌ Error: ${error.message}`;
+            statusEl.style.background = 'rgba(128, 0, 0, 0.8)';
+        }
+    </script>
+</body>
+</html>

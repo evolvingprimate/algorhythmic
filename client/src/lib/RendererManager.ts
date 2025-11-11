@@ -63,6 +63,8 @@ export class RendererManager {
   }> = new Map();
   
   constructor(containerId: string, initialEngine: string) {
+    console.log(`[RendererManager] Constructor called with container: ${containerId}, engine: ${initialEngine}`);
+    
     // BUG FIX: Initialize readiness promise before any async operations
     this.readyPromise = new Promise<void>((resolve, reject) => {
       this.resolveReady = resolve;
@@ -75,6 +77,7 @@ export class RendererManager {
       this.rejectReady(new Error('Container not found'));
       return;
     }
+    console.log('[RendererManager] Container found');
     
     this.canvas = document.createElement('canvas');
     this.canvas.id = 'webgl-canvas';
@@ -85,6 +88,7 @@ export class RendererManager {
     this.canvas.style.top = '0';
     this.canvas.style.left = '0';
     this.canvas.style.zIndex = '0';
+    console.log('[RendererManager] Canvas element created');
     
     this.gl = this.canvas.getContext('webgl2', {
       alpha: false,
@@ -94,11 +98,28 @@ export class RendererManager {
     
     if (!this.gl) {
       console.error('[RendererManager] WebGL2 not supported');
+      // Still append canvas with fallback message
+      if (this.container && this.canvas) {
+        this.container.appendChild(this.canvas);
+        const ctx = this.canvas.getContext('2d');
+        if (ctx) {
+          ctx.fillStyle = '#000';
+          ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+          ctx.fillStyle = '#fff';
+          ctx.font = '24px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText('WebGL2 not supported', this.canvas.width / 2, this.canvas.height / 2);
+        }
+      }
+      this.rejectReady(new Error('WebGL2 not supported'));
       return;
     }
+    console.log('[RendererManager] WebGL2 context created');
     
+    // CRITICAL: Always append canvas to DOM, even if engine fails later
     if (this.container && this.canvas) {
       this.container.appendChild(this.canvas);
+      console.log('[RendererManager] Canvas appended to container');
     }
     
     this.resize();
@@ -107,19 +128,95 @@ export class RendererManager {
     
     this.createTextures();
     
-    // Initialize with the initial engine asynchronously
-    this.switchEngine(initialEngine)
-      .then(() => {
-        this.isReady = true;
-        this.resolveReady();
-        console.log('[RendererManager] ✅ Renderer ready');
-      })
-      .catch((error) => {
-        console.error('[RendererManager] Failed to initialize initial engine:', error);
-        this.rejectReady(error);
-      });
+    // Initialize engine synchronously with proper error handling
+    console.log(`[RendererManager] Starting engine initialization: ${initialEngine}`);
+    const initSuccess = this.initializeEngineSync(initialEngine);
     
-    console.log('[RendererManager] Initializing with engine:', initialEngine);
+    if (initSuccess) {
+      this.isReady = true;
+      this.resolveReady();
+      console.log('[RendererManager] ✅ Renderer ready');
+    } else {
+      console.warn('[RendererManager] ⚠️ Engine initialization failed, but canvas is ready');
+      // Still mark as ready since canvas exists
+      this.isReady = true;
+      this.resolveReady();
+    }
+  }
+  
+  /**
+   * Synchronous engine initialization for constructor
+   */
+  private initializeEngineSync(engineKey: string, fallbackEngines: string[] = ['morpheus_0.3', 'morpheus_0.2', 'morpheus_0.1']): boolean {
+    if (!this.gl) {
+      console.error('[RendererManager] Cannot initialize engine - GL not initialized');
+      return false;
+    }
+    
+    const registry = EngineRegistry.getInstance();
+    
+    // Try primary engine
+    const newEngine = registry.create(engineKey);
+    if (!newEngine) {
+      console.error(`[RendererManager] Failed to create engine: ${engineKey}`);
+    } else {
+      try {
+        console.log(`[RendererManager] Initializing engine: ${engineKey}...`);
+        newEngine.initialize(this.gl); // Synchronous call
+        this.currentEngine = newEngine;
+        this.currentEngineKey = engineKey;
+        console.log(`[RendererManager] ✅ Successfully initialized engine: ${engineKey}`);
+        return true;
+      } catch (error) {
+        console.error(`[RendererManager] ❌ Failed to initialize ${engineKey}:`, error);
+        try {
+          newEngine.destroy();
+        } catch (e) {
+          // Ignore destroy errors
+        }
+      }
+    }
+    
+    // Try fallback engines
+    for (const fallback of fallbackEngines) {
+      if (fallback === engineKey) continue;
+      
+      console.warn(`[RendererManager] 🔄 Attempting fallback to ${fallback}...`);
+      const fallbackEngine = registry.create(fallback);
+      
+      if (!fallbackEngine) {
+        console.error(`[RendererManager] Fallback engine ${fallback} not found`);
+        continue;
+      }
+      
+      try {
+        fallbackEngine.initialize(this.gl); // Synchronous call
+        this.currentEngine = fallbackEngine;
+        this.currentEngineKey = fallback;
+        console.log(`[RendererManager] ✅ Fallback successful: ${fallback}`);
+        
+        // Emit fallback event for UI notification
+        window.dispatchEvent(new CustomEvent('renderer-fallback', {
+          detail: {
+            attempted: engineKey,
+            fallback: fallback,
+            reason: 'Primary engine failed'
+          }
+        }));
+        
+        return true;
+      } catch (fallbackError) {
+        console.error(`[RendererManager] Fallback ${fallback} also failed:`, fallbackError);
+        try {
+          fallbackEngine.destroy();
+        } catch (e) {
+          // Ignore destroy errors
+        }
+      }
+    }
+    
+    console.error('[RendererManager] ❌ All engines failed to initialize');
+    return false;
   }
   
   /**
@@ -180,7 +277,11 @@ export class RendererManager {
     }
     
     if (this.currentEngine) {
-      this.currentEngine.destroy();
+      try {
+        this.currentEngine.destroy();
+      } catch (e) {
+        console.error('[RendererManager] Error destroying previous engine:', e);
+      }
       this.currentEngine = null;
     }
     
@@ -194,7 +295,8 @@ export class RendererManager {
     
     try {
       console.log(`[RendererManager] Initializing engine: ${engineKey}...`);
-      await newEngine.initialize(this.gl);
+      // initialize is synchronous, not async
+      newEngine.initialize(this.gl);
       this.currentEngine = newEngine;
       this.currentEngineKey = engineKey;
       this.pendingEngineKey = null;
@@ -202,7 +304,11 @@ export class RendererManager {
       return true;
     } catch (error) {
       console.error(`[RendererManager] ❌ Failed to initialize ${engineKey}:`, error);
-      newEngine.destroy();
+      try {
+        newEngine.destroy();
+      } catch (e) {
+        // Ignore destroy errors
+      }
       
       // Try fallback engines
       for (const fallback of fallbackEngines) {
@@ -217,7 +323,8 @@ export class RendererManager {
         }
         
         try {
-          await fallbackEngine.initialize(this.gl);
+          // initialize is synchronous, not async
+          fallbackEngine.initialize(this.gl);
           this.currentEngine = fallbackEngine;
           this.currentEngineKey = fallback;
           this.pendingEngineKey = null;
@@ -235,7 +342,11 @@ export class RendererManager {
           return true;
         } catch (fallbackError) {
           console.error(`[RendererManager] Fallback ${fallback} also failed:`, fallbackError);
-          fallbackEngine.destroy();
+          try {
+            fallbackEngine.destroy();
+          } catch (e) {
+            // Ignore destroy errors
+          }
         }
       }
       
