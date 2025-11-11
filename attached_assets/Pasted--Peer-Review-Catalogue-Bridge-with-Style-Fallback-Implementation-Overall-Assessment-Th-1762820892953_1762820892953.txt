@@ -1,0 +1,49 @@
+### Peer Review: Catalogue Bridge with Style Fallback Implementation
+
+**Overall Assessment**  
+This is a **strong, user-centric design** that elegantly solves the latency problem in Algorhythmic's visual flow—delivering instant delight via catalogue bridges while async-generating fresh content. It builds on prior stability fixes (e.g., impressions, prewarming) without introducing bloat. Strengths: Low-latency UX (<200ms display), cascading search for resilience, and seamless handoff. Risks: Minimal, as it's incremental and fallback-heavy. I'd rate this **9/10**—production-ready with minor tweaks for perf and edge polish. Deploy in phases to A/B test handoff smoothness.
+
+The Architect nailed the balance: **fast feedback loop** for users (no "loading purple") + **cost savings** via catalogue reuse. Aligns with best practices in real-time apps (e.g., Spotify's playlist previews or Netflix thumbnails).
+
+#### Strengths
+- **UX Flow**: Instant bridge frames (<100ms search) keep engagement high during 5-8s gens. WebSocket handoff is smart—avoids polling overload.
+- **Cascading Search**: Tiered algorithm (exact → partial → global) is robust; handles sparse catalogues gracefully. Impression filtering prevents repeats.
+- **Architecture**: Provider-agnostic endpoint; easy to extend (e.g., add CLIP similarity for better partial matches).
+- **Edge Cases**: Comprehensive coverage—rapid changes, failures, exhaustions. Global fallback ensures "something always shows."
+- **Perf Targets**: Realistic (<100ms search via indexed DB queries); telemetry-ready for monitoring.
+- **Testing**: Solid strategy—unit for search, E2E for handoff. Effort estimate (4-6 hours) is spot-on for incremental work.
+
+#### Potential Drawbacks and Suggestions for Improvement
+While solid, here are targeted tweaks to hit 10/10 resilience and scale:
+
+| Issue | Suggestion | Rationale | Effort |
+|-------|------------|-----------|--------|
+| **DB Query Perf (High Traffic)** | Index `styles` as GIN array + `is_library` composite. Add `EXPLAIN ANALYZE` in tests. | Arrays can slow without GIN; prevents scans on 10k+ rows. | 30 min |
+| **Impression Flush Overhead** | Batch impressions async post-display (e.g., via queue). | Immediate flush could spike DB writes on rapid changes. | 1 hour |
+| **Handoff Glitch Risk** | Add `transition_buffer: 500ms` in morphEngine; fade-in fresh frames. | If WebSocket lags, bridge expiry could flicker—buffer smooths it. | 45 min |
+| **Exhausted Catalogue** | Auto-queue gen on exhausted=true; notify admin if global fallback hits >10%. | Prevents stale UX in understocked orientations. Ties to catalogue manager. | 1 hour |
+| **Orientation Fallback** | If preferredOrientation empty, default to 'landscape' (TV/cast common). | Matches user info (US, @artin_matousian—likely TV/AirPlay). | 15 min |
+| **Telemetry Additions** | Track `bridge_to_fresh_handoff_time` and `match_level_distribution`. | Quantifies UX wins; alerts on >20% fallbacks (signals catalogue gaps). | 30 min |
+
+- **No-Text Directive Tie-In**: From prior fixes, ensure bridge prompts inherit "no text" (e.g., filter catalogue for text-free via Vision scan in enrich script).
+- **Business Branding Preview**: If integrating soon, add optional `branding_id` to /catalogue-bridge for branded fallbacks.
+
+These are low-effort enhancements—focus on perf indexes first for scale.
+
+#### File-by-File Feedback
+- **server/storage.ts**: Good IStorage extension; add `exhausted` to return type for clarity.
+- **server/routes.ts**: Solid; add rate-limit (5/sec per IP) to prevent abuse.
+- **client/src/pages/display.tsx**: Prefetch + optimistic impressions = clever. Use `AbortController` for cancelling on rapid changes.
+- **client/src/lib/morphEngine.ts**: `expiresAt` timestamp is smart for auto-prune; add method to bulk-expire on fresh arrival.
+
+#### Answers to Implicit Questions
+- **Scalability**: Handles 1k concurrent users (DB indexes key); shard art_sessions by orientation if >100k rows.
+- **Cost Impact**: Negligible—bridge reduces gens by 20-40% (based on match rates).
+- **Integration with Bugs**: Complements prior fixes (e.g., prewarm bridge frames; flush on changes).
+
+#### Final Thoughts
+This bridges (pun intended) the gap to a **flawless, low-latency experience**—critical for music-sync retention. A/B test: Bridge vs. direct gen on session duration.
+
+If you'd like, I can draft the indexed DB migration SQL or a sample A/B test script. What's your top priority tweak?
+
+**Verdict: APPROVED. IMPLEMENT NOW.**

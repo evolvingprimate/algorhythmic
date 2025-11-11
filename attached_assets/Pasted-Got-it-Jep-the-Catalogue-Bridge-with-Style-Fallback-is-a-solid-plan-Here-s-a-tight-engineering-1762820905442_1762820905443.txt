@@ -1,0 +1,228 @@
+Got it, Jep — the “Catalogue Bridge with Style Fallback” is a solid plan. Here’s a tight engineering review with upgrades so it’s fast, duplicate-safe, and hard to break under churn.
+
+# TL;DR (What to change)
+
+* **Record impressions on render, not optimistically.** Use a render callback so we don’t “burn” catalogue items that never reached the screen.
+* **Exclude bridge frames from fresh results.** Add a server-side “recently served” cache + NOT EXISTS filter to prevent the generator from handing you what you just bridged.
+* **Abort + dedupe requests.** Rapid style switches should cancel in-flight `/api/catalogue-bridge` + WebSocket handlers; dedupe by `(sessionId, frameId)`.
+* **Add GIN indexes + orientation filters.** Your SQL will hit <100 ms only with the right indexes; include `is_library`, `orientation`, and `styles` GIN.
+* **Gate the handoff until textures are GPU-ready.** Prewarm the incoming fresh frames and swap atomically to avoid a visual pop.
+
+---
+
+## 1) Backend: correctness + speed
+
+### 1.1 Input & schema
+
+Add `sessionId` so we can (a) scope “recently served” cache and (b) join to session impressions.
+
+```json
+POST /api/catalogue-bridge
+{
+  "styles": ["landscape","escher"],
+  "userId": "u_123",           // hashed or pseudonymous
+  "sessionId": "s_abc",        // REQUIRED
+  "limit": 2,
+  "orientation": "landscape"
+}
+```
+
+### 1.2 SQL (dup-proof + fast)
+
+Prefer **NOT EXISTS** to OUTER JOIN for exclusion and push orientation predicate up front.
+
+```sql
+-- Tier 1: exact (all tags)
+SELECT a.*
+FROM art_sessions a
+WHERE a.is_library = true
+  AND a.orientation = $1
+  AND a.styles @> $2::text[]                      -- all tags present
+  AND NOT EXISTS (                                -- user/session already saw it?
+        SELECT 1 FROM user_art_impressions ui
+        WHERE ui.user_id = $3 AND ui.artwork_id = a.id
+  )
+  AND NOT EXISTS (                                -- recently served via bridge
+        SELECT 1 FROM recently_served rs
+        WHERE rs.session_id = $4 AND rs.artwork_id = a.id
+  )
+ORDER BY a.quality DESC, a.created_at DESC
+LIMIT $5;
+```
+
+Tier 2 / Tier 3 mirror this with `ANY($primary)` and then no style filter.
+
+**Indexes (Postgres):**
+
+```sql
+CREATE INDEX IF NOT EXISTS idx_art_islib_orient ON art_sessions (is_library, orientation);
+CREATE INDEX IF NOT EXISTS idx_art_styles_gin ON art_sessions USING GIN (styles);
+CREATE INDEX IF NOT EXISTS idx_ui_user_art ON user_art_impressions (user_id, artwork_id) INCLUDE (created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_ui_user_art ON user_art_impressions (user_id, artwork_id);
+-- If you keep a temp table or in-mem cache for "recently served", you can skip this on-disk index.
+```
+
+> If you already use Drizzle: keep the exclusion as `NOT EXISTS`; we’ve seen it out-perform `LEFT JOIN ... IS NULL` in this pattern.
+
+### 1.3 Recently-served cache (server)
+
+Keep a 30 s TTL set per **sessionId**; write into it when you return bridge frames and when you stream fresh frames. This prevents the generator/catalouge from echoing the same IDs back.
+
+```ts
+// server/recent.ts
+const recentBySession = new Map<string, Map<string, number>>(); // id -> expiresAt
+function markRecent(sessionId: string, ids: string[], ttlMs = 30000) { /* ... */ }
+function isRecent(sessionId: string, id: string) { /* ... */ }
+```
+
+Wire: on `/api/catalogue-bridge` respond → `markRecent(sessionId, artworkIds)`.
+
+### 1.4 Don’t record impressions until rendered
+
+Move impressions to a **render-ack** endpoint:
+
+```
+POST /api/impressions/rendered
+{ userId, sessionId, artworkIds: [], source: "catalogue_bridge" | "generation" }
+```
+
+Emit this from the client when a frame actually hits the screen (use your existing FrameValidator/Renderer “onPresented” event). This matches your “never repeat” guarantee without discarding unseen art.
+
+---
+
+## 2) Frontend: orchestration that never stutters
+
+### 2.1 Abort + dedupe
+
+* Keep an `AbortController` per **styles change**; abort fetches + clear any pending WebSocket handlers tagged with the old `transitionId`.
+* Dedupe by `frameId` so you don’t prewarm the same ID twice.
+
+```ts
+let bridgeAbort: AbortController | null = null;
+
+async function handleStylesChange(styles: string[], isDynamic: boolean) {
+  impressionRecorder.flush(true);              // you already do this
+  morphEngineRef.current.reset();
+
+  bridgeAbort?.abort();                         // cancel previous bridge
+  bridgeAbort = new AbortController();
+  const transitionId = nanoid();
+
+  const resp = await fetch('/api/catalogue-bridge', {
+    method: 'POST',
+    body: JSON.stringify({ styles, userId: user?.id, sessionId, limit: 2, orientation }),
+    signal: bridgeAbort.signal
+  });
+
+  const { bridgeFrames } = await resp.json();
+
+  // Load but DO NOT record impressions yet
+  for (const f of bridgeFrames) {
+    morphEngineRef.current.addFrame(f, { isBridge: true, transitionId });
+    rendererRef.current?.prewarmFrame(f.id, f.imageUrl, -2); // priority current
+  }
+
+  savePreferencesMutation.mutate({ styles, dynamicMode: isDynamic });
+  queryClient.invalidateQueries({ queryKey: ['/api/artworks/recent'] });
+}
+```
+
+### 2.2 Render-ack impressions
+
+Hook into your renderer/morph engine’s “presented” event:
+
+```ts
+morphEngineRef.current.on('framePresented', (frame) => {
+  impressionBuffer.push(frame.id);
+  if (impressionBuffer.length >= 5 || timeSince(lastFlush) > 1500) {
+    post('/api/impressions/rendered', { userId, sessionId, artworkIds: impressionBuffer.splice(0), source: frame.isBridge ? 'catalogue_bridge' : 'generation' });
+  }
+});
+```
+
+### 2.3 Seamless handoff (no pop)
+
+* **Prewarm** fresh frames as they arrive (current + next priority).
+* Only call `replaceBridge` **after** textures are uploaded (GPU-ready flag true).
+* Expire bridge frames **after** N successful morphs or when a min dwell time passes (e.g., 2–3 s) to avoid flicker if fresh frames trickle.
+
+```ts
+wsClient.on('new_artwork', async (fresh) => {
+  await rendererRef.current?.prewarmFrame(fresh.id, fresh.imageUrl, -2);
+  morphEngineRef.current.addFrame(fresh, { isBridge: false, replaceBridge: true });
+  morphEngineRef.current.expireBridgeFrames({ afterMorphs: 2, minMs: 2000 });
+});
+```
+
+---
+
+## 3) Fallback logic: a couple of subtle upgrades
+
+* **Style synonyms/aliases:** “Escher” may be tagged “tessellation,” “impossible geometry,” etc. Keep a synonym map (`style_aliases`) and expand `styles` for Tier 1/2 (bounded to 5–8 terms).
+* **Orientation guard:** If `orientation` is given but returns 0, run Tier 2 with orientation removed **only** if user’s screen allows upscale/crop without artifacts; otherwise hold a loader and go straight to generation.
+* **Diversity:** Add a small `serpentine_shuffle()` to avoid returning near-duplicates (art DNA distance > δ).
+* **Privacy:** Hash `userId` in logs (you already planned this in your telemetry roadmap).
+
+---
+
+## 4) Telemetry you’ll actually use
+
+Emit these counters with `sessionId`, `transitionId`, and `matchLevel`:
+
+* `catalogue_bridge.request` { styles, orientation }
+* `catalogue_bridge.response` { matchLevel, count, latency_ms }
+* `catalogue_bridge.exhausted` (no results)
+* `handoff.ready_to_swap` (fresh frame GPU-ready)
+* `handoff.swapped` (bridge → fresh) with handoff latency
+* `impression.rendered` { source, count }
+* `duplicate_prevented` { layer: 'server_recent' | 'impression' | 'client_validator' }
+
+**Alert ideas**
+
+* Bridge p95 latency > **120 ms** (investigate DB indexes/cache).
+* Handoff latency p95 > **120 ms** (prewarm not working).
+* Duplicate_prevented spikes at client layer → server recent cache TTL too short.
+
+---
+
+## 5) Testing plan (fast & meaningful)
+
+* **Latency budget test:** Warm DB, run 100 sequential bridge requests; ensure p95 < 100 ms with Tier 2 hits.
+* **Churn test:** 20 style changes in 30 s → verify only one active fetch, prior aborted, no leaked WebSocket handlers.
+* **No-match path:** Force Tier 3; ensure graceful loader, then swap when generation arrives.
+* **Duplicate guard:** Seed impressions, ensure neither catalogue nor fresh generator can return those IDs (check logs where block occurred).
+* **GPU-ready swap:** Inject artificial decode delay; verify handoff waits for `textureReady=true` (no pop).
+
+---
+
+## 6) Small API refinements
+
+* Include `matchLevel` and `exhausted` as you proposed (keep!).
+* Also include `recentlyFilteredCount` so you can see how much work the “recent” cache saved.
+* Validate payload with Zod/Valibot; return `400` on empty styles array.
+
+---
+
+## 7) Performance notes
+
+* Add a **30 s in-memory cache** for Tier-2 queries keyed by `(primaryStyle, orientation)` to guarantee sub-100 ms even during load.
+* Pre-compute `styles_norm` (lowercased, alias-expanded) in a materialized column to make `@>` checks cheaper.
+
+---
+
+## 8) Fit with your Stability Register (from your task list)
+
+* **DB Indexes:** You already planned `user_art_impressions(user_id, artwork_id)` unique — keep that. Add the GIN on `styles` and `(is_library, orientation)`.
+* **Telemetry:** Extend with `catalogue_bridge.*` events and alerting; keep your `validator_rejections` alert at 0.5%.
+* **Circuit breaker:** If handoff p95 > 200 ms for 10 min, auto-limit prewarm to current+next.
+
+---
+
+### Verdict
+
+Your design is right on target. The key fixes are: render-ack impressions (vs optimistic), server-side “recently served” exclusion, abort/dedupe on the client, proper GPU-ready handoff, and the right indexes. Ship with those and you’ll hit the <100 ms bridge goal without re-introducing repeats or pops.
+
+If you want, I can turn this into:
+
+* a **patch set** touching `routes.ts`, `storage.ts`, `display.tsx`, `morphEngine.ts`, and
+* a **short migration** file with the indexes.
