@@ -4,6 +4,18 @@
 Algorhythmic is a revenue-generating web application that transforms sound into real-time, AI-generated artwork. It allows users to select artistic styles and artists, generating audio-reactive visualizations that continuously improve personalization through user voting. The project aims to be a cross-platform web app with future plans for native TV applications and social features, operating on a freemium model.
 
 ## Recent Changes
+### 2025-11-11: Library Image Style Tagging Fix
+- **Issue**: Black screen when selecting styles because library images had no style tags
+- **Root Cause**: Seed script didn't save `styles` array to database during image generation
+- **Solution**:
+  - Updated catalogue-seed.ts to save style tags when inserting library images
+  - Deleted 52 untagged images, regenerated 57 properly-tagged images
+  - Added dark-fantasy to seed config (total 15 library styles)
+  - Cost: $0.04 for regeneration
+- **Impact**: Style filtering now works - selecting styles like cyberpunk, psychedelic, synthwave shows instant library artwork
+- **Known Limitation**: UI offers 60+ styles but library only has 15 - architect recommends hybrid "instant vs on-demand" badging
+- **Files Changed**: scripts/catalogue-seed.ts, scripts/catalogue-config.ts
+
 ### 2025-11-11: Critical SQL Upsert Fix for Replit Auth
 - **Issue**: PostgreSQL syntax error "syntax error at or near ," during OIDC authentication callback crashed server
 - **Root Cause**: COALESCE with sql template literals in onConflictDoUpdate generated malformed SQL in Drizzle ORM

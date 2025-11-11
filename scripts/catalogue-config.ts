@@ -16,7 +16,7 @@ export const MOODS = [
 export const STYLES = {
   // Dual-native styles (40% - generate both portrait + landscape)
   dualNative: [
-    "cyberpunk", "psychedelic", "space-opera", "vaporwave", "synthwave"
+    "cyberpunk", "psychedelic", "space-opera", "vaporwave", "synthwave", "dark-fantasy"
   ],
   
   // Square-master styles (45% - single 1:1 images)
