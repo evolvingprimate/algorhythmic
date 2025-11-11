@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -181,6 +181,10 @@ export default function Display() {
   const musicIdentificationTimeoutRef = useRef<number>();
   const catalogueBridgeAbortRef = useRef<AbortController | null>(null);
   const sessionId = useRef(crypto.randomUUID());
+  
+  // FIX: Debounce render-ack to prevent hundreds of API calls per second
+  const pendingRenderAcksRef = useRef<Set<string>>(new Set());
+  const renderAckTimerRef = useRef<number | null>(null);
   const lastGenerationTime = useRef<number>(0);
   const lastRenderedArtworkIdsRef = useRef<Set<string>>(new Set()); // Track displayed frames for render-ack
   const historyIndexRef = useRef<number>(-1);
@@ -1365,6 +1369,34 @@ export default function Display() {
     };
   }, []);
 
+  // FIX: Debounced render-ack function to prevent API spam
+  const flushRenderAcks = useCallback(() => {
+    if (pendingRenderAcksRef.current.size === 0 || !user) return;
+    
+    const artworkIds = Array.from(pendingRenderAcksRef.current);
+    pendingRenderAcksRef.current.clear();
+    
+    fetch('/api/impressions/rendered', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        artworkIds,
+        source: 'fresh', // TODO: Track which frames came from catalogue bridge vs fresh generation
+      }),
+    })
+      .then(res => {
+        if (res.ok) {
+          console.log(`[RenderAck] ✅ Recorded ${artworkIds.length} rendered impressions`);
+        } else {
+          console.warn(`[RenderAck] ⚠️ Failed to record impressions (${res.status})`);
+        }
+      })
+      .catch(error => {
+        console.error('[RenderAck] Error recording impressions:', error);
+      });
+  }, [user]);
+
   // Initialize Renderer (MorphEngine already initialized synchronously)
   useEffect(() => {
     const device = detectDeviceCapabilities();
@@ -1378,6 +1410,12 @@ export default function Display() {
       }
       morphEngineRef.current?.stop();
       rendererRef.current?.destroy();
+      
+      // Flush any pending render-acks on cleanup
+      if (renderAckTimerRef.current) {
+        clearTimeout(renderAckTimerRef.current);
+      }
+      flushRenderAcks();
     };
   }, []);
   
@@ -1490,50 +1528,27 @@ export default function Display() {
 
         // ============================================================================
         // RENDER-ACK: Record impressions only when frames are actually displayed
+        // FIX: Debounced to prevent hundreds of API calls per second
         // ============================================================================
-        
-        // Collect artworkIds that are currently visible on screen
-        const visibleArtworkIds: string[] = [];
         
         // Add currentFrame if it has significant opacity (>10%)
         if (currentFrame.artworkId && currentOpacity > 0.1 && !lastRenderedArtworkIdsRef.current.has(currentFrame.artworkId)) {
-          visibleArtworkIds.push(currentFrame.artworkId);
+          pendingRenderAcksRef.current.add(currentFrame.artworkId);
+          lastRenderedArtworkIdsRef.current.add(currentFrame.artworkId);
         }
         
         // Add nextFrame if it has significant opacity (>10%) during morph phase
         if (nextFrame?.artworkId && nextOpacity > 0.1 && !lastRenderedArtworkIdsRef.current.has(nextFrame.artworkId)) {
-          visibleArtworkIds.push(nextFrame.artworkId);
+          pendingRenderAcksRef.current.add(nextFrame.artworkId);
+          lastRenderedArtworkIdsRef.current.add(nextFrame.artworkId);
         }
         
-        // Call render-ack endpoint if we have new visible artworks
-        if (visibleArtworkIds.length > 0 && user) {
-          // CRITICAL: Only mark as recorded AFTER successful network request
-          // This ensures failed requests will retry on next frame (auto-retry pattern)
-          fetch('/api/impressions/rendered', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({
-              artworkIds: visibleArtworkIds,
-              source: 'fresh', // TODO: Track which frames came from catalogue bridge vs fresh generation
-            }),
-          })
-            .then(res => {
-              if (res.ok) {
-                // SUCCESS: Mark as recorded to prevent duplicate recording
-                for (const id of visibleArtworkIds) {
-                  lastRenderedArtworkIdsRef.current.add(id);
-                }
-                console.log(`[RenderAck] ✅ Recorded ${visibleArtworkIds.length} rendered impressions`);
-              } else {
-                // FAILURE: Don't mark as recorded - will retry on next frame
-                console.warn(`[RenderAck] ⚠️ Failed to record impressions (${res.status}) - will retry`);
-              }
-            })
-            .catch(error => {
-              // NETWORK ERROR: Don't mark as recorded - will retry on next frame
-              console.error('[RenderAck] Error recording impressions (will retry):', error);
-            });
+        // Debounce render-ack API calls (max once per second instead of 60 times per second)
+        if (pendingRenderAcksRef.current.size > 0 && !renderAckTimerRef.current) {
+          renderAckTimerRef.current = window.setTimeout(() => {
+            flushRenderAcks();
+            renderAckTimerRef.current = null;
+          }, 1000); // Batch and send once per second max
         }
 
         // Update debug stats for morphing mode (using ref to avoid render loop restart)
@@ -1625,35 +1640,20 @@ export default function Display() {
 
         // ============================================================================
         // RENDER-ACK: Record impression for static frame (single frame mode)
+        // FIX: Debounced to prevent API spam
         // ============================================================================
         
-        if (currentFrame.artworkId && !lastRenderedArtworkIdsRef.current.has(currentFrame.artworkId) && user) {
-          const artworkId = currentFrame.artworkId;
+        if (currentFrame.artworkId && !lastRenderedArtworkIdsRef.current.has(currentFrame.artworkId)) {
+          pendingRenderAcksRef.current.add(currentFrame.artworkId);
+          lastRenderedArtworkIdsRef.current.add(currentFrame.artworkId);
           
-          // CRITICAL: Only mark as recorded AFTER successful network request
-          fetch('/api/impressions/rendered', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({
-              artworkIds: [artworkId],
-              source: 'fresh',
-            }),
-          })
-            .then(res => {
-              if (res.ok) {
-                // SUCCESS: Mark as recorded to prevent duplicate recording
-                lastRenderedArtworkIdsRef.current.add(artworkId);
-                console.log(`[RenderAck] ✅ Recorded static frame impression: ${artworkId}`);
-              } else {
-                // FAILURE: Don't mark as recorded - will retry on next frame
-                console.warn(`[RenderAck] ⚠️ Failed to record static frame impression (${res.status}) - will retry`);
-              }
-            })
-            .catch(error => {
-              // NETWORK ERROR: Don't mark as recorded - will retry on next frame
-              console.error('[RenderAck] Error recording static frame impression (will retry):', error);
-            });
+          // Debounce render-ack API calls
+          if (!renderAckTimerRef.current) {
+            renderAckTimerRef.current = window.setTimeout(() => {
+              flushRenderAcks();
+              renderAckTimerRef.current = null;
+            }, 1000); // Batch and send once per second max
+          }
         }
 
         // Update debug stats for static mode (using ref to avoid render loop restart)
