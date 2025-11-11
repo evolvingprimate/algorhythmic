@@ -1320,20 +1320,23 @@ export class PostgresStorage implements IStorage {
   }
 
   async upsertUser(userData: UpsertUser): Promise<User> {
+    // Build update set conditionally - only include fields that are actually defined
+    // This prevents overwriting existing user data with null/undefined on re-auth
+    const updateSet: Record<string, any> = { updatedAt: new Date() };
+    
+    if (userData.email !== undefined) updateSet.email = userData.email;
+    if (userData.firstName !== undefined) updateSet.firstName = userData.firstName;
+    if (userData.lastName !== undefined) updateSet.lastName = userData.lastName;
+    if (userData.profileImageUrl !== undefined) updateSet.profileImageUrl = userData.profileImageUrl;
+    if (userData.preferredOrientation !== undefined) updateSet.preferredOrientation = userData.preferredOrientation;
+    if (userData.controllerState !== undefined) updateSet.controllerState = userData.controllerState;
+    
     const created = await this.db
       .insert(users)
       .values(userData)
       .onConflictDoUpdate({
         target: users.id,
-        set: {
-          email: sql`COALESCE(${userData.email}, ${users.email})`,
-          firstName: sql`COALESCE(${userData.firstName}, ${users.firstName})`,
-          lastName: sql`COALESCE(${userData.lastName}, ${users.lastName})`,
-          profileImageUrl: sql`COALESCE(${userData.profileImageUrl}, ${users.profileImageUrl})`,
-          preferredOrientation: sql`COALESCE(${userData.preferredOrientation}, ${users.preferredOrientation})`,
-          controllerState: sql`COALESCE(${userData.controllerState}, ${users.controllerState})`,
-          updatedAt: new Date(),
-        },
+        set: updateSet,
       })
       .returning();
     return created[0];
