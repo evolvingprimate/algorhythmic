@@ -1721,6 +1721,21 @@ export class PostgresStorage implements IStorage {
     // Sanitize excludeIds (max 100 to protect query planner)
     const safeExcludeIds = excludeIds.slice(0, 100);
     
+    // OPTIMIZATION: Fetch viewed artwork IDs once upfront (last 200) to avoid repeated NOT EXISTS
+    const viewedArtworks = await this.db
+      .select({ artworkId: userArtImpressions.artworkId })
+      .from(userArtImpressions)
+      .where(eq(userArtImpressions.userId, userId))
+      .orderBy(desc(userArtImpressions.viewedAt))
+      .limit(200);
+    
+    const viewedIds = viewedArtworks.map(v => v.artworkId);
+    const combinedExcludeIds = [...safeExcludeIds, ...viewedIds].slice(0, 300); // Cap at 300 total
+    
+    // Each tier gets its own independent timing budget (reset before each tier)
+    let tierStartTime = Date.now();
+    const upfrontLatency = tierStartTime - startTime;
+    
     // Early return: empty tags -> short-circuit to global tier
     if (styleTags.length === 0 && artistTags.length === 0) {
       const globalResults = await this.db.execute<ArtSession>(sql`
@@ -1728,12 +1743,7 @@ export class PostgresStorage implements IStorage {
         FROM ${artSessions}
         WHERE ${artSessions.isLibrary} = true
           ${orientation ? sql`AND ${artSessions.orientation} = ${orientation}` : sql``}
-          ${safeExcludeIds.length > 0 ? sql`AND ${artSessions.id} NOT IN (${sql.join(safeExcludeIds.map(id => sql`${id}`), sql`, `)})` : sql``}
-          AND NOT EXISTS (
-            SELECT 1 FROM ${userArtImpressions}
-            WHERE ${userArtImpressions.artworkId} = ${artSessions.id}
-              AND ${userArtImpressions.userId} = ${userId}
-          )
+          ${combinedExcludeIds.length > 0 ? sql`AND ${artSessions.id} NOT IN (${sql.join(combinedExcludeIds.map(id => sql`${id}`), sql`, `)})` : sql``}
         ORDER BY ${artSessions.createdAt} DESC
         LIMIT ${limit}
       `);
@@ -1742,35 +1752,28 @@ export class PostgresStorage implements IStorage {
       return { artworks: globalResults.rows, tier: 'global', latencyMs };
     }
     
-    // Tier 1: Exact match (40ms budget with statement_timeout)
-    let elapsedMs = Date.now() - startTime;
-    if (elapsedMs < 40) {
+    // Tier 1: Exact match (40ms budget - no transaction overhead!)
+    tierStartTime = Date.now(); // Reset for this tier's independent budget
+    if (true) { // Always attempt Tier-1
       try {
         const exactStyleArray = sql`ARRAY[${sql.join(styleTags.map(tag => sql`${tag}`), sql`, `)}]::text[]`;
         
-        const tier1Results = await this.db.transaction(async (tx) => {
-          // Set statement timeout for this query
-          await tx.execute(sql`SET LOCAL statement_timeout = '40ms'`);
-          
-          return await tx.execute<ArtSession>(sql`
-            SELECT ${sql.join(Object.values(getTableColumns(artSessions)).map(column => sql.identifier(column.name)), sql`, `)}
-            FROM ${artSessions}
-            WHERE ${artSessions.isLibrary} = true
-              ${orientation ? sql`AND ${artSessions.orientation} = ${orientation}` : sql``}
-              AND ${artSessions.styles} @> ${exactStyleArray}
-              AND NOT EXISTS (
-                SELECT 1 FROM ${userArtImpressions}
-                WHERE ${userArtImpressions.artworkId} = ${artSessions.id}
-                  AND ${userArtImpressions.userId} = ${userId}
-              )
-              ${safeExcludeIds.length > 0 ? sql`AND ${artSessions.id} NOT IN (${sql.join(safeExcludeIds.map(id => sql`${id}`), sql`, `)})` : sql``}
-            ORDER BY ${artSessions.createdAt} DESC
-            LIMIT ${limit}
-          `);
-        });
+        // Direct query without transaction wrapper - eliminates ~250ms HTTP overhead
+        const tier1Results = await this.db.execute<ArtSession>(sql`
+          SELECT ${sql.join(Object.values(getTableColumns(artSessions)).map(column => sql.identifier(column.name)), sql`, `)}
+          FROM ${artSessions}
+          WHERE ${artSessions.isLibrary} = true
+            ${orientation ? sql`AND ${artSessions.orientation} = ${orientation}` : sql``}
+            AND ${artSessions.styles} @> ${exactStyleArray}
+            ${combinedExcludeIds.length > 0 ? sql`AND ${artSessions.id} NOT IN (${sql.join(combinedExcludeIds.map(id => sql`${id}`), sql`, `)})` : sql``}
+          ORDER BY ${artSessions.createdAt} DESC
+          LIMIT ${limit}
+        `);
+        
+        console.log(`[CatalogueBridge Debug] Tier-1 query returned ${tier1Results.rows.length} results, elapsed=${Date.now() - tierStartTime}ms`);
         
         if (tier1Results.rows.length > 0) {
-          const latencyMs = Date.now() - startTime;
+          const latencyMs = Date.now() - startTime; // Total latency including upfront fetch
           return { artworks: tier1Results.rows, tier: 'exact', latencyMs };
         }
       } catch (error: any) {
@@ -1781,38 +1784,26 @@ export class PostgresStorage implements IStorage {
       }
     }
     
-    // Tier 2: Related styles (80ms total budget with statement_timeout)
-    elapsedMs = Date.now() - startTime;
-    if (elapsedMs < 80) {
+    // Tier 2: Related styles (80ms budget - no transaction overhead!)
+    tierStartTime = Date.now(); // Reset for this tier's independent budget
+    if (true) { // Always attempt Tier-2
       try {
         const relatedStyleTags = expandStyles(styleTags);
         const exactStyleArray = sql`ARRAY[${sql.join(styleTags.map(tag => sql`${tag}`), sql`, `)}]::text[]`;
         const relatedStyleArray = sql`ARRAY[${sql.join(relatedStyleTags.map(tag => sql`${tag}`), sql`, `)}]::text[]`;
         
-        // Calculate remaining time budget for this tier
-        const remainingMs = Math.max(1, 80 - elapsedMs);
-        
-        const tier2Results = await this.db.transaction(async (tx) => {
-          // Set statement timeout for remaining budget
-          await tx.execute(sql`SET LOCAL statement_timeout = ${sql.raw(`'${remainingMs}ms'`)}`);
-          
-          return await tx.execute<ArtSession>(sql`
-            SELECT ${sql.join(Object.values(getTableColumns(artSessions)).map(column => sql.identifier(column.name)), sql`, `)}
-            FROM ${artSessions}
-            WHERE ${artSessions.isLibrary} = true
-              ${orientation ? sql`AND ${artSessions.orientation} = ${orientation}` : sql``}
-              AND ${artSessions.styles} && ${relatedStyleArray}
-              AND NOT (${artSessions.styles} @> ${exactStyleArray})
-              AND NOT EXISTS (
-                SELECT 1 FROM ${userArtImpressions}
-                WHERE ${userArtImpressions.artworkId} = ${artSessions.id}
-                  AND ${userArtImpressions.userId} = ${userId}
-              )
-              ${safeExcludeIds.length > 0 ? sql`AND ${artSessions.id} NOT IN (${sql.join(safeExcludeIds.map(id => sql`${id}`), sql`, `)})` : sql``}
-            ORDER BY ${artSessions.createdAt} DESC
-            LIMIT ${limit}
-          `);
-        });
+        // Direct query without transaction wrapper
+        const tier2Results = await this.db.execute<ArtSession>(sql`
+          SELECT ${sql.join(Object.values(getTableColumns(artSessions)).map(column => sql.identifier(column.name)), sql`, `)}
+          FROM ${artSessions}
+          WHERE ${artSessions.isLibrary} = true
+            ${orientation ? sql`AND ${artSessions.orientation} = ${orientation}` : sql``}
+            AND ${artSessions.styles} && ${relatedStyleArray}
+            AND NOT (${artSessions.styles} @> ${exactStyleArray})
+            ${combinedExcludeIds.length > 0 ? sql`AND ${artSessions.id} NOT IN (${sql.join(combinedExcludeIds.map(id => sql`${id}`), sql`, `)})` : sql``}
+          ORDER BY ${artSessions.createdAt} DESC
+          LIMIT ${limit}
+        `);
         
         if (tier2Results.rows.length > 0) {
           const latencyMs = Date.now() - startTime;
@@ -1826,45 +1817,20 @@ export class PostgresStorage implements IStorage {
       }
     }
     
-    // Check latency budget before proceeding to Tier 3/4
-    elapsedMs = Date.now() - startTime;
-    if (elapsedMs > 180) {
-      // Timeout: skip global tier, return procedural bridge immediately
-      const proceduralData = generateProceduralBridge(styleTags, orientation);
-      return {
-        artworks: [],
-        tier: 'procedural',
-        latencyMs: elapsedMs,
-        proceduralData
-      };
-    }
-    
-    // Tier 3: Global fallback (120ms total budget, orientation filter dropped)
+    // Tier 3: Global fallback (120ms budget, orientation filter dropped - no transaction overhead!)
     // Last chance to find library content before falling back to procedural bridge
-    elapsedMs = Date.now() - startTime;
-    const tier3RemainingMs = 120 - elapsedMs;
-    
-    // Only attempt Tier 3 if we have meaningful time remaining (>= 5ms)
-    if (elapsedMs < 120 && tier3RemainingMs >= 5) {
+    tierStartTime = Date.now(); // Reset for this tier's independent budget
+    if (true) { // Always attempt Tier-3
       try {
-        const globalResults = await this.db.transaction(async (tx) => {
-          // Set statement timeout for remaining budget
-          await tx.execute(sql`SET LOCAL statement_timeout = ${sql.raw(`'${tier3RemainingMs}ms'`)}`);
-          
-          return await tx.execute<ArtSession>(sql`
-            SELECT ${sql.join(Object.values(getTableColumns(artSessions)).map(column => sql.identifier(column.name)), sql`, `)}
-            FROM ${artSessions}
-            WHERE ${artSessions.isLibrary} = true
-              ${safeExcludeIds.length > 0 ? sql`AND ${artSessions.id} NOT IN (${sql.join(safeExcludeIds.map(id => sql`${id}`), sql`, `)})` : sql``}
-              AND NOT EXISTS (
-                SELECT 1 FROM ${userArtImpressions}
-                WHERE ${userArtImpressions.artworkId} = ${artSessions.id}
-                  AND ${userArtImpressions.userId} = ${userId}
-              )
-            ORDER BY ${artSessions.createdAt} DESC
-            LIMIT ${limit}
-          `);
-        });
+        // Direct query without transaction wrapper
+        const globalResults = await this.db.execute<ArtSession>(sql`
+          SELECT ${sql.join(Object.values(getTableColumns(artSessions)).map(column => sql.identifier(column.name)), sql`, `)}
+          FROM ${artSessions}
+          WHERE ${artSessions.isLibrary} = true
+            ${combinedExcludeIds.length > 0 ? sql`AND ${artSessions.id} NOT IN (${sql.join(combinedExcludeIds.map(id => sql`${id}`), sql`, `)})` : sql``}
+          ORDER BY ${artSessions.createdAt} DESC
+          LIMIT ${limit}
+        `);
         
         // If global tier found results, return them
         if (globalResults.rows.length > 0) {

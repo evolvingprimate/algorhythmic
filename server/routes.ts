@@ -187,38 +187,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
         limit,
       });
       
-      // Backend Telemetry: Emit tier and latency events
-      try {
-        const raiSessionId = await storage.findOrCreateRaiSessionForClientSession(userId, sessionId);
-        const metadata = JSON.stringify({
-          tier: result.tier,
-          latencyMs: result.latencyMs,
-          styleTags,
-          artistTags,
-          artworkCount: result.artworks.length,
-        });
-        
-        await storage.createTelemetryEvents([
-          {
-            sessionId: raiSessionId,
-            userId,
-            eventType: `catalogue_bridge.tier_${result.tier}`,
-            eventData: metadata,
-            audioFeatures: null,
-            visualState: null,
-          },
-          {
-            sessionId: raiSessionId,
-            userId,
-            eventType: 'catalogue_bridge.handoff_latency_ms',
-            eventData: metadata,
-            audioFeatures: null,
-            visualState: null,
-          },
-        ]);
-      } catch (telemetryError: any) {
-        console.error('[Catalogue Bridge] Telemetry emission failed (non-blocking):', telemetryError.message);
-      }
+      // Backend Telemetry: Fire-and-forget (non-blocking)
+      (async () => {
+        try {
+          const raiSessionId = await storage.findOrCreateRaiSessionForClientSession(userId, sessionId);
+          const metadata = JSON.stringify({
+            tier: result.tier,
+            latencyMs: result.latencyMs,
+            styleTags,
+            artistTags,
+            artworkCount: result.artworks.length,
+          });
+          
+          await storage.createTelemetryEvents([
+            {
+              sessionId: raiSessionId,
+              userId,
+              eventType: `catalogue_bridge.tier_${result.tier}`,
+              eventData: metadata,
+              audioFeatures: null,
+              visualState: null,
+            },
+            {
+              sessionId: raiSessionId,
+              userId,
+              eventType: 'catalogue_bridge.handoff_latency_ms',
+              eventData: metadata,
+              audioFeatures: null,
+              visualState: null,
+            },
+          ]);
+        } catch (telemetryError: any) {
+          console.error('[Catalogue Bridge] Telemetry emission failed (non-blocking):', telemetryError.message);
+        }
+      })();
       
       // Mark returned artworks as recently-served (prevent echoing back within 30s)
       if (result.artworks.length > 0) {

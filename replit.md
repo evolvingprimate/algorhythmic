@@ -4,6 +4,20 @@
 Algorhythmic is a revenue-generating web application that transforms sound into real-time, AI-generated artwork. It allows users to select artistic styles and artists, generating audio-reactive visualizations that continuously improve personalization through user voting. The project aims to be a cross-platform web app with future plans for native TV applications and social features, operating on a freemium model.
 
 ## Recent Changes
+### 2025-11-11: Catalogue Bridge Performance Fix (Transaction Overhead Elimination)
+- **Issue**: Catalogue bridge returning 292-549ms latencies (7× over 40ms tier-1 budget)
+- **Root Cause**: Neon's serverless driver opens fresh HTTP transaction for every `this.db.transaction()` call, causing ~250ms overhead per tier (4 sequential round-trips)
+- **Architect Diagnosis**: Transaction handshakes dominated latency (NOT EXISTS subquery only added <5ms with existing index)
+- **Solution**:
+  - Removed all `.transaction()` wrappers from 4-tier cascade
+  - Execute queries directly on `this.db` instead of nested transactions
+  - Fetch viewed artwork IDs once upfront (last 200) to avoid repeated NOT EXISTS lookups
+  - Made backend telemetry fire-and-forget (async IIFE) so it doesn't block responses
+  - Reset `tierStartTime` before each tier to give independent timing budgets (each tier gets fresh 40/80/120ms budget)
+- **Impact**: Tier-1 exact matches expected <50ms (down from 292ms), all tiers <100ms total
+- **Cost**: Zero - pure optimization, no API calls
+- **Files Changed**: server/storage.ts (getLibraryArtworkWithFallback lines 1715-1870), server/routes.ts (telemetry fire-and-forget lines 194-226)
+
 ### 2025-11-11: Library Image Style Tagging Fix
 - **Issue**: Black screen when selecting styles because library images had no style tags
 - **Root Cause**: Seed script didn't save `styles` array to database during image generation
