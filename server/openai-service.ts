@@ -1,4 +1,6 @@
 import OpenAI from "openai";
+import { nanoid } from "nanoid";
+import { generationHealthService } from "./generation-health";
 import type { AudioAnalysis, MusicIdentification } from "@shared/schema";
 
 // the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
@@ -591,17 +593,16 @@ export async function generateArtImage(
     skipTextDirective?: boolean;
   }
 ): Promise<string> {
-  // Import inside function to avoid circular dependency
-  const { generationHealthService } = require('./generation-health');
-  const { nanoid } = require('nanoid');
-  
   const jobId = nanoid();
   const isProbe = options?.isProbe || false;
   const retryCount = options?.retryCount || 0;
   const maxRetries = 2;
   
-  // Check circuit breaker state
-  if (!generationHealthService.shouldAttemptGeneration()) {
+  // Feature flag for circuit breaker - allows safe rollback if needed
+  const breakerEnabled = process.env.GEN_BREAKER_ENABLED !== 'false';
+  
+  // Check circuit breaker state (only if enabled)
+  if (breakerEnabled && !generationHealthService.shouldAttemptGeneration()) {
     console.log(`[GenerationHealth] Circuit breaker open, skipping DALL-E generation`);
     throw new GenerationFailure('unavailable', { idempotencyKey: jobId });
   }
@@ -649,9 +650,9 @@ export async function generateArtImage(
         prompt: enhancedPrompt,
         n: 1,
         size: "1024x1024",
-        quality: isProbe ? "standard" : "standard", // Use standard quality for all (probes and regular)
+        quality: "standard", // Use standard quality for all (probes and regular)
       }, {
-        // Pass AbortSignal as second parameter to OpenAI API
+        // Pass AbortSignal in options for OpenAI v4+
         signal: controller.signal
       }),
       timeoutPromise

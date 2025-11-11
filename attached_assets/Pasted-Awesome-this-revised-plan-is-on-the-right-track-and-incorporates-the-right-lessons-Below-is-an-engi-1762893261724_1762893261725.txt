@@ -1,0 +1,245 @@
+Awesome—this revised plan is on the right track and incorporates the right lessons. Below is an engineer-grade review for Claude (Replit Agent 3) plus a crisp, executable task list to ship it safely.
+
+---
+
+# Architect Review — Revised Hung-Frame Plan
+
+## Verdict
+
+**Approve with minor refinements.** The phases and parameters are sane. A few gaps remain around DI wiring, transport cancellation guarantees, DB migrations order, and queue starvation. Address the items below and you’ll have a robust, testable breaker that actually saves you during DALL-E hiccups.
+
+---
+
+## What’s Strong
+
+* **Fix order is correct**: unblock runtime → untangle deps → enforce data integrity → tune breaker → prove with tests/telemetry.
+* **DI via ports**: exactly what we need to kill cycles and unit-test the services.
+* **Abort + adaptive timeout**: good defaults (P95+10s, clamped).
+* **Feature flag**: essential for fast rollback.
+
+---
+
+## Gaps / Recommendations
+
+### 1) Transport actually honoring `AbortSignal`
+
+* Ensure the OpenAI client uses a fetch implementation that **propagates `AbortSignal`** (Node 18+ built-in `fetch` is fine). If the SDK uses Axios or a custom transport under the hood, wrap the call with `Promise.race` **and** destroy the agent/req on abort to avoid sockets lingering.
+* Add a one-time smoke test that proves CPU/memory don’t climb after 30 aborted requests.
+
+### 2) Dependency Injection wiring (composition root)
+
+* Add a single **bootstrap** module to wire ports/services and export factories. Do **not** import services directly in other services.
+* Keep ports in `types/generation-ports.ts` and avoid any concrete imports there.
+
+### 3) Queue starvation & backpressure
+
+* With a token bucket and breaker, make sure the job poller respects **budget**. If budget=0 or breaker=open, do **not** fetch more jobs. Otherwise you’ll “hot potato” the queue and spin logs.
+* Postgres `FOR UPDATE SKIP LOCKED` is good; add **visibility timeout semantics** (mark `started_at`, heartbeat; requeue if worker dies).
+
+### 4) Data integrity migration order
+
+* **Order matters**: add nullable columns/constraints → backfill → flip to `NOT NULL`/CHECK.
+* Add a **read-path guard**: if some legacy row still lacks `image_url`, drop it on the client so the morph engine never sees bad frames.
+
+### 5) Telemetry shape and alerts
+
+* Move from logs → structured events. Emit **`gen.request`**, **`gen.success`**, **`gen.fail`**, **`breaker.state`**, **`queue.deadletter`** with consistent fields.
+* Add two alerts day-one:
+
+  * `gen_timeout_rate_15m > 5%`
+  * `breaker_open_duration_daily > 2m`
+
+### 6) Token bucket / breaker params
+
+* Start with **capacity=5, refill=1/60s** as proposed. Persist breaker state in-process only (no cross-process sync yet). If you scale horizontally, promote to a shared store later.
+
+### 7) Recovery probes
+
+* Use **simple, deterministic prompts** (“abstract geometric shape, no text”). Mark results **noStore** so they don’t pollute catalogs. Probes should bypass user-scoped queues.
+
+### 8) Idempotency & DLQ hygiene
+
+* Add an **idempotency key** per generation job (`promptHash + seed + model + size`) to avoid duplicate inserts on retries.
+* DLQ must **ack terminal errors**; never auto-retry DLQ.
+
+---
+
+# Executable Task List
+
+> Estimated time: ~60–75 min once code is open. Do in order; each step is independently verifiable.
+
+## Phase 1 — Emergency Stabilization (15m)
+
+* [ ] **Replace CJS requires**
+
+  * Files: `server/openai-service.ts` (and any others)
+  * Change:
+
+    ```ts
+    import { generationHealthService } from './generation-health';
+    import { nanoid } from 'nanoid';
+    ```
+* [ ] **Wire AbortSignal**
+
+  * In `openai-service.ts`:
+
+    ```ts
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort('gen-timeout'), TIMEOUT_MS);
+
+    try {
+      const res = await openai.images.generate({
+        model: 'gpt-image-1',
+        prompt: enhancedPrompt,
+        size: '1024x1024',
+        signal: controller.signal, // MUST pass
+      });
+      return res;
+    } finally {
+      clearTimeout(timeout);
+    }
+    ```
+* [ ] **Guard if transport ignores abort**
+
+  * Wrap with `Promise.race` to a rejector and ensure underlying request/agent is destroyed on abort if needed.
+* [ ] **Feature flag**
+
+  * Env: `GEN_BREAKER_ENABLED=true|false` gates breaker decisions.
+* [ ] **Pre-insert validation**
+
+  * Before DB insert, throw on missing/empty `imageUrl`.
+
+## Phase 2 — Untangle Dependencies (25m)
+
+* [ ] **Create ports**
+
+  * `types/generation-ports.ts`
+
+    ```ts
+    export interface GenerationHealthPort {
+      recordSuccess(ms: number): void;
+      recordFailure(kind: 'timeout'|'quota'|'5xx'|'4xx'|'unknown'): void;
+      shouldOpenCircuit(): boolean;
+      currentBudget(): number;
+    }
+    export interface RecoveryPort {
+      scheduleProbe(kind: 'timeout'|'burst'|'quota'): void;
+    }
+    ```
+* [ ] **Refactor services to DI**
+
+  * `openai-service.ts` exposes `makeOpenAIService(ports)` and **does not import** health/recovery.
+* [ ] **Bootstrap**
+
+  * `server/bootstrap.ts`:
+
+    ```ts
+    const health = new GenerationHealthService(cfg);
+    const recovery = new RecoveryManager(cfg, health);
+    export const openai = makeOpenAIService({ health, recovery });
+    ```
+* [ ] **Verify module graph**
+
+  * No file imports another service that imports it back (no cycles).
+
+## Phase 3 — Data Integrity & Recovery (20m)
+
+* [ ] **Backfill script**
+
+  * SQL to populate `image_url` for any legacy rows if retrievable; otherwise mark as `invalid` and move to an audit table.
+* [ ] **Migrations (safe order)**
+
+  1. Add audit/status columns.
+  2. Backfill.
+  3. Apply constraints:
+
+     ```sql
+     ALTER TABLE art_sessions
+       ALTER COLUMN image_url SET NOT NULL,
+       ADD CONSTRAINT image_url_not_empty CHECK (length(image_url) > 0);
+     CREATE INDEX IF NOT EXISTS idx_art_sessions_created_at ON art_sessions (created_at DESC);
+     ```
+* [ ] **Client fallback**
+
+  * In display pipeline: drop frames with missing/empty `imageUrl` and refetch; never hand to morph engine.
+* [ ] **Queue semantics**
+
+  * Worker poll:
+
+    ```sql
+    SELECT id, payload FROM gen_jobs
+    WHERE status='queued' AND breaker_allows = true
+    ORDER BY urgency DESC, created_at ASC
+    FOR UPDATE SKIP LOCKED
+    LIMIT 1;
+    ```
+  * Set `started_at`, heartbeat; requeue if stale.
+
+## Phase 4 — Breaker Tuning (10m)
+
+* [ ] **Token bucket**
+
+  * capacity=5, refill=1 per 60s, check `currentBudget()` before enqueuing provider calls.
+* [ ] **Adaptive timeout**
+
+  * compute `timeoutMs = clamp(p95 + 10_000, 45_000, 90_000)`.
+* [ ] **Breaker policy**
+
+  * Sliding window 20–30; open at weighted failure rate ≥ 0.5 with ≥ 5 attempts; half-open: 1 probe/60s; close after 3 consecutive successes.
+* [ ] **Recovery probes**
+
+  * Use prompt “abstract geometric shape, no text”; mark result non-storable.
+
+## Phase 5 — Tests & Telemetry (10m)
+
+* [ ] **Unit**
+
+  * Success path: `recordSuccess`, budget decrement/increment.
+  * Timeout path: sleep > timeout → abort fired → `recordFailure('timeout')`.
+  * Quota path: 429 triggers backoff, lower breaker weight.
+* [ ] **Integration**
+
+  * Stub provider to sleep 65s → verify 60s abort, breaker opens after 3, half-open closes after 3 green.
+* [ ] **Chaos**
+
+  * Simulate connection reset mid-request → ensure cleanup & retry policy behaves.
+* [ ] **Structured telemetry**
+
+  * Emit:
+
+    ```json
+    {"evt":"gen.request","id":"…","timeoutMs":60000,"budgetBefore":3}
+    {"evt":"gen.success","id":"…","latencyMs":48213}
+    {"evt":"gen.fail","id":"…","kind":"timeout"}
+    {"evt":"breaker.state","state":"open","failureRate":0.67}
+    {"evt":"queue.deadletter","jobId":"…","reason":"no-image-url"}
+    ```
+* [ ] **Alerts**
+
+  * `gen_timeout_rate_15m > 5%`
+  * `breaker_open_time_daily > 120000 ms`
+
+---
+
+## Acceptance Criteria (Definition of Done)
+
+* No `require is not defined` at runtime.
+* Provider calls abort at ~timeout; memory/CPU stay flat under 30 aborted calls.
+* Breaker opens after 3 timeouts; half-open closes after 3 successes.
+* DB rejects rows with missing/empty `image_url`.
+* DLQ contains terminal failures; no infinite retries.
+* UI never sees black screens due to invalid frames.
+* Telemetry dashboards show requests, failures, breaker state; alerts configured.
+
+---
+
+## Nice-to-Have (post-merge)
+
+* Persist breaker/budget across workers via Redis or Postgres if you scale out.
+* Idempotency keys on gen jobs (`promptHash+seed+model+size`).
+* Separate **probe queue** so recovery traffic never blocks user jobs.
+* Small health endpoint `/internal/gen-health` exposing breaker/budget for dashboards.
+
+---
+
+If you implement the checklist above in order, the system will finally **enforce real timeouts, protect itself under provider hangs, and never hand the client a bad frame**. This gets us from “designed well but inert” to “battle-ready and observable.”

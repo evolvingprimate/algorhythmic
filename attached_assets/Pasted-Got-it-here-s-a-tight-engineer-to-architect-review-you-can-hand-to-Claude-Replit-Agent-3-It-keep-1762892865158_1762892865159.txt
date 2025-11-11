@@ -1,0 +1,304 @@
+Got it—here’s a tight, engineer-to-architect review you can hand to Claude (Replit Agent 3). It keeps your report’s core, but adds specific fixes, refactors, tests, and guardrails so this *actually* works in production.
+
+---
+
+# Hung Frame Detection – Architect Review & Action Plan
+
+## TL;DR (What to do first)
+
+1. **Fix ESM import + AbortSignal wiring** (unblock runtime).
+2. **Break the import cycle** via a tiny “ports” layer + DI.
+3. **Make timeouts *real*** (abort the HTTP + free resources).
+4. **Stop bad rows at the door** (DB constraints + validation).
+5. **Prove it with tests** (unit + integration + chaos).
+
+Target: merge in ≤ 60 minutes once code is open.
+
+---
+
+## 1) Immediate Unblockers
+
+### A. ESM import bug (fatal)
+
+Your report is right: `require()` in an ESM build halts everything.
+
+**Fix**
+
+```ts
+// openai-service.ts (top)
+import { generationHealthService } from './generation-health';
+import { nanoid } from 'nanoid';
+```
+
+If any file still uses `require()`:
+
+* Convert to `import … from …`.
+* Ensure `"type": "module"` (or TS `module: "ESNext"`), and no mixed CJS transitive deps.
+
+### B. Wire AbortSignal to the actual request
+
+Creating `AbortController` without passing `signal` is a no-op.
+
+**Fix (OpenAI JS SDK)**
+
+```ts
+const controller = new AbortController();
+const timeout = setTimeout(() => controller.abort('gen-timeout'), GENERATION_TIMEOUT_MS);
+
+try {
+  const res = await openai.images.generate({
+    model: 'gpt-image-1',
+    prompt: enhancedPrompt,
+    size: '1024x1024',
+    // 👇 IMPORTANT
+    signal: controller.signal,
+  });
+  return res;
+} finally {
+  clearTimeout(timeout);
+}
+```
+
+**Guard:** Some transports ignore `AbortSignal`. If you’re using a fetch override or proxy:
+
+* Ensure your HTTP client actually respects `signal` (Node 18+ `fetch` does).
+* If uncertain, wrap the transport call in `Promise.race([call, abortPromise])` **and** destroy the underlying socket/agent on abort.
+
+---
+
+## 2) Break the circular dependency (openai-service ↔ generation-health ↔ recovery-manager)
+
+**Symptoms**
+
+* Lazy init, undefined singletons, dead services.
+* Health & recovery never actually run.
+
+**Minimal surgical refactor (no framework swap):**
+
+* Create a tiny **ports** module with *pure interfaces*, no imports:
+
+  * `ports/generation.ts`
+
+  ```ts
+  export interface GenerationHealthPort {
+    recordSuccess(ms: number): void;
+    recordFailure(kind: 'timeout'|'http'|'sdk'|'unknown'): void;
+    shouldOpenCircuit(): boolean;
+    currentBudget(): number; // tokens left
+  }
+
+  export interface RecoveryPort {
+    scheduleProbe(kind: 'timeout'|'burst'|'quota'): void;
+  }
+  ```
+* `generation-health.ts` implements `GenerationHealthPort` (no import of openai-service).
+* `recovery-manager.ts` implements `RecoveryPort` (no import of openai-service).
+* `openai-service.ts` **accepts** these ports via DI (function param or module setter), not imports them directly:
+
+  ```ts
+  // openai-service.ts
+  export function makeOpenAIService(ports: { health: GenerationHealthPort; recovery: RecoveryPort }) {
+    async function generateImage(prompt: string) { /* uses ports.health, ports.recovery */ }
+    return { generateImage };
+  }
+  ```
+* **Composition root** (e.g., `server/bootstrap.ts`) wires them:
+
+  ```ts
+  const health = new GenerationHealthService(/*config*/);
+  const recovery = new RecoveryManager(/*config, health*/);
+  export const openai = makeOpenAIService({ health, recovery });
+  ```
+
+This deletes the import cycle and makes the breaker testable.
+
+---
+
+## 3) Make timeouts *effective* (not just timers)
+
+* **Budget check before call:** fail fast when token bucket == 0 (avoid piling requests on a saturated upstream).
+* **Abort on timeout:** ensure the HTTP request is actually canceled (see §1B).
+* **Mark failure type** precisely for the breaker:
+
+  * `timeout` → breaker weight = 1.0
+  * `quota/429` → weight = 0.5 (retry slower)
+  * `5xx` → weight = 0.8
+  * `client/4xx` → weight = 0.1
+
+**Adaptive timeout**
+
+* Use P95+Δ (e.g., `timeoutMs = Math.min(MAX, p95 + 10_000)`), recomputed every N=50 successful calls.
+* Clamp with `[MIN=30_000, MAX=90_000]`.
+
+**Breaker config (sane defaults)**
+
+* Window: last 20–30 attempts
+* Open on: `weighted_failure_rate >= 0.5` **and** `minAttempts >= 5`
+* Half-open: probe every 60s with 1 request
+* Close after: 3 consecutive successes
+
+---
+
+## 4) Data integrity & fallback
+
+Your “null `imageUrl` in DB” is a killer. Fix at **three layers**:
+
+### A. Validate before insert
+
+```ts
+const payload = /* map SDK result */;
+if (!payload.imageUrl) {
+  throw new Error('no-image-url-from-provider');
+}
+```
+
+### B. DB constraints (migration)
+
+```sql
+ALTER TABLE art_sessions
+  ALTER COLUMN image_url SET NOT NULL,
+  ADD CONSTRAINT art_sessions_image_url_not_empty CHECK (length(image_url) > 0);
+
+-- Optional: enforce orientation & style tags present for library items
+ALTER TABLE art_sessions
+  ALTER COLUMN orientation SET NOT NULL;
+
+-- Index helps your catalogue queries
+CREATE INDEX IF NOT EXISTS idx_art_sessions_created_at ON art_sessions (created_at DESC);
+```
+
+### C. Fallback display policy (client)
+
+* If a fetched item lacks `imageUrl` (shouldn’t happen after constraints), **drop it client-side** and request replacement. Never hand the morph engine an invalid frame.
+
+---
+
+## 5) Queue & recovery correctness
+
+* **Dead letter queue**: ensure terminal failures (e.g., `no-image-url` after provider claims success) are **ack’d** and moved to DLQ, not retried forever.
+* **Retry policy**: exponential backoff with jitter; cap attempts (e.g., 3).
+* **Recovery probes**: use *known healthy prompts* (not cached) and set `noStore: true` on response handling so they don’t pollute user catalogues.
+
+**No Redis?** Fine. Use Postgres:
+
+```sql
+-- worker query
+SELECT id, payload
+FROM gen_jobs
+WHERE status='queued'
+ORDER BY urgency DESC, created_at ASC
+FOR UPDATE SKIP LOCKED
+LIMIT 1;
+```
+
+---
+
+## 6) Tests you must add (fast & meaningful)
+
+### Unit (mocks)
+
+* **Timeout path:** SDK call delayed > timeout → `controller.abort()` fired, job marked failed (timeout), breaker increments.
+* **Success path:** imageUrl present → job stored, breaker success.
+* **Quota/429 path:** backoff + limited retries, breaker weight < timeout.
+
+### Integration (test env)
+
+* Inject a “slow provider” stub that sleeps 65s → verify:
+
+  * Abort happens ~60s.
+  * Circuit opens after 3 timeouts.
+  * Half-open probe closes breaker after 3 good results.
+
+### Chaos
+
+* Kill the upstream mid-request (connection reset) → request aborts, resources released, job requeued with backoff, no process crash.
+
+### DB
+
+* Attempt to insert row with `NULL image_url` → rejected by constraint.
+
+---
+
+## 7) Telemetry you’re missing
+
+Emit structured events (not only logs):
+
+* `gen.request` `{ id, timeoutMs, budgetBefore }`
+* `gen.success` `{ id, latencyMs }`
+* `gen.fail` `{ id, kind: 'timeout'|'quota'|'5xx'|'no-image-url', latencyMs? }`
+* `breaker.state` `{ state: 'closed'|'open'|'half-open', failureRate }`
+* `queue.deadletter` `{ jobId, reason }`
+
+**SLOs**
+
+* `gen_timeout_rate` < 5% (rolling 15m)
+* `breaker_open_time` < 2m/day
+* `valid_image_ratio` = 100%
+* `deadletter_rate` < 0.1%
+
+Alert on sustained breaches.
+
+---
+
+## 8) Token bucket tuning (answering the question)
+
+> Is 3 tokens, 1/3min decay right for P95=60–75s?
+
+* It’s **conservative but fine** as a starting point. Suggest:
+
+  * `capacity = 3`
+  * `refill = 1 token / 45s`
+* Once adaptive timeout stabilizes, you can raise `capacity` to 4–5 to reduce head-of-line blocking. Tie refill to observed `p50`.
+
+---
+
+## 9) Lazy imports in ESM (answering the question)
+
+Best practice: **dynamic `import()`**, not `require()`.
+
+```ts
+// example: only load recovery on first failure to save cold-start time
+let recovery: RecoveryPort | null = null;
+async function getRecovery() {
+  if (!recovery) {
+    const { RecoveryManager } = await import('./recovery-manager.js');
+    recovery = new RecoveryManager(/*...*/);
+  }
+  return recovery;
+}
+```
+
+Keep dynamic imports **inside** functions, and type them with `import('./…').Type`.
+
+---
+
+## 10) Rollback & safety
+
+* Feature flag `GEN_BREAKER_ENABLED`.
+* If breaker misbehaves, disable flag → system reverts to normal generation (still with AbortSignal + DB constraints).
+* Keep migrations idempotent; add `IF NOT EXISTS` guards.
+
+---
+
+## Acceptance Criteria (what “done” means)
+
+* **Runtime:** No `require is not defined` anywhere.
+* **Timeouts:** A synthetic 65s delay yields a *real* abort at ~60s.
+* **Breaker:** Opens after 3 timeouts; half-open probe closes after 3 green.
+* **DB:** No new rows with `NULL image_url`; invalid rows rejected.
+* **Fallback:** UI never black-screens; DLQ receives terminal failures.
+* **Telemetry:** Dash shows timeout rate, breaker state, DLQ rate.
+* **Tests:** All unit/integration/chaos scenarios above pass.
+
+---
+
+## Final Notes to Claude
+
+The architecture is solid; the blockers are table-stakes implementation details:
+
+* ESM discipline,
+* import cycles,
+* *actual* cancellation,
+* data integrity.
+
+Ship the unblockers first (imports + abort + constraints), then the cycle break. The rest of your resilience (token bucket, adaptive timeouts, DLQ) will finally start paying dividends.

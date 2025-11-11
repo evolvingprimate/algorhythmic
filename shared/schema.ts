@@ -355,10 +355,15 @@ export const insertArtVoteSchema = createInsertSchema(artVotes).omit({
   createdAt: true,
 });
 
-export const insertArtSessionSchema = createInsertSchema(artSessions).omit({
-  id: true,
-  createdAt: true,
-});
+export const insertArtSessionSchema = createInsertSchema(artSessions)
+  .omit({
+    id: true,
+    createdAt: true,
+  })
+  .extend({
+    // Ensure imageUrl is never null or empty - critical for fallback service
+    imageUrl: z.string().trim().min(1, "imageUrl cannot be empty"),
+  });
 
 export const insertUserSchema = createInsertSchema(users).omit({
   id: true,

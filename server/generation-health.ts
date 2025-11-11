@@ -1,4 +1,5 @@
 import { telemetryService } from './telemetry-service';
+import type { GenerationHealthPort, RecoveryPort } from './types/generation-ports';
 
 /**
  * Token-bucket circuit breaker for DALL-E generation health management.
@@ -72,7 +73,7 @@ class RollingStats {
   }
 }
 
-export class GenerationHealthService {
+export class GenerationHealthService implements GenerationHealthPort {
   // Token-bucket circuit breaker (Grok's recommendation)
   private tokens = 0; // Failure tokens
   private lastRefill = Date.now();
@@ -443,6 +444,93 @@ export class GenerationHealthService {
         }
       });
     }
+  }
+  
+  // ============== GenerationHealthPort Interface Methods ==============
+  // These are thin adapter methods that delegate to existing logic
+  
+  /**
+   * Record a failure with specific kind (required by GenerationHealthPort)
+   */
+  recordFailure(kind: 'timeout' | 'quota' | '5xx' | '4xx' | 'unknown', jobId: string): void {
+    // Delegate timeout failures to existing recordTimeout
+    if (kind === 'timeout') {
+      this.recordTimeout(jobId, 'timeout');
+      return;
+    }
+    
+    // Handle other failure types similarly to timeout
+    this.refill();
+    
+    // Update metrics
+    this.totalAttempts++;
+    this.consecutiveFailures++;
+    this.lastFailureTime = Date.now();
+    
+    // Add failure token
+    this.tokens++;
+    
+    // Remove from active jobs
+    const job = this.activeJobs.get(jobId);
+    this.activeJobs.delete(jobId);
+    
+    telemetryService.recordEvent({
+      event: 'generation_failure',
+      category: 'generation',
+      severity: 'error',
+      metrics: {
+        job_id: jobId,
+        failure_kind: kind,
+        consecutive_failures: this.consecutiveFailures,
+        tokens: this.tokens,
+        was_probe: job?.isProbe || false
+      }
+    });
+    
+    // Check if we should open the breaker
+    if (this.tokens >= this.OPEN_TOKENS) {
+      this.openBreaker();
+    }
+  }
+  
+  /**
+   * Get current circuit breaker state (required by GenerationHealthPort)
+   * Alias for getBreakerState()
+   */
+  getCurrentState(): 'closed' | 'open' | 'half-open' {
+    return this.getBreakerState();
+  }
+  
+  /**
+   * Get current token budget (required by GenerationHealthPort)
+   * Returns remaining tokens before breaker opens
+   */
+  currentBudget(): number {
+    this.refill();
+    return Math.max(0, this.OPEN_TOKENS - this.tokens);
+  }
+  
+  /**
+   * Get simplified metrics (required by GenerationHealthPort)
+   * Extracts subset from getHealthMetrics()
+   */
+  getMetrics(): {
+    successRate: number;
+    p50Latency: number;
+    p95Latency: number;
+    p99Latency: number;
+    totalTimeouts: number;
+    totalSuccesses: number;
+  } {
+    const fullMetrics = this.getHealthMetrics();
+    return {
+      successRate: fullMetrics.successRate,
+      p50Latency: fullMetrics.p50Latency,
+      p95Latency: fullMetrics.p95Latency,
+      p99Latency: fullMetrics.p99Latency,
+      totalTimeouts: fullMetrics.totalTimeouts,
+      totalSuccesses: fullMetrics.totalSuccesses
+    };
   }
 }
 

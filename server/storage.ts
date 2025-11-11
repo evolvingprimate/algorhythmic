@@ -253,6 +253,11 @@ export class MemStorage implements IStorage {
 
   // Art Sessions
   async createArtSession(insertSession: InsertArtSession): Promise<ArtSession> {
+    // Defensive validation - ensure imageUrl is never null or empty
+    if (!insertSession.imageUrl || insertSession.imageUrl.trim() === '') {
+      throw new Error('imageUrl is required and cannot be empty');
+    }
+    
     const id = randomUUID();
     const session: ArtSession = {
       id,
@@ -896,6 +901,11 @@ export class PostgresStorage implements IStorage {
 
   // Art Sessions
   async createArtSession(insertSession: InsertArtSession): Promise<ArtSession> {
+    // Defensive validation - ensure imageUrl is never null or empty
+    if (!insertSession.imageUrl || insertSession.imageUrl.trim() === '') {
+      throw new Error('imageUrl is required and cannot be empty');
+    }
+    
     const created = await this.db
       .insert(artSessions)
       .values(insertSession)
