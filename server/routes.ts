@@ -1434,19 +1434,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Determine provenance tier based on data quality
       let provenance: 'MUSIC_ID' | 'AUDIO_ONLY' | 'STYLE_ONLY' = 'STYLE_ONLY';
-      let finalAudio = audio;
+      
+      // IMPORTANT: Ensure audio analysis has all required fields, especially mood
+      // Merge with defaults to prevent downstream crashes
+      const defaultAudio = createDefaultAudioAnalysis();
+      let finalAudio: AudioAnalysis = audio ? {
+        ...defaultAudio,  // Start with defaults to ensure all fields exist
+        ...audio,         // Override with provided values
+        mood: audio.mood || defaultAudio.mood  // Ensure mood is never undefined
+      } : defaultAudio;
       
       if (music) {
         // Tier 1: We have music identification
         provenance = 'MUSIC_ID';
-        finalAudio = audio || createDefaultAudioAnalysis();
-      } else if (audio && audio.frequency > 0 && audio.confidence !== undefined && audio.confidence > 0.6) {
+      } else if (finalAudio && finalAudio.frequency > 0 && finalAudio.confidence !== undefined && finalAudio.confidence > 0.6) {
         // Tier 2: We have quality audio analysis (must have explicit confidence >0.6)
         provenance = 'AUDIO_ONLY';
       } else {
         // Tier 3: Fall back to style preferences only (no music ID + missing/low audio confidence)
         provenance = 'STYLE_ONLY';
-        finalAudio = audio || createDefaultAudioAnalysis();
         console.log('[ArtGeneration] ⚠️ STYLE_ONLY tier activated (no music ID, low/no/missing audio confidence)');
       }
       
