@@ -975,10 +975,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Generate art based on audio analysis - REQUIRES AUTHENTICATION
   app.post("/api/generate-art", isAuthenticated, async (req: any, res) => {
     try {
-      const { sessionId, audioAnalysis, musicInfo, preferences, previousVotes } = req.body;
+      const { sessionId, audioAnalysis, musicInfo, preferences, previousVotes, idempotencyKey } = req.body;
 
       // Get userId from authenticated user
       const userId = req.user.claims.sub;
+      
+      // IDEMPOTENCY: Check for duplicate requests
+      if (idempotencyKey) {
+        const cacheKey = `idempotency:${userId}:${idempotencyKey}`;
+        const cached = await recentlyServedCache.get(cacheKey);
+        if (cached) {
+          console.log(`[IdempotencyKey] Returning cached response for key: ${idempotencyKey}`);
+          return res.json(JSON.parse(cached));
+        }
+      }
 
       // TEMPORARILY DISABLED: Check daily limit
       // const usageCheck = await storage.checkDailyLimit(userId);
@@ -1126,13 +1136,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       console.log('[ArtGeneration] 🎉 Complete pipeline success: DALL-E → Storage → Verification → Database');
 
-      res.json({
+      const response = {
         imageUrl,
         prompt: result.prompt,
         explanation: result.explanation,
         musicInfo: music,
         session,
-      });
+      };
+      
+      // IDEMPOTENCY: Cache successful response
+      if (idempotencyKey) {
+        const cacheKey = `idempotency:${userId}:${idempotencyKey}`;
+        // Cache for 5 minutes to handle retries
+        await recentlyServedCache.set(cacheKey, JSON.stringify(response), 300);
+        console.log(`[IdempotencyKey] Cached response for key: ${idempotencyKey}`);
+      }
+
+      res.json(response);
     } catch (error: any) {
       console.error("Error generating art:", error);
       res.status(500).json({ message: "Failed to generate artwork: " + error.message });

@@ -118,6 +118,9 @@ export default function Display() {
   const [pinnedArtwork, setPinnedArtwork] = useState<any | null>(null);
   const pinnedTimerRef = useRef<number | null>(null); // Browser timer uses number, not NodeJS.Timeout
   
+  // OPTIMISTIC CONCURRENCY: Track version for query key invalidation
+  const [artworkVersion, setArtworkVersion] = useState(0);
+  
   // Debug and Effects Control
   const [showDebugOverlay, setShowDebugOverlay] = useState(false);
   const [showEffectsMenu, setShowEffectsMenu] = useState(false);
@@ -271,7 +274,7 @@ export default function Display() {
     tier?: string;
     selectedStyles?: string[];
   }>({
-    queryKey: ["/api/artworks/next", sessionId.current, impressionVersionTrigger],
+    queryKey: ["/api/artworks/next", sessionId.current, impressionVersionTrigger, artworkVersion],
     queryFn: async () => {
       console.log('[Display] Query running - fetching /api/artworks/next');
       const res = await fetch(`/api/artworks/next?sessionId=${sessionId.current}`, {
@@ -1043,6 +1046,9 @@ export default function Display() {
       // }
 
       // Generate new artwork (cache disabled to ensure unique images for navigation)
+      // IDEMPOTENCY: Generate unique key for this generation request
+      const idempotencyKey = `${sessionId.current}-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+      
       const res = await apiRequest("POST", "/api/generate-art", {
         sessionId: sessionId.current,
         audioAnalysis,
@@ -1053,6 +1059,7 @@ export default function Display() {
           dynamicMode,
         },
         previousVotes: votes?.slice(0, 10) || [],
+        idempotencyKey,
       });
       
       if (!res.ok) {

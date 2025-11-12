@@ -998,25 +998,49 @@ export class PostgresStorage implements IStorage {
   }
 
   async toggleArtSaved(artId: string, userId: string): Promise<ArtSession> {
-    const art = await this.db
-      .select()
-      .from(artSessions)
-      .where(eq(artSessions.id, artId))
-      .limit(1);
+    // OPTIMISTIC LOCKING: Retry on version conflicts
+    const maxRetries = 3;
+    let lastError: Error | null = null;
     
-    if (!art[0]) {
-      throw new Error("Art not found");
-    }
-    if (art[0].userId !== userId) {
-      throw new Error("Not authorized");
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      const art = await this.db
+        .select()
+        .from(artSessions)
+        .where(eq(artSessions.id, artId))
+        .limit(1);
+      
+      if (!art[0]) {
+        throw new Error("Art not found");
+      }
+      if (art[0].userId !== userId) {
+        throw new Error("Not authorized");
+      }
+      
+      // OPTIMISTIC LOCKING: Update with version check
+      const updated = await this.db
+        .update(artSessions)
+        .set({ 
+          isSaved: !art[0].isSaved,
+          version: art[0].version + 1
+        })
+        .where(and(
+          eq(artSessions.id, artId),
+          eq(artSessions.version, art[0].version)
+        ))
+        .returning();
+      
+      if (updated.length > 0) {
+        return updated[0];
+      }
+      
+      // Version mismatch - retry with exponential backoff
+      lastError = new Error(`Concurrency conflict on attempt ${attempt}`);
+      if (attempt < maxRetries) {
+        await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 100));
+      }
     }
     
-    const updated = await this.db
-      .update(artSessions)
-      .set({ isSaved: !art[0].isSaved })
-      .where(eq(artSessions.id, artId))
-      .returning();
-    return updated[0];
+    throw lastError || new Error("Failed to update after retries");
   }
 
   async deleteArt(artId: string, userId: string): Promise<void> {
@@ -1046,21 +1070,49 @@ export class PostgresStorage implements IStorage {
       sidefillPalette?: string[];
     }
   ): Promise<ArtSession> {
-    const updated = await this.db
-      .update(artSessions)
-      .set({
-        focalPoints: metadata.focalPoints ? JSON.stringify(metadata.focalPoints) : undefined,
-        safeArea: metadata.safeArea ? JSON.stringify(metadata.safeArea) : undefined,
-        sidefillPalette: metadata.sidefillPalette ? JSON.stringify(metadata.sidefillPalette) : undefined,
-      })
-      .where(eq(artSessions.id, artId))
-      .returning();
+    // OPTIMISTIC LOCKING: Retry on version conflicts
+    const maxRetries = 3;
+    let lastError: Error | null = null;
     
-    if (!updated[0]) {
-      throw new Error("Art session not found");
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      // Get current version
+      const current = await this.db
+        .select()
+        .from(artSessions)
+        .where(eq(artSessions.id, artId))
+        .limit(1);
+      
+      if (!current[0]) {
+        throw new Error("Art session not found");
+      }
+      
+      // OPTIMISTIC LOCKING: Update with version check
+      const updated = await this.db
+        .update(artSessions)
+        .set({
+          focalPoints: metadata.focalPoints ? JSON.stringify(metadata.focalPoints) : undefined,
+          safeArea: metadata.safeArea ? JSON.stringify(metadata.safeArea) : undefined,
+          sidefillPalette: metadata.sidefillPalette ? JSON.stringify(metadata.sidefillPalette) : undefined,
+          version: current[0].version + 1
+        })
+        .where(and(
+          eq(artSessions.id, artId),
+          eq(artSessions.version, current[0].version)
+        ))
+        .returning();
+      
+      if (updated.length > 0) {
+        return updated[0];
+      }
+      
+      // Version mismatch - retry with exponential backoff
+      lastError = new Error(`Concurrency conflict on attempt ${attempt}`);
+      if (attempt < maxRetries) {
+        await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 100));
+      }
     }
     
-    return updated[0];
+    throw lastError || new Error("Failed to update metadata after retries");
   }
 
   async getLibraryArtworksNeedingEnrichment(
@@ -1087,13 +1139,16 @@ export class PostgresStorage implements IStorage {
     // CRITICAL: UPSERT to update viewedAt timestamp on repeat views
     // This resets the 7-day cooldown each time artwork is seen
     // PHASE 1 CATALOG: Now supports bridgeAt timestamp for catalog bridges
+    // OPTIMISTIC LOCKING: Include version increment in conflict updates
     const values: any = { 
       userId, 
       artworkId, 
-      viewedAt: sql`NOW()` 
+      viewedAt: sql`NOW()`,
+      version: 1  // Initial version for new impressions
     };
     const updates: any = { 
-      viewedAt: sql`NOW()` 
+      viewedAt: sql`NOW()`,
+      version: sql`user_art_impressions.version + 1` // Increment version on update
     };
     
     // Only set bridgeAt if this is a catalog bridge
@@ -1129,10 +1184,12 @@ export class PostgresStorage implements IStorage {
     
     // CRITICAL: UPSERT to update viewedAt timestamp on repeat views (same as recordImpression)
     // This resets the 7-day cooldown each time artwork is seen
+    // OPTIMISTIC LOCKING: Include version in batch operations
     const rows = artworkIds.map(artworkId => ({
       userId,
       artworkId,
       viewedAt: sql`NOW()` as any,
+      version: 1  // Initial version for new impressions
     }));
     
     await this.db
@@ -1140,7 +1197,10 @@ export class PostgresStorage implements IStorage {
       .values(rows)
       .onConflictDoUpdate({
         target: [userArtImpressions.userId, userArtImpressions.artworkId],
-        set: { viewedAt: sql`NOW()` } // Update timestamp on conflict (maintains cooldown logic)
+        set: { 
+          viewedAt: sql`NOW()`,
+          version: sql`user_art_impressions.version + 1` // Increment version on conflict
+        }
       });
     
     return artworkIds.length;
@@ -1153,11 +1213,13 @@ export class PostgresStorage implements IStorage {
     const isBridge = source === 'bridge';
     
     // Construct rows for batch insert (similar to recordImpression but batched)
+    // OPTIMISTIC LOCKING: Include version in batch operations
     const rows = artworkIds.map(artworkId => {
       const row: any = {
         userId,
         artworkId,
         viewedAt: sql`NOW()`,
+        version: 1  // Initial version for new impressions
       };
       
       // Only set bridgeAt if this is a catalog bridge
@@ -1169,14 +1231,15 @@ export class PostgresStorage implements IStorage {
     });
     
     // UPSERT: Insert new impressions or update existing ones
+    // OPTIMISTIC LOCKING: Increment version on conflict
     await this.db
       .insert(userArtImpressions)
       .values(rows)
       .onConflictDoUpdate({
         target: [userArtImpressions.userId, userArtImpressions.artworkId],
         set: isBridge 
-          ? { viewedAt: sql`NOW()`, bridgeAt: sql`NOW()` }
-          : { viewedAt: sql`NOW()` }
+          ? { viewedAt: sql`NOW()`, bridgeAt: sql`NOW()`, version: sql`user_art_impressions.version + 1` }
+          : { viewedAt: sql`NOW()`, version: sql`user_art_impressions.version + 1` }
       });
     
     return artworkIds.length;

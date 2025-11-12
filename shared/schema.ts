@@ -62,6 +62,8 @@ export const artSessions = pgTable("art_sessions", {
   focalPoints: text("focal_points"), // JSON: [{x, y, confidence}] detected focal points
   sidefillPalette: text("sidefill_palette"), // JSON: ['#color1', '#color2'] for artistic side-fills
   createdAt: timestamp("created_at").notNull().defaultNow(),
+  // OPTIMISTIC CONCURRENCY: Version for preventing race conditions
+  version: integer("version").notNull().default(1),
 }, (table) => ({
   sessionIdIdx: index("art_sessions_session_id_idx").on(table.sessionId),
   userIdIdx: index("art_sessions_user_id_idx").on(table.userId),
@@ -98,6 +100,8 @@ export const userArtImpressions = pgTable("user_art_impressions", {
   artworkId: varchar("artwork_id").notNull().references(() => artSessions.id, { onDelete: "cascade" }),
   viewedAt: timestamp("viewed_at").notNull().defaultNow(),
   bridgeAt: timestamp("bridge_at"), // Nullable: set when shown as catalog bridge for style transition
+  // OPTIMISTIC CONCURRENCY: Version for preventing race conditions
+  version: integer("version").notNull().default(1),
 }, (table) => ({
   userIdIdx: index("user_art_impressions_user_id_idx").on(table.userId),
   artworkIdIdx: index("user_art_impressions_artwork_id_idx").on(table.artworkId),
