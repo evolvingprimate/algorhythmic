@@ -535,16 +535,39 @@ export const SUBSCRIPTION_TIERS = {
 
 export type SubscriptionTier = keyof typeof SUBSCRIPTION_TIERS;
 
-// Audio analysis result type
+// Audio analysis result type - comprehensive audio metrics for AI art generation
 export type AudioAnalysis = {
-  frequency: number;
-  amplitude: number;
-  tempo: number;
-  bassLevel: number;
-  trebleLevel: number;
+  // Original basic audio features
+  frequency: number;              // Dominant frequency in Hz
+  amplitude: number;              // Overall volume level 0-1
+  tempo: number;                  // Tempo in BPM (120-180 typical)
+  bassLevel: number;              // Low frequency energy 0-1
+  trebleLevel: number;            // High frequency energy 0-1
   mood: "energetic" | "calm" | "dramatic" | "playful" | "melancholic";
-  spectralCentroid?: number;
-  confidence?: number;
+  
+  // Extended spectral features
+  lowEnergy: number;              // Energy in low frequency band 0-1
+  midEnergy: number;              // Energy in mid frequency band 0-1  
+  highEnergy: number;             // Energy in high frequency band 0-1
+  rms: number;                    // Root mean square (volume) 0-1
+  zcr: number;                    // Zero crossing rate 0-1
+  spectralCentroid: number;       // Spectral brightness measure
+  spectralRolloff: number;        // Frequency below which 85% of energy is contained
+  
+  // MFCC features for audio fingerprinting (13 coefficients)
+  mfcc: number[];                 // Mel-frequency cepstral coefficients array
+  
+  // Beat and rhythm features  
+  bpm: number;                    // Beats per minute (same as tempo, kept for compatibility)
+  beatIntensity: number;          // Strength of beat 0-1
+  beatConfidence: number;         // Confidence in beat detection 0-1
+  
+  // Voice detection and timing
+  isVocal: boolean;               // Whether vocals are detected
+  timestamp: number;              // Unix timestamp when analysis was performed
+  
+  // Optional confidence metric for analysis quality
+  confidence?: number;            // Overall confidence in analysis 0-1
 };
 
 // Music identification result type
