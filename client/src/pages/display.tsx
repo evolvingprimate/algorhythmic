@@ -2650,10 +2650,11 @@ function DisplayContent() {
         // Graceful degradation: Continue with normal flow, wait for fresh generation
       });
     
-    // BUG FIX: Complete the wizard after saving styles (dismiss modal)
-    // Audio setup is optional and can be done later from controls
-    setSetupStep(SetupStep.IDLE);
-    wizardActiveRef.current = false;  // Clear wizard latch to allow normal operation
+    // BUG FIX: Advance to audio selection step after saving styles
+    // This ensures proper audio analysis data before generation starts
+    setSetupStep(SetupStep.AUDIO);
+    // Keep wizard active until audio selection is complete
+    wizardActiveRef.current = true;
     
     // Save preferences mutation (will refetch but latch prevents reset)
     savePreferencesMutation.mutate(
