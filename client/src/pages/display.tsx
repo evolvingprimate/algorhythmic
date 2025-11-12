@@ -56,8 +56,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { StyleSelector } from "@/components/style-selector";
 import { AudioSourceSelector } from "@/components/audio-source-selector";
 import { DebugOverlay, type DebugStats } from "@/components/debug-overlay";
-// EffectsControlMenu temporarily removed - requires MaestroControlStore/CommandBus refactor
-// import { EffectsControlMenu } from "@/components/effects-control-menu";
+import { EffectsControlMenuSimple, type EffectsConfig, DEFAULT_CONFIG } from "@/components/effects-control-menu-simple";
 import { useToast } from "@/hooks/use-toast";
 import { useImpressionRecorder } from "@/hooks/useImpressionRecorder";
 import { telemetryService } from "@/lib/maestro/telemetry/TelemetryService";
@@ -66,7 +65,7 @@ import { AudioAnalyzer } from "@/lib/audio-analyzer";
 import { WebSocketClient } from "@/lib/websocket-client";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
-import { MorphEngine } from "@/lib/morphEngine";
+import { MorphEngine, type MorphState } from "@/lib/morphEngine";
 import { RendererManager } from "@/lib/RendererManager";
 import { detectDeviceCapabilities } from "@/lib/deviceDetection";
 import { parseDNAFromSession } from "@/lib/dna";
@@ -113,6 +112,8 @@ function DisplayContent() {
   // BUG FIX: Use SetupStep enum instead of boolean flags to prevent overlapping modals
   const [setupStep, setSetupStep] = useState<SetupStep>(SetupStep.IDLE);
   const [setupComplete, setSetupComplete] = useState(false); // Track if first-time setup is done
+  const [preferencesLoaded, setPreferencesLoaded] = useState(false); // Track if user preferences have been loaded
+  const [showChangeStyles, setShowChangeStyles] = useState(false); // Allow changing styles even when preferences are saved
   
   // BUG FIX #3: Wizard latch to prevent refetch race conditions
   const wizardActiveRef = useRef(false);
@@ -151,18 +152,28 @@ function DisplayContent() {
   const [catalogueTier, setCatalogueTier] = useState<'exact' | 'related' | 'global' | 'procedural' | null>(null);
   const [isLoadingFallback, setIsLoadingFallback] = useState(false);
   
+  // Fullscreen state
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [autoHideControls, setAutoHideControls] = useState(false);
+  const fullscreenTimeoutRef = useRef<number>();
+  
   // Network status monitoring
   const [networkStatus, setNetworkStatus] = useState<NetworkStatus>(() => getNetworkStatus());
   const [circuitBreakerState, setCircuitBreakerState] = useState<'closed' | 'open' | 'half-open'>('closed');
   
-  // Local EffectsConfig type (TODO: migrate to MaestroControlStore/EffectPreferences)
-  type EffectsConfig = {
-    trace: { enabled: boolean; intensity: number };
-    bloom: { enabled: boolean; intensity: number };
-    chromaticDrift: { enabled: boolean; intensity: number };
-    particles: { enabled: boolean; density: number };
-    kenBurns: { enabled: boolean; maxZoom: number };
-  };
+  // Load effects config from localStorage or use defaults
+  const [simpleEffectsConfig, setSimpleEffectsConfig] = useState<EffectsConfig>(() => {
+    const saved = localStorage.getItem('algorhythmic-effects-config');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        console.error('Failed to load effects config:', e);
+      }
+    }
+    return DEFAULT_CONFIG;
+  });
+  
   const [debugStats, setDebugStats] = useState<DebugStats>({
     fps: 0,
     frameAOpacity: 0,
@@ -190,11 +201,12 @@ function DisplayContent() {
     },
   });
   const [effectsConfig, setEffectsConfig] = useState<EffectsConfig>({
-    trace: { enabled: true, intensity: 0.7 },
-    bloom: { enabled: true, intensity: 0.6 },
-    chromaticDrift: { enabled: true, intensity: 0.5 },
-    particles: { enabled: true, density: 0.7 },
-    kenBurns: { enabled: true, maxZoom: 1.2 },
+    kenBurns: { enabled: true, intensity: 0.2 },
+    transitionSpeed: 1.0,
+    blurIntensity: 0,
+    particleDensity: 70,
+    bloomIntensity: 60,
+    traceIntensity: 70,
   });
   
   // Image history for back/forward navigation
@@ -253,6 +265,55 @@ function DisplayContent() {
   
   const { toast } = useToast();
   const { user, isAuthenticated } = useAuth();
+
+  // Fullscreen utility functions
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().then(() => {
+        setIsFullscreen(true);
+        setAutoHideControls(true);
+        resetControlsTimeout();
+        toast({
+          title: "Fullscreen Mode",
+          description: "Press F or Escape to exit fullscreen",
+          duration: 2000,
+        });
+      }).catch((err) => {
+        console.error('Error entering fullscreen:', err);
+      });
+    } else {
+      exitFullscreen();
+    }
+  };
+
+  const exitFullscreen = () => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen().then(() => {
+        setIsFullscreen(false);
+        setAutoHideControls(false);
+        setShowControls(true);
+        if (fullscreenTimeoutRef.current) {
+          clearTimeout(fullscreenTimeoutRef.current);
+        }
+      }).catch((err) => {
+        console.error('Error exiting fullscreen:', err);
+      });
+    }
+  };
+
+  const resetControlsTimeout = () => {
+    if (fullscreenTimeoutRef.current) {
+      clearTimeout(fullscreenTimeoutRef.current);
+    }
+    
+    setShowControls(true);
+    
+    if (isFullscreen) {
+      fullscreenTimeoutRef.current = window.setTimeout(() => {
+        setShowControls(false);
+      }, 3000);
+    }
+  };
   
   // Auto-dismiss catalog tier badge after 30 seconds
   useEffect(() => {
@@ -538,18 +599,70 @@ function DisplayContent() {
     }
   }, [unseenResponse?.needsGeneration]);
 
-  // Keyboard shortcuts for debug overlay
+  // Mouse movement handler for fullscreen auto-hide controls
+  useEffect(() => {
+    if (!isFullscreen) return;
+
+    const handleMouseMove = () => {
+      resetControlsTimeout();
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => window.removeEventListener('mousemove', handleMouseMove);
+  }, [isFullscreen]);
+
+  // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // 'D' key toggles debug overlay
-      if (e.key === 'd' || e.key === 'D') {
-        setShowDebugOverlay(prev => !prev);
+      // Prevent keyboard shortcuts when typing in input fields
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+      
+      switch (e.key.toLowerCase()) {
+        case ' ': // Spacebar - toggle play/pause
+          e.preventDefault();
+          if (audioAnalyzerRef.current) {
+            if (isPlaying) {
+              audioAnalyzerRef.current.stop();
+              setIsPlaying(false);
+            } else {
+              // Re-initialize the audio analyzer to resume
+              audioAnalyzerRef.current.initialize(handleAudioAnalysis, undefined);
+              setIsPlaying(true);
+            }
+          }
+          break;
+          
+        case 'd': // Toggle debug overlay
+          setShowDebugOverlay(prev => !prev);
+          break;
+          
+        case 'e': // Toggle effects control menu
+          setShowEffectsMenu(prev => !prev);
+          break;
+          
+        case 'f': // Toggle fullscreen
+          toggleFullscreen();
+          break;
+          
+        case 'escape': // Exit fullscreen or close modals
+          if (isFullscreen) {
+            exitFullscreen();
+          } else if (showEffectsMenu) {
+            setShowEffectsMenu(false);
+          } else if (showDebugOverlay) {
+            setShowDebugOverlay(false);
+          } else if (showExplanation) {
+            setShowExplanation(false);
+          }
+          break;
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [isPlaying, isFullscreen, showEffectsMenu, showDebugOverlay, showExplanation]);
 
   // Listen for renderer fallback events
   useEffect(() => {
@@ -675,15 +788,9 @@ function DisplayContent() {
     // Check for missing imageUrl
     if (!artwork.imageUrl) {
       console.error(`[FrameFilter] Artwork ${artwork.id} has no imageUrl - filtering out`);
-      telemetryService.recordEvent({
-        event: 'frame_filtered',
-        category: 'display',
-        severity: 'warning',
-        metrics: {
-          reason: 'missing_imageUrl',
-          artworkId: artwork.id,
-          prompt: artwork.prompt?.substring(0, 50),
-        }
+      telemetryService.recordEvent('user_action', {
+        action: 'skip',  // Frame skipped due to missing imageUrl
+        artworkId: artwork.id,
       });
       return false;
     }
@@ -691,14 +798,9 @@ function DisplayContent() {
     // Check for empty string imageUrl
     if (typeof artwork.imageUrl === 'string' && artwork.imageUrl.trim() === '') {
       console.error(`[FrameFilter] Artwork ${artwork.id} has empty imageUrl - filtering out`);
-      telemetryService.recordEvent({
-        event: 'frame_filtered',
-        category: 'display',
-        severity: 'warning',
-        metrics: {
-          reason: 'empty_imageUrl',
-          artworkId: artwork.id,
-        }
+      telemetryService.recordEvent('user_action', {
+        action: 'skip',  // Frame skipped due to empty imageUrl
+        artworkId: artwork.id,
       });
       return false;
     }
@@ -707,15 +809,9 @@ function DisplayContent() {
     const urlPattern = /^(\/public-objects\/|https?:\/\/|\/)/;
     if (!urlPattern.test(artwork.imageUrl)) {
       console.error(`[FrameFilter] Artwork ${artwork.id} has invalid imageUrl format: ${artwork.imageUrl} - filtering out`);
-      telemetryService.recordEvent({
-        event: 'frame_filtered',
-        category: 'display',
-        severity: 'warning',
-        metrics: {
-          reason: 'invalid_url_format',
-          artworkId: artwork.id,
-          imageUrl: artwork.imageUrl,
-        }
+      telemetryService.recordEvent('user_action', {
+        action: 'skip',  // Frame skipped due to invalid URL format
+        artworkId: artwork.id,
       });
       return false;
     }
@@ -723,14 +819,9 @@ function DisplayContent() {
     // Check for placeholder URLs that shouldn't be displayed
     if (artwork.imageUrl.includes('placeholder') && !artwork.imageUrl.includes('PLACEHOLDER_IMAGE_URL')) {
       console.warn(`[FrameFilter] Artwork ${artwork.id} has placeholder URL - filtering out`);
-      telemetryService.recordEvent({
-        event: 'frame_filtered',
-        category: 'display',
-        severity: 'info',
-        metrics: {
-          reason: 'placeholder_url',
-          artworkId: artwork.id,
-        }
+      telemetryService.recordEvent('user_action', {
+        action: 'skip',  // Frame skipped due to placeholder URL
+        artworkId: artwork.id,
       });
       return false;
     }
@@ -771,7 +862,7 @@ function DisplayContent() {
       }
       
       // Telemetry for prewarm failures
-      telemetryService.recordEvent('prewarm_error', {
+      telemetryService.recordEvent('handoff.error', {
         context,
         frameId,
         error: errorMsg,
@@ -785,6 +876,9 @@ function DisplayContent() {
           dnaVector: Array(50).fill(0.5),
           prompt: 'Loading artwork...',
           explanation: 'Please wait while we prepare your personalized art experience',
+          artworkId: null,
+          musicInfo: null,
+          audioAnalysis: null,
         });
       }
       // Graceful degradation - continue without prewarming (JIT fallback will handle)
@@ -810,7 +904,7 @@ function DisplayContent() {
       const loadValidatedFrames = async () => {
         try {
           setIsValidatingImages(true); // Show loading spinner
-          startFetching(validatedArtworks.length); // Start progress tracking
+          startFetching(mergedArtworks.length); // Start progress tracking
           console.log(`[Display] 🔍 Loading artworks in FIFO order (max 20)...`);
         
         // FIFO ORDER: Load artworks sequentially (no shuffle) for true freshness
@@ -1486,6 +1580,51 @@ function DisplayContent() {
     };
   }, [user?.id]);
 
+  // Fetch user's saved style preferences on mount
+  useEffect(() => {
+    // Only fetch if user is authenticated and preferences haven't been loaded yet
+    if (isAuthenticated && !preferencesLoaded) {
+      console.log('[Display] Fetching user style preferences...');
+      
+      fetch('/api/user-preferences', {
+        method: 'GET',
+        credentials: 'include',
+      })
+        .then(res => res.json())
+        .then(data => {
+          setPreferencesLoaded(true);
+          
+          if (data && data.styles && data.styles.length > 0) {
+            console.log('[Display] Loaded user preferences:', data);
+            setSelectedStyles(data.styles);
+            setDynamicMode(data.dynamicMode || false);
+            
+            // Skip style selector and go directly to audio selection for returning users
+            if (setupStep === SetupStep.IDLE) {
+              setSetupStep(SetupStep.AUDIO);
+              wizardActiveRef.current = true;
+            }
+          } else {
+            // First-time user or no preferences saved
+            console.log('[Display] No saved preferences found, showing style selector');
+            if (setupStep === SetupStep.IDLE) {
+              setSetupStep(SetupStep.STYLE);
+              wizardActiveRef.current = true;
+            }
+          }
+        })
+        .catch(err => {
+          console.error('[Display] Failed to fetch user preferences:', err);
+          setPreferencesLoaded(true);
+          // On error, show the style selector as fallback
+          if (setupStep === SetupStep.IDLE) {
+            setSetupStep(SetupStep.STYLE);
+            wizardActiveRef.current = true;
+          }
+        });
+    }
+  }, [isAuthenticated, preferencesLoaded, setupStep]);
+
   // Initialize FrameBuffer with callback to request more frames
   useEffect(() => {
     frameBufferRef.current = new FrameBuffer(() => {
@@ -1953,10 +2092,10 @@ function DisplayContent() {
       );
     };
     
-    window.addEventListener('morph-frame-swap', handleFrameSwap as EventListener);
+    window.addEventListener('morph-frame-swap', handleFrameSwap as unknown as EventListener);
     
     return () => {
-      window.removeEventListener('morph-frame-swap', handleFrameSwap as EventListener);
+      window.removeEventListener('morph-frame-swap', handleFrameSwap as unknown as EventListener);
     };
   }, []);
   
@@ -2145,16 +2284,16 @@ function DisplayContent() {
             morphProgress: morphState.morphProgress,
             zoomLevel: 1.0 + morphState.zoomBias,
             activeEffects: {
-              trace: config.trace.enabled,
-              bloom: config.bloom.enabled,
-              chromaticDrift: config.chromaticDrift.enabled,
-              particles: config.particles.enabled,
+              trace: config.traceIntensity > 0,
+              bloom: config.bloomIntensity > 0,
+              chromaticDrift: false,  // Not available in simple config
+              particles: config.particleDensity > 0,
               kenBurns: config.kenBurns.enabled,
             },
             shaderStatus: {
               coreReady: true,
-              traceEnabled: config.trace.enabled,
-              bloomEnabled: config.bloom.enabled,
+              traceEnabled: config.traceIntensity > 0,
+              bloomEnabled: config.bloomIntensity > 0,
               compositeEnabled: true,
             },
             audioMetrics: scaledAudio ? {
@@ -2182,16 +2321,16 @@ function DisplayContent() {
             frameAOpacity: currentOpacity,
             frameBOpacity: nextOpacity,
             activeEffects: {
-              trace: config.trace.enabled,
-              traceIntensity: config.trace.intensity,
-              bloom: config.bloom.enabled,
-              bloomIntensity: config.bloom.intensity,
-              chromaticDrift: config.chromaticDrift.enabled,
-              chromaticDriftIntensity: config.chromaticDrift.intensity,
-              particles: config.particles.enabled,
-              particleDensity: config.particles.density,
+              trace: config.traceIntensity > 0,
+              traceIntensity: config.traceIntensity / 100,
+              bloom: config.bloomIntensity > 0,
+              bloomIntensity: config.bloomIntensity / 100,
+              chromaticDrift: false,  // Not available in simple config
+              chromaticDriftIntensity: 0,
+              particles: config.particleDensity > 0,
+              particleDensity: config.particleDensity / 100,
               kenBurns: config.kenBurns.enabled,
-              kenBurnsMaxZoom: config.kenBurns.maxZoom,
+              kenBurnsMaxZoom: config.kenBurns.intensity * 2,  // Convert intensity (0-1) to zoom (0-2)
             },
             audioAnalysis: scaledAudio,
             dna: morphState.currentDNA,
@@ -2250,16 +2389,16 @@ function DisplayContent() {
             morphProgress: 0,
             zoomLevel: 1.0,
             activeEffects: {
-              trace: config.trace.enabled,
-              bloom: config.bloom.enabled,
-              chromaticDrift: config.chromaticDrift.enabled,
-              particles: config.particles.enabled,
+              trace: config.traceIntensity > 0,
+              bloom: config.bloomIntensity > 0,
+              chromaticDrift: false,  // Not available in simple config
+              particles: config.particleDensity > 0,
               kenBurns: config.kenBurns.enabled,
             },
             shaderStatus: {
               coreReady: true,
-              traceEnabled: config.trace.enabled,
-              bloomEnabled: config.bloom.enabled,
+              traceEnabled: config.traceIntensity > 0,
+              bloomEnabled: config.bloomIntensity > 0,
               compositeEnabled: true,
             },
             audioMetrics: {
@@ -2466,22 +2605,14 @@ function DisplayContent() {
       // These values simulate a quiet, neutral audio environment
       // All values must match server validation schema ranges
       const defaultAudioAnalysis = {
-        lowEnergy: 0.3,        // 0-1 range
-        midEnergy: 0.3,        // 0-1 range
-        highEnergy: 0.3,       // 0-1 range
-        rms: 0.3,              // 0-1 range
-        zcr: 0.05,             // 0-1 range
-        spectralCentroid: 0.5, // 0-1 range (normalized)
-        spectralRolloff: 0.7,  // 0-1 range (normalized)
-        mfcc: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5], // Array of 13 values
-        bpm: 120,              // BPM can be > 1
-        beatIntensity: 0.3,    // 0-1 range
-        beatConfidence: 0.5,   // 0-1 range
-        isVocal: false,
-        timestamp: Date.now(),
+        frequency: 440,        // Middle A frequency in Hz
         amplitude: 30,         // Amplitude can be > 1
-        isBeat: false,
-        mood: "calm"
+        tempo: 120,            // Default BPM
+        bassLevel: 0.3,        // 0-100 range, using 30%
+        trebleLevel: 0.3,      // 0-100 range, using 30%
+        mood: "calm" as const,
+        spectralCentroid: 0.5,
+        confidence: 0.5,
       };
       
       // Immediately trigger handleAudioAnalysis with default values
@@ -2489,13 +2620,8 @@ function DisplayContent() {
       handleAudioAnalysis(defaultAudioAnalysis);
       
       // Set default musicInfo to prevent validation errors
-      // Server expects an object, not null
-      const defaultMusicInfo = {
-        track: undefined,
-        artist: undefined,
-        genre: undefined,
-        album: undefined
-      };
+      // Server expects an object with title property, not null
+      const defaultMusicInfo = null;  // MusicIdentification can be null
       setCurrentMusicInfo(defaultMusicInfo);
       
       // Mark setup as complete
@@ -2567,6 +2693,37 @@ function DisplayContent() {
   const handleStylesChange = (styles: string[], isDynamicMode: boolean) => {
     setSelectedStyles(styles);
     setDynamicMode(isDynamicMode);
+    
+    // Save preferences to backend if user is authenticated
+    if (isAuthenticated) {
+      console.log('[Display] Saving user style preferences...');
+      fetch('/api/user-preferences', {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-session-id': sessionId.current 
+        },
+        body: JSON.stringify({
+          styles,
+          artists: [], // Can be extended later
+          dynamicMode: isDynamicMode,
+          sessionId: sessionId.current
+        }),
+      })
+        .then(res => res.json())
+        .then(data => {
+          console.log('[Display] Saved user preferences successfully:', data);
+          toast({
+            title: "Preferences saved",
+            description: "Your style preferences have been saved and will be remembered for next time.",
+          });
+        })
+        .catch(err => {
+          console.error('[Display] Failed to save user preferences:', err);
+          // Don't show error toast as this is non-critical
+        });
+    }
     
     // BUG FIX: CRITICAL - Immediate flush impressions before style switch
     // Prevents race condition where new frames are fetched before old impressions are recorded
@@ -2818,7 +2975,10 @@ function DisplayContent() {
         {/* Morphing Canvas Container - PRIMARY DISPLAY */}
         <div 
           id="morphing-canvas-container"
-          className="w-full h-full absolute inset-0 z-10"
+          className="w-full h-full absolute inset-0 z-10 transition-opacity duration-1000 ease-in-out"
+          style={{ 
+            opacity: morphEngineRef.current?.getFrameCount() ? 1 : 0,
+          }}
         />
         {/* Audio reactive glow effect */}
         {morphEngineRef.current && morphEngineRef.current.getFrameCount() > 0 && (
@@ -2881,8 +3041,10 @@ function DisplayContent() {
 
       {/* Top Control Bar */}
       <div 
-        className={`fixed top-0 left-0 right-0 z-50 transition-opacity duration-300 ${
-          showControls ? "opacity-100" : "opacity-0"
+        className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${
+          (!isFullscreen || (isFullscreen && showControls)) 
+            ? "opacity-100 translate-y-0" 
+            : "opacity-0 -translate-y-full pointer-events-none"
         }`}
       >
         <div className="h-16 bg-background/80 backdrop-blur-xl border-b flex items-center justify-between px-4">
@@ -2997,6 +3159,23 @@ function DisplayContent() {
               </>
             )}
             
+            {/* Change Styles Button - Shows when user has saved preferences */}
+            {preferencesLoaded && selectedStyles.length > 0 && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => {
+                  setShowChangeStyles(true);
+                  setSetupStep(SetupStep.STYLE);
+                }}
+                title="Change art styles"
+                data-testid="button-change-styles"
+                className="h-8 w-8"
+              >
+                <Sparkles className="h-4 w-4 text-muted-foreground hover:text-primary" />
+              </Button>
+            )}
+            
             {/* Debug Overlay Toggle */}
             <Button
               variant="ghost"
@@ -3080,8 +3259,10 @@ function DisplayContent() {
 
       {/* Bottom Control Bar */}
       <div 
-        className={`fixed bottom-0 left-0 right-0 z-50 transition-opacity duration-300 ${
-          showControls ? "opacity-100" : "opacity-0"
+        className={`fixed bottom-0 left-0 right-0 z-50 transition-all duration-300 ${
+          (!isFullscreen || (isFullscreen && showControls)) 
+            ? "opacity-100 translate-y-0" 
+            : "opacity-0 translate-y-full pointer-events-none"
         }`}
       >
         <div className="h-20 bg-background/80 backdrop-blur-xl border-t">
@@ -3341,14 +3522,21 @@ function DisplayContent() {
         />
       )}
 
-      {/* Effects Control Menu - temporarily removed pending MaestroControlStore/CommandBus refactor */}
-      {/* {showEffectsMenu && (
-        <EffectsControlMenu
-          controlStore={controlStore}
-          commandBus={commandBus}
+      {/* Effects Control Menu */}
+      {showEffectsMenu && (
+        <EffectsControlMenuSimple
+          config={simpleEffectsConfig}
+          onConfigChange={(newConfig) => {
+            setSimpleEffectsConfig(newConfig);
+            // Apply effects to morph engine if available
+            // MorphEngine doesn't have setEffectIntensity method
+            // Effects are applied through the renderer in the render loop
+            // Just update the config state which is used in the render loop
+            console.log('[Display] Effects config updated:', newConfig);
+          }}
           onClose={() => setShowEffectsMenu(false)}
         />
-      )} */}
+      )}
 
       {/* Dynamic Mode Controller - Handles catalog bridges on ALL style/track changes */}
       {setupComplete && (

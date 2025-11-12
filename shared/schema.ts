@@ -140,6 +140,8 @@ export const users = pgTable("users", {
   preferredOrientation: varchar("preferred_orientation"), // 'portrait' | 'landscape' | 'both' | null
   // Credit Controller session state (PostgreSQL-based, no Redis needed)
   controllerState: text("controller_state"), // JSON: {lastDecision, lastProbability, sessionFreshCount, lastUpdated}
+  // Style preferences for persistence across sessions
+  stylePreferences: text("style_preferences"), // JSON: {styles: string[], artists: string[], dynamicMode: boolean}
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

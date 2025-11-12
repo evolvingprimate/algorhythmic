@@ -62,6 +62,10 @@ export interface IStorage {
   getPreferencesBySession(sessionId: string): Promise<ArtPreference | undefined>;
   createOrUpdatePreferences(sessionId: string, styles: string[], artists: string[], dynamicMode?: boolean): Promise<ArtPreference>;
   
+  // User Style Preferences (persistent)
+  getUserStylePreferences(userId: string): Promise<{ styles: string[], artists: string[], dynamicMode: boolean } | undefined>;
+  updateUserStylePreferences(userId: string, preferences: { styles: string[], artists: string[], dynamicMode: boolean }): Promise<User>;
+  
   // Art Votes
   getVotesBySession(sessionId: string): Promise<ArtVote[]>;
   createVote(vote: InsertArtVote): Promise<ArtVote>;
@@ -447,6 +451,7 @@ export class MemStorage implements IStorage {
       isActive: true,
       preferredOrientation: insertUser.preferredOrientation || null,
       controllerState: insertUser.controllerState || null,
+      stylePreferences: insertUser.stylePreferences || null,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -465,6 +470,7 @@ export class MemStorage implements IStorage {
         profileImageUrl: userData.profileImageUrl ?? existing.profileImageUrl,
         preferredOrientation: userData.preferredOrientation ?? existing.preferredOrientation,
         controllerState: userData.controllerState ?? existing.controllerState,
+        stylePreferences: userData.stylePreferences ?? existing.stylePreferences,
         updatedAt: new Date(),
       };
       this.users.set(existing.id, updated);
@@ -483,11 +489,48 @@ export class MemStorage implements IStorage {
       isActive: userData.isActive ?? true,
       preferredOrientation: userData.preferredOrientation || null,
       controllerState: userData.controllerState || null,
+      stylePreferences: userData.stylePreferences || null,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
     this.users.set(newUser.id, newUser);
     return newUser;
+  }
+
+  // User Style Preferences (persistent)
+  async getUserStylePreferences(userId: string): Promise<{ styles: string[], artists: string[], dynamicMode: boolean } | undefined> {
+    const user = await this.getUser(userId);
+    if (!user || !user.stylePreferences) {
+      return undefined;
+    }
+    
+    try {
+      const preferences = JSON.parse(user.stylePreferences);
+      return {
+        styles: preferences.styles || [],
+        artists: preferences.artists || [],
+        dynamicMode: preferences.dynamicMode || false
+      };
+    } catch (e) {
+      console.error('[MemStorage] Error parsing stylePreferences:', e);
+      return undefined;
+    }
+  }
+
+  async updateUserStylePreferences(userId: string, preferences: { styles: string[], artists: string[], dynamicMode: boolean }): Promise<User> {
+    const user = await this.getUser(userId);
+    if (!user) {
+      throw new Error(`User not found: ${userId}`);
+    }
+    
+    const updated: User = {
+      ...user,
+      stylePreferences: JSON.stringify(preferences),
+      updatedAt: new Date(),
+    };
+    
+    this.users.set(userId, updated);
+    return updated;
   }
 
   async updateUserSubscription(
@@ -1659,6 +1702,7 @@ export class PostgresStorage implements IStorage {
     if (userData.profileImageUrl !== undefined) updateSet.profileImageUrl = userData.profileImageUrl;
     if (userData.preferredOrientation !== undefined) updateSet.preferredOrientation = userData.preferredOrientation;
     if (userData.controllerState !== undefined) updateSet.controllerState = userData.controllerState;
+    if (userData.stylePreferences !== undefined) updateSet.stylePreferences = userData.stylePreferences;
     
     const created = await this.db
       .insert(users)
@@ -1669,6 +1713,44 @@ export class PostgresStorage implements IStorage {
       })
       .returning();
     return created[0];
+  }
+
+  // User Style Preferences (persistent)
+  async getUserStylePreferences(userId: string): Promise<{ styles: string[], artists: string[], dynamicMode: boolean } | undefined> {
+    const user = await this.getUser(userId);
+    if (!user || !user.stylePreferences) {
+      return undefined;
+    }
+    
+    try {
+      const preferences = JSON.parse(user.stylePreferences);
+      return {
+        styles: preferences.styles || [],
+        artists: preferences.artists || [],
+        dynamicMode: preferences.dynamicMode || false
+      };
+    } catch (e) {
+      console.error('[PostgresStorage] Error parsing stylePreferences:', e);
+      return undefined;
+    }
+  }
+
+  async updateUserStylePreferences(userId: string, preferences: { styles: string[], artists: string[], dynamicMode: boolean }): Promise<User> {
+    const existingUser = await this.getUser(userId);
+    if (!existingUser) {
+      throw new Error(`User not found: ${userId}`);
+    }
+    
+    const updated = await this.db
+      .update(users)
+      .set({
+        stylePreferences: JSON.stringify(preferences),
+        updatedAt: new Date()
+      })
+      .where(eq(users.id, userId))
+      .returning();
+    
+    return updated[0];
   }
 
   async updateUserSubscription(

@@ -47,8 +47,8 @@ export function DebugOverlay({ stats, onClose, onDownloadLogs }: DebugOverlayPro
   }, [stats.fps]);
 
   return (
-    <div className="fixed top-0 left-0 right-0 z-50 p-4 pointer-events-none" data-testid="debug-overlay">
-      <Card className="bg-black/90 text-white p-4 max-w-4xl mx-auto pointer-events-auto backdrop-blur-sm">
+    <div className="fixed bottom-4 left-4 z-50 pointer-events-none" data-testid="debug-overlay">
+      <Card className="bg-black/80 text-white p-4 max-w-sm pointer-events-auto backdrop-blur-sm border-purple-500/20">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <Bug className="w-5 h-5 text-green-400" />

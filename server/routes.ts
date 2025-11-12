@@ -812,6 +812,76 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ============================================================================
+  // User Preferences Persistence Endpoints
+  // ============================================================================
+
+  // Get user's saved style preferences (authenticated users)
+  app.get("/api/user-preferences", testAuthBypass, isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const preferences = await storage.getUserStylePreferences(userId);
+      
+      res.json(preferences || { styles: [], artists: [], dynamicMode: false });
+    } catch (error: any) {
+      console.error("Error fetching user preferences:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Update user's saved style preferences (authenticated users)
+  app.put("/api/user-preferences", testAuthBypass, isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { styles = [], artists = [], dynamicMode = false } = req.body;
+
+      // Validate input
+      if (!Array.isArray(styles) || !Array.isArray(artists)) {
+        return res.status(400).json({ message: "Styles and artists must be arrays" });
+      }
+
+      // Save preferences to user record
+      const updatedUser = await storage.updateUserStylePreferences(userId, {
+        styles,
+        artists,
+        dynamicMode
+      });
+
+      // Also update session preferences for immediate use
+      const sessionId = req.headers['x-session-id'] || req.body.sessionId;
+      if (sessionId) {
+        await storage.createOrUpdatePreferences(
+          sessionId,
+          styles,
+          artists,
+          dynamicMode
+        );
+
+        // Trigger pre-generation based on new preferences
+        if (styles.length > 0) {
+          await predictiveEngine.handleStylePreferenceUpdate(
+            userId,
+            sessionId,
+            styles,
+            artists
+          );
+        }
+      }
+
+      res.json({ 
+        success: true,
+        preferences: {
+          styles,
+          artists,
+          dynamicMode
+        }
+      });
+    } catch (error: any) {
+      console.error("Error updating user preferences:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ============================================================================
   // Catalogue Bridge: Instant artwork display via cascading library search
   // ============================================================================
   
