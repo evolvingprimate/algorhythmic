@@ -2,8 +2,13 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { bootstrapDatabase } from "./db-bootstrap";
+import { applySecurity } from "./security";
 
 const app = express();
+
+// Apply security middleware BEFORE body parsing and other middleware
+// This ensures CORS, helmet, and rate limiting are applied first
+applySecurity(app);
 
 declare module 'http' {
   interface IncomingMessage {

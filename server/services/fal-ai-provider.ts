@@ -5,6 +5,7 @@
 
 import { fal } from "@fal-ai/client";
 import type { GenerationProvider, GenerationInput, GenerationResult } from "./generation-provider";
+import { isUrlSafe, logSecurityEvent } from "../security";
 
 export class FalAiProvider implements GenerationProvider {
   name = "fal.ai/fast-sdxl";
@@ -48,8 +49,18 @@ export class FalAiProvider implements GenerationProvider {
         throw new Error("No image URL in fal.ai response");
       }
 
-      // Fetch image buffer for local storage
+      // SECURITY: Validate the returned image URL to prevent SSRF
       const imageUrl = data.images[0].url;
+      
+      if (!isUrlSafe(imageUrl)) {
+        logSecurityEvent('ssrf.blocked', 'error', {
+          source: 'fal-ai-response',
+          url: imageUrl.substring(0, 100)
+        });
+        throw new Error('Invalid image URL returned from fal.ai');
+      }
+      
+      // Fetch image buffer for local storage
       const response = await fetch(imageUrl);
       
       if (!response.ok) {

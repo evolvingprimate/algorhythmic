@@ -3,6 +3,7 @@ import { nanoid } from "nanoid";
 import type { GenerationHealthPort } from "./types/generation-ports";
 import type { AudioAnalysis, MusicIdentification } from "@shared/schema";
 import { telemetryService } from './telemetry-service';
+import { isUrlSafe, logSecurityEvent } from './security';
 import * as crypto from 'crypto';
 
 // the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
@@ -706,6 +707,20 @@ export class OpenAIService {
       
       // TELEMETRY: Record generation success
       const imageUrl = response.data?.[0]?.url || "";
+      
+      // SECURITY: Validate the returned image URL to prevent SSRF
+      if (imageUrl && !isUrlSafe(imageUrl)) {
+        logSecurityEvent('ssrf.blocked', 'error', {
+          source: 'dall-e-response',
+          url: imageUrl.substring(0, 100),
+          jobId
+        });
+        throw new GenerationFailure('security', { 
+          message: 'Invalid image URL returned from DALL-E',
+          idempotencyKey: jobId 
+        });
+      }
+      
       telemetryService.recordEvent({
         event: 'gen.success',
         category: 'generation',
@@ -719,7 +734,7 @@ export class OpenAIService {
         }
       });
       
-      return response.data?.[0]?.url || "";
+      return imageUrl;
       
     } catch (error: any) {
       // Clear timeout timer if it hasn't fired yet

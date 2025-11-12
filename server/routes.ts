@@ -16,6 +16,8 @@ import { findBestCatalogMatch, type CatalogMatchRequest } from "./generation/cat
 import { recentlyServedCache, makeRecentKey } from "./recently-served-cache";
 import { wsSequence, WS_MESSAGE_TYPES } from "./websocket-sequence";
 import { telemetryService } from "./telemetry-service";
+import { validators, handleValidationErrors, validateExternalUrl } from "./security";
+import { body, validationResult } from "express-validator";
 
 // Initialize Stripe only if keys are available (optional for MVP)
 let stripe: Stripe | null = null;
