@@ -1,0 +1,97 @@
+Perfect — here’s the **companion prompt** for **Grok → Replit Agent 3 (Architect)** coordination.
+You can paste this into **Grok after the initial audit** to automatically channel the findings into actionable implementation tasks inside Replit.
+
+---
+
+### 🤝 Prompt: Coordinate Grok + Replit Architect for Implementation
+
+You are now acting as **The Architect**, collaborating directly with **Replit Agent 3** inside the Algorhythmic project.
+Your task is to **translate Grok’s audit findings** into a clean, prioritized implementation roadmap that the Replit environment can execute.
+
+#### 🧠 Context
+
+The codebase under review is **Algorhythmic**, a generative-art platform that:
+
+* Reacts to live or streamed audio (EDM, ambient, etc.)
+* Displays dynamically generated art frames with AI backends (DALL-E, fal.ai, etc.)
+* Uses a **progressive frame pipeline** with validators and catalogue fallback.
+* Aims to maintain **zero repeats**, fast recovery, and graceful degradation.
+
+You already have the full audit results from Grok, including:
+
+* Structural map of `/server` and `/client`
+* API surface analysis
+* Frame logic evaluation
+* DB/index health check
+* Security & performance recommendations
+
+---
+
+### 🧩 Objective
+
+Using Grok’s audit data, design a **comprehensive “Fix and Refactor Plan”** for the Replit environment that:
+
+1. **Implements Immediate Fixes (Blocking)**
+
+   * Resolve hung-frame bugs and missing timeouts.
+   * Fix any variable shadowing (e.g., `recentlyServedCache` in `routes.ts`).
+   * Ensure FrameValidator and React Query logic are correctly gated by authentication only.
+   * Verify critical DB indexes (`art_sessions(session_id, created_at DESC)`, `user_art_impressions(user_id, artwork_id)`).
+
+2. **Implements Next-Sprint Improvements (Structural)**
+
+   * Introduce predictive pre-generation at 85–90% pool coverage.
+   * Add circuit breaker + fast-fail logic for DALL-E and fal.ai calls.
+   * Add hashed user IDs in logs and display consent notice.
+   * Implement Redis read-through caching for unseen/fresh queries.
+   * Introduce Playwright E2E tests for “no repeats over 20 frames” and “wizard flow”.
+
+3. **Implements Nice-to-Have Enhancements (Future)**
+
+   * Build a lightweight “Art DNA” analytics dashboard.
+   * Implement Impression Replay mode (behind feature flag).
+   * Add a mobile/tablet performance matrix test harness.
+
+---
+
+### 📊 Deliverables
+
+When collaborating with Replit Agent 3, output should include:
+
+1. **Implementation Roadmap**
+
+   * Structured list of prioritized commits, labeled by category (e.g., `Blocking`, `Next Sprint`, `Enhancement`).
+   * For each item, specify:
+
+     * File(s) affected
+     * Proposed code diff or function to patch
+     * Testing criteria or logging verification
+
+2. **Validation Plan**
+
+   * Define success metrics for fixes (e.g., validator_rejections < 0.5%, frame display latency < 100 ms, no pool exhaustion).
+   * Describe QA and regression tests to confirm stability.
+
+3. **Telemetry Extension**
+
+   * Recommend additional metrics or logs based on Grok’s findings.
+   * Ensure proper async logging and alert thresholds.
+
+4. **Integration Report**
+
+   * Produce a concise summary describing how the updated pipeline maintains smooth frame delivery under load and how fallback and validator systems interact.
+   * Hand this summary back to Grok for validation review.
+
+---
+
+### 🧠 Additional Directives
+
+* Keep all refactors modular and backward-compatible.
+* When uncertain, prefer server-driven state over client-side flags.
+* Maintain strict TypeScript typing and lint hygiene (`no-shadow`, `no-floating-promises`).
+* Avoid long blocking promises on `/api/artworks/next`.
+* Use incremental commits with clear commit messages (`fix:`, `refactor:`, `test:`).
+
+---
+
+Would you like me to also write the **hand-off bridge prompt** that instructs **Grok to automatically pass its structured findings** into this Replit-Architect prompt (so they chain without you having to paste results manually)?
