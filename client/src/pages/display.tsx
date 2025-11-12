@@ -8,6 +8,10 @@ import {
   NetworkQuality,
   getNetworkStatus 
 } from "@/lib/network-utils";
+import { LoadingOverlay } from "@/components/LoadingOverlay";
+import { ArtworkSkeleton } from "@/components/ArtworkSkeleton";
+import { ArtworkErrorBoundary } from "@/components/ArtworkErrorBoundary";
+import { useArtworkLoadingProgress } from "@/hooks/useArtworkLoadingProgress";
 import { Badge } from "@/components/ui/badge";
 import { useHealthMonitor } from "@/hooks/useHealthMonitor";
 import { Slider } from "@/components/ui/slider";
@@ -81,12 +85,24 @@ enum SetupStep {
   COMPLETE = 'COMPLETE',
 }
 
-export default function Display() {
+function DisplayContent() {
   console.log('[Display] Component mounting');
   
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentImage, setCurrentImage] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
+  
+  // Initialize loading progress hook
+  const {
+    loadingProgress,
+    startFetching,
+    startValidating,
+    startPrewarming,
+    startRendering,
+    complete,
+    setError,
+    isLoading: isArtworkLoading
+  } = useArtworkLoadingProgress();
   const [audioLevel, setAudioLevel] = useState(0);
   const [frequencyBands, setFrequencyBands] = useState({ bass: 0, mids: 0, highs: 0 });
   const [showControls, setShowControls] = useState(true);
@@ -713,7 +729,31 @@ export default function Display() {
       await rendererRef.current.prewarmFrame(imageUrl, frameId);
       console.log(`[Display] ✅ Prewarmed ${context}: ${frameId}`);
     } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
       console.error(`[Display] ❌ Prewarm failed for ${context} (${frameId}):`, error);
+      
+      // Update loading progress to show error if initial frame
+      if (context.includes('initial')) {
+        setError(`Failed to load artwork: ${errorMsg}`, 'Unable to prepare artwork for display');
+      }
+      
+      // Telemetry for prewarm failures
+      telemetryService.recordEvent('prewarm_error', {
+        context,
+        frameId,
+        error: errorMsg,
+      });
+      
+      // Attempt recovery with placeholder if critical frame
+      if (context.includes('initial') && morphEngineRef.current.getFrameCount() === 0) {
+        console.log('[Display] 🔄 Attempting recovery with placeholder frame...');
+        morphEngineRef.current.addFrame({
+          imageUrl: PLACEHOLDER_IMAGE_URL,
+          dnaVector: Array(50).fill(0.5),
+          prompt: 'Loading artwork...',
+          explanation: 'Please wait while we prepare your personalized art experience',
+        });
+      }
       // Graceful degradation - continue without prewarming (JIT fallback will handle)
     }
   };
@@ -731,6 +771,7 @@ export default function Display() {
       const loadValidatedFrames = async () => {
         try {
           setIsValidatingImages(true); // Show loading spinner
+          startFetching(validatedArtworks.length); // Start progress tracking
           console.log(`[Display] 🔍 Loading artworks in FIFO order (max 20)...`);
         
         // FIFO ORDER: Load artworks sequentially (no shuffle) for true freshness
@@ -840,6 +881,7 @@ export default function Display() {
           
           // BUG FIX: Safely prewarm frame to prevent visual glitches (with null checks + readiness gate)
           const frameId = artwork.imageUrl.split('/').pop() || artwork.imageUrl;
+          startPrewarming(artwork.imageUrl); // Track prewarming progress
           safePrewarmFrame(artwork.imageUrl, frameId, `initial-frame-${validatedArtworks.length}`);
           
           console.log(`[Display] ✅ Loaded frame ${validatedArtworks.length}: ${artwork.prompt?.substring(0, 50)}...`);
@@ -918,9 +960,11 @@ export default function Display() {
         console.log(`[Display] MorphEngine started with ${morphEngineRef.current.getFrameCount()} frames`);
         
         // CRITICAL: Hide spinner immediately after engine starts (don't wait for validation to finish)
+        complete(); // Mark loading as complete
         setIsValidatingImages(false);
         } finally {
           // Failsafe: Always hide loading spinner, even if validation throws
+          complete(); // Ensure progress is marked complete
           setIsValidatingImages(false);
         }
       };
@@ -2697,17 +2741,28 @@ export default function Display() {
         )}
       </div>
 
-      {/* Loading Spinner Overlay - shown during validation/auto-generation (hidden during wizard) */}
-      {isValidatingImages && setupStep !== SetupStep.STYLE && setupStep !== SetupStep.AUDIO && (
-        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-background/95 backdrop-blur-sm">
-          <div className="flex flex-col items-center gap-6">
-            <div className="animate-spin rounded-full h-16 w-16 border-4 border-primary border-t-transparent"></div>
-            <div className="text-center">
-              <h3 className="text-2xl font-bold mb-2">Loading Artwork</h3>
-              <p className="text-muted-foreground">Preparing beautiful art for you...</p>
-            </div>
-          </div>
-        </div>
+      {/* Enhanced Loading Overlay with progress tracking */}
+      <LoadingOverlay
+        isLoading={isArtworkLoading || isValidatingImages}
+        loadingType={loadingProgress.stage === 'error' ? 'error' : 
+                     isGenerating ? 'generating' : 
+                     loadingProgress.stage === 'validating' ? 'validating' :
+                     loadingProgress.stage === 'prewarming' || loadingProgress.stage === 'rendering' ? 'processing' :
+                     'initial'}
+        progress={loadingProgress.progress}
+        message={loadingProgress.message}
+        subMessage={loadingProgress.subMessage}
+        error={loadingProgress.error}
+        onRetry={() => {
+          // Reset and retry loading
+          setError('');
+          window.location.reload();
+        }}
+      />
+      
+      {/* Artwork Skeleton - shown during initial load before any artwork */}
+      {!currentImage && !isValidatingImages && morphEngineRef.current.getFrameCount() === 0 && (
+        <ArtworkSkeleton showHints={true} />
       )}
 
       {/* Top Control Bar */}
@@ -3199,5 +3254,28 @@ export default function Display() {
         />
       )}
     </div>
+  );
+}
+
+// Export with error boundary wrapper
+export default function Display() {
+  return (
+    <ArtworkErrorBoundary
+      onError={(error, errorInfo) => {
+        console.error('[Display] Error caught by boundary:', error);
+        console.error('[Display] Error info:', errorInfo);
+        
+        // Send telemetry if available
+        if ((window as any).telemetryService) {
+          (window as any).telemetryService.recordEvent('display_error', {
+            errorMessage: error.message,
+            errorStack: error.stack,
+            componentStack: errorInfo.componentStack
+          });
+        }
+      }}
+    >
+      <DisplayContent />
+    </ArtworkErrorBoundary>
   );
 }
