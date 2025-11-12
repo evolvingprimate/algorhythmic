@@ -1,0 +1,91 @@
+You are a senior documentation engineer and software architect working on the Algorhythmic codebase in this Replit project.
+
+Goal:
+Create a comprehensive, developer-grade documentation pack that explains how the system works, what each file/module does, how services interact, and how to build/run/test/deploy. Output must be clear enough to hand to an external reviewer (Grok) with minimal follow-up.
+
+Scope:
+- Scan the entire repo (all directories), including server, client, scripts, infra, and config.
+- Identify languages, frameworks, libraries, build tools, and services in use.
+- Do NOT expose secrets. Redact any secrets or tokens if encountered.
+
+Deliverables (create these files):
+1) docs/00-system-overview.md
+   - Executive summary: purpose, key features, current status.
+   - High-level architecture diagram (Mermaid).
+   - Module map: subsystems and responsibilities.
+   - Data model overview: main tables/collections, key indexes, relationships.
+   - Runtime topology: what runs where (client, server, background jobs, DB, caches).
+   - Environment matrix: dev/staging/prod differences.
+
+2) docs/01-repo-inventory.md
+   - Table listing every top-level file/folder with purpose.
+   - For each source folder: brief per-file purpose.
+   - Identify dead/legacy code or obvious duplicates.
+   - Note generated files and build artifacts.
+
+3) docs/02-services-and-interfaces.md
+   - Backend entry points and main services/managers.
+   - API endpoints (HTTP/WS): path, method, auth, request/response schema, side effects.
+   - Third-party integrations (OpenAI/DALL·E, fal.ai, payments, storage, analytics): what they do, where configured, retry/backoff, circuit breakers.
+   - Feature flags and configuration switches.
+
+4) docs/03-data-and-storage.md
+   - DBs used (Replit DB/SQL, external DBs), ORMs (e.g., Drizzle/Prisma), migration strategy.
+   - Table/collection summaries with key columns, constraints, indexes, FKs, unique rules.
+   - Caching layers (Redis/in-memory): keys, TTL strategy, eviction, hot/cold data paths.
+   - Persistence/retention/backup notes, and known risk areas.
+
+5) docs/04-runtime-and-pipelines.md
+   - Request lifecycle from client → server → DB → renderer pipeline.
+   - Job queues/workers (if any): triggers, schedules, idempotency.
+   - Image generation flow: prompts, validators, fallback logic, catalogue bridge, hung-frame detection.
+   - Telemetry/observability: logs, metrics, traces; where they’re emitted and how to read them.
+
+6) docs/05-build-test-deploy.md
+   - Local dev setup: prerequisites, env vars (names only; no secrets), seed data scripts.
+   - Build commands, linters, type checks, code formatters.
+   - Test strategy: unit/integration/E2E; how to run; current coverage; flaky tests.
+   - Deployment steps for Replit; promote to production; rollback strategy.
+
+7) docs/06-security-and-compliance.md
+   - AuthN/AuthZ model; roles/scopes; session handling.
+   - Input validation and sanitization; SSRF/CSRF/CORS policies.
+   - Secret management (where loaded from), key rotation notes (omit actual secrets).
+   - PII handling, data minimization, and retention considerations.
+
+8) docs/07-ops-runbook.md
+   - Common incidents and resolutions: black frames, hung generation, frame pool exhaustion, cache mismatch.
+   - Dashboards/log commands to check first; known alerts and thresholds.
+   - SLOs/SLAs; capacity assumptions; scaling tips.
+   - Disaster recovery checklist and backup/restore procedure.
+
+9) docs/08-gaps-issues-roadmap.md
+   - Known bugs and tech debt (file + line refs where possible).
+   - Architectural risks and cost/perf bottlenecks.
+   - Short-term fixes vs. long-term refactors.
+   - Clear, prioritized backlog with estimated effort.
+
+Also generate these diagram/source assets:
+- diagrams/architecture.mmd — Mermaid system architecture
+- diagrams/module-deps.mmd — Mermaid module dependency graph
+- diagrams/data-flow.mmd — Mermaid data-flow (client↔server↔DB↔render)
+- diagrams/request-lifecycle.mmd — Mermaid sequence for a typical frame request
+(Embed rendered diagrams into the docs where relevant.)
+
+Requirements & Method:
+- Programmatically scan the repo and summarize files intelligently (don’t just list—explain purpose).
+- Cross-link sections (e.g., an API in 02 should link to the service in source code).
+- Include short code snippets when they clarify behavior (avoid overly long dumps).
+- Redact secrets; show env var *names only* and where they’re read.
+- If something is uncertain, add a “Note: needs confirmation” tag instead of guessing.
+- Prefer concise tables for inventories and endpoint lists.
+
+Acceptance Criteria:
+- All files above are created with meaningful content.
+- All Mermaid files compile (validate syntax).
+- No secrets are leaked.
+- The docs can be read top-to-bottom by an external reviewer to understand the system.
+
+Finally:
+- Print a completion summary listing all files created with a one-line description each.
+- If you discover critical inconsistencies (e.g., duplicate caches, shadowed variables), flag them in docs/08-gaps-issues-roadmap.md with suggested fixes.
