@@ -598,8 +598,8 @@ function DisplayContent() {
     ) {
       const frameCount = morphEngineRef.current.getFrameCount();
       console.log(`[Freshness] Pool ${frameCount === 0 ? 'empty' : 'low'}, auto-generating artwork to ${frameCount === 0 ? 'populate' : 'refill'}...`);
-      // Use createFullAudioAnalysis for the API call which needs all server validation fields
-      const audioAnalysis = currentAudioAnalysis || createFullAudioAnalysis();
+      // Use createDefaultAudioAnalysis which now includes all server validation fields
+      const audioAnalysis = currentAudioAnalysis || createDefaultAudioAnalysis();
       // Don't send musicInfo field at all when it's null to avoid server validation error
       if (currentMusicInfo) {
         generateArtMutation.mutate({ audioAnalysis, musicInfo: currentMusicInfo });
@@ -1241,40 +1241,44 @@ function DisplayContent() {
     },
   });
 
-  // Helper: Generate default audio analysis for auto-generation and "No Audio" mode
-  // Returns AudioAnalysis type as defined in shared schema
-  // Server will add additional fields as needed
-  const createDefaultAudioAnalysis = (): AudioAnalysis => ({
-    frequency: 60 + Math.random() * 40, // 60-100 Hz
-    amplitude: 0.3 + Math.random() * 0.4, // 0.3-0.7
-    tempo: 100 + Math.random() * 40, // 100-140 BPM
-    bassLevel: 0.4 + Math.random() * 0.3, // 0.4-0.7
-    trebleLevel: 0.3 + Math.random() * 0.3, // 0.3-0.6
-    mood: 'energetic',
-    spectralCentroid: 0.4 + Math.random() * 0.3, // 0.4-0.7 range
-    confidence: 0.6 + Math.random() * 0.3, // 0.6-0.9 range
-  });
-  
-  // Helper: Generate comprehensive audio analysis that includes server validation fields
-  // This is what the server expects in the API request body
-  const createFullAudioAnalysis = (): any => ({
-    // Include all AudioAnalysis fields
-    ...createDefaultAudioAnalysis(),
-    
-    // Additional fields required by server validation
-    lowEnergy: 0.3 + Math.random() * 0.3, // 0.3-0.6 range
-    midEnergy: 0.4 + Math.random() * 0.3, // 0.4-0.7 range
-    highEnergy: 0.3 + Math.random() * 0.2, // 0.3-0.5 range
-    rms: 0.4 + Math.random() * 0.2, // 0.4-0.6 range
-    zcr: 0.3 + Math.random() * 0.2, // 0.3-0.5 range
-    spectralRolloff: 0.5 + Math.random() * 0.3, // 0.5-0.8 range
-    mfcc: Array(13).fill(0).map(() => Math.random() * 2 - 1), // 13 values between -1 and 1
-    bpm: 100 + Math.random() * 40, // 100-140 BPM (same as tempo)
-    beatIntensity: 0.3 + Math.random() * 0.3, // 0.3-0.6 range
-    beatConfidence: 0.5 + Math.random() * 0.3, // 0.5-0.8 range
-    isVocal: false, // No vocals in "No Audio" mode
-    timestamp: Date.now(), // Current timestamp
-  });
+  // Helper: Generate complete audio analysis for "No Audio" mode
+  // Returns full AudioAnalysis type with all 21 required fields
+  const createDefaultAudioAnalysis = (): AudioAnalysis => {
+    const tempo = 100 + Math.random() * 40; // 100-140 BPM
+    return {
+      // Original basic audio features
+      frequency: 60 + Math.random() * 40, // 60-100 Hz
+      amplitude: 0.3 + Math.random() * 0.4, // 0.3-0.7
+      tempo: tempo,
+      bassLevel: 0.4 + Math.random() * 0.3, // 0.4-0.7
+      trebleLevel: 0.3 + Math.random() * 0.3, // 0.3-0.6
+      mood: 'energetic' as const,
+      
+      // Extended spectral features
+      lowEnergy: 0.3 + Math.random() * 0.3, // 0.3-0.6 range
+      midEnergy: 0.4 + Math.random() * 0.3, // 0.4-0.7 range
+      highEnergy: 0.3 + Math.random() * 0.2, // 0.3-0.5 range
+      rms: 0.4 + Math.random() * 0.2, // 0.4-0.6 range
+      zcr: 0.3 + Math.random() * 0.2, // 0.3-0.5 range
+      spectralCentroid: 0.4 + Math.random() * 0.3, // 0.4-0.7 range
+      spectralRolloff: 0.5 + Math.random() * 0.3, // 0.5-0.8 range
+      
+      // MFCC features (13 coefficients for audio fingerprinting)
+      mfcc: Array(13).fill(0).map(() => Math.random() * 2 - 1), // 13 values between -1 and 1
+      
+      // Beat and rhythm features
+      bpm: tempo, // Same as tempo for consistency
+      beatIntensity: 0.3 + Math.random() * 0.3, // 0.3-0.6 range
+      beatConfidence: 0.5 + Math.random() * 0.3, // 0.5-0.8 range
+      
+      // Voice detection and timing
+      isVocal: false, // No vocals in "No Audio" mode
+      timestamp: Date.now(), // Current timestamp
+      
+      // Optional confidence metric
+      confidence: 0.6 + Math.random() * 0.3, // 0.6-0.9 range
+    };
+  };
 
   // Production-grade impression recorder (batching, retry, lifecycle flush)
   const impressionRecorder = useImpressionRecorder({
