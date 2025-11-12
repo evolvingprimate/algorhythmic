@@ -690,7 +690,15 @@ export class OpenAIService {
         timeoutId = null;
       }
       
-      // Record success with health service
+      // Check if result is still valid (not expired) BEFORE recording success
+      // This must happen before recordSuccess removes the job from activeJobs
+      if (!this.generationHealth.isJobValid(jobId)) {
+        const latency = Date.now() - startTime;
+        console.warn(`[GenerationHealth] Job ${jobId} completed in ${latency}ms but expired, dropping result`);
+        throw new GenerationFailure('timeout', { idempotencyKey: jobId });
+      }
+      
+      // Record success with health service (this removes job from activeJobs)
       const latency = Date.now() - startTime;
       this.generationHealth.recordSuccess(latency, jobId);
       
@@ -710,12 +718,6 @@ export class OpenAIService {
           prompt_hash: promptHash
         }
       });
-      
-      // Check if result is still valid (not expired)
-      if (!this.generationHealth.isJobValid(jobId)) {
-        console.warn(`[GenerationHealth] Job ${jobId} completed but expired, dropping result`);
-        throw new GenerationFailure('timeout', { idempotencyKey: jobId });
-      }
       
       return response.data?.[0]?.url || "";
       
