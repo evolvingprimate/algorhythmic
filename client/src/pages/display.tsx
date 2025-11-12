@@ -1708,6 +1708,50 @@ export default function Display() {
     };
   }, []);
   
+  // BUG FIX: Handle frame swap events from MorphScheduler
+  useEffect(() => {
+    const handleFrameSwap = async (event: CustomEvent) => {
+      const { frameA, frameB, cycleCount } = event.detail;
+      console.log(`[Display] Frame swap event received - Cycle ${cycleCount}, prewarming new frames`);
+      
+      // BUG FIX: Prewarm the new frames after swap to prevent JIT loading
+      if (frameA && frameA.imageUrl) {
+        const frameId = frameA.imageUrl.split('/').pop() || frameA.imageUrl;
+        await safePrewarmFrame(frameA.imageUrl, frameId, `swapped-frameA-cycle-${cycleCount}`);
+      }
+      
+      if (frameB && frameB.imageUrl) {
+        const frameId = frameB.imageUrl.split('/').pop() || frameB.imageUrl;
+        await safePrewarmFrame(frameB.imageUrl, frameId, `swapped-frameB-cycle-${cycleCount}`);
+      }
+      
+      // BUG FIX: Track frame display for telemetry when frames are swapped
+      if (frameA && frameA.artworkId) {
+        ClientTelemetry.getInstance().trackFrameDisplay(frameA.imageUrl);
+        console.log(`[Display] Tracked frame display for swapped frameA: ${frameA.artworkId}`);
+      }
+      
+      if (frameB && frameB.artworkId) {
+        ClientTelemetry.getInstance().trackFrameDisplay(frameB.imageUrl);
+        console.log(`[Display] Tracked frame display for swapped frameB: ${frameB.artworkId}`);
+      }
+      
+      // Track morph cycle completion
+      ClientTelemetry.getInstance().trackMorphCycle(
+        cycleCount - 1,
+        60000, // 60 second cycle duration
+        2, // 2 frames used
+        true // completed
+      );
+    };
+    
+    window.addEventListener('morph-frame-swap', handleFrameSwap as EventListener);
+    
+    return () => {
+      window.removeEventListener('morph-frame-swap', handleFrameSwap as EventListener);
+    };
+  }, []);
+  
   // Handle engine selection changes
   // Auto-migrate from old default (morpheus_0.5) to new default (morpheus_0.1) on initial mount only
   const hasMigratedRef = useRef(false);

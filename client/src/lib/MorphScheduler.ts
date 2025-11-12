@@ -169,6 +169,17 @@ export class MorphScheduler {
           this.state.cycleCount++;
           
           console.log(`[MorphScheduler] Cycle ${this.state.cycleCount} complete, swapping frames`);
+          
+          // BUG FIX: Emit event for frame swap so display.tsx can prewarm and track telemetry
+          if (typeof window !== 'undefined' && this.state.currentFrameA && this.state.currentFrameB) {
+            window.dispatchEvent(new CustomEvent('morph-frame-swap', {
+              detail: {
+                frameA: this.state.currentFrameA,
+                frameB: this.state.currentFrameB,
+                cycleCount: this.state.cycleCount,
+              }
+            }));
+          }
         }
         break;
         
@@ -201,6 +212,17 @@ export class MorphScheduler {
             this.state.morphProgress = 0;
             this.state.cycleCount++;
             this.state.state = 'MORPHING';
+            
+            // BUG FIX: Emit event for frame swap
+            if (typeof window !== 'undefined' && this.state.currentFrameA && this.state.currentFrameB) {
+              window.dispatchEvent(new CustomEvent('morph-frame-swap', {
+                detail: {
+                  frameA: this.state.currentFrameA,
+                  frameB: this.state.currentFrameB,
+                  cycleCount: this.state.cycleCount,
+                }
+              }));
+            }
           }
         }
         break;
@@ -237,6 +259,18 @@ export class MorphScheduler {
           this.state.morphProgress = 0;
           
           console.log('[MorphScheduler] Transition complete, fresh frame integrated');
+          
+          // BUG FIX: Emit event after fresh frame integration
+          if (typeof window !== 'undefined' && this.state.currentFrameA && this.state.currentFrameB) {
+            window.dispatchEvent(new CustomEvent('morph-frame-swap', {
+              detail: {
+                frameA: this.state.currentFrameA,
+                frameB: this.state.currentFrameB,
+                cycleCount: this.state.cycleCount,
+                transition: true, // Indicates this was a fresh frame integration
+              }
+            }));
+          }
         }
         break;
     }
