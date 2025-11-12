@@ -3,6 +3,7 @@ import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { bootstrapDatabase } from "./db-bootstrap";
 import { applySecurity } from "./security";
+import { jsonBodyLimit, urlEncodedLimit } from "./security-middleware";
 
 const app = express();
 
@@ -19,12 +20,19 @@ declare module 'http' {
     rawBody: unknown
   }
 }
+
+// Configure body parsers with size limits for security
 app.use(express.json({
+  limit: jsonBodyLimit, // 10mb limit from security-middleware
   verify: (req, _res, buf) => {
     req.rawBody = buf;
   }
 }));
-app.use(express.urlencoded({ extended: false }));
+
+app.use(express.urlencoded({ 
+  extended: false, 
+  limit: urlEncodedLimit // 10mb limit from security-middleware
+}));
 
 app.use((req, res, next) => {
   const start = Date.now();

@@ -19,6 +19,7 @@ import { wsSequence, WS_MESSAGE_TYPES } from "./websocket-sequence";
 import { telemetryService } from "./telemetry-service";
 import { validators, handleValidationErrors, validateExternalUrl } from "./security";
 import { body, validationResult } from "express-validator";
+import { validations } from "./validation-middleware";
 
 // Initialize Stripe only if keys are available (optional for MVP)
 let stripe: Stripe | null = null;
@@ -710,9 +711,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Save user preferences
-  app.post("/api/preferences", async (req, res) => {
+  app.post("/api/preferences", validations.preferences, async (req, res) => {
     try {
-      const validated = insertArtPreferenceSchema.parse(req.body);
+      const validated = req.body; // Already validated by middleware
       const preferences = await storage.createOrUpdatePreferences(
         validated.sessionId,
         validated.styles || [],
@@ -729,7 +730,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Catalogue Bridge: Instant artwork display via cascading library search
   // ============================================================================
   
-  app.post("/api/catalogue-bridge", testAuthBypass, isAuthenticated, async (req: any, res) => {
+  app.post("/api/catalogue-bridge", testAuthBypass, isAuthenticated, validations.catalogueBridge, async (req: any, res) => {
     try {
       const { sessionId, styleTags = [], artistTags = [], orientation, limit = 2 } = req.body;
       
@@ -818,7 +819,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Render-Ack Impressions: Record impressions only when artwork is displayed
   // ============================================================================
   
-  app.post("/api/impressions/rendered", isAuthenticated, async (req: any, res) => {
+  app.post("/api/impressions/rendered", isAuthenticated, validations.impression, async (req: any, res) => {
     try {
       const { artworkIds = [], source, sessionId } = req.body as { 
         artworkIds?: string[]; 
@@ -1332,7 +1333,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Generate art based on audio analysis - REQUIRES AUTHENTICATION (now queued)
-  app.post("/api/generate-art", isAuthenticated, async (req: any, res) => {
+  app.post("/api/generate-art", isAuthenticated, validations.generateArt, async (req: any, res) => {
     // Circuit breaker timeout guard
     let timeoutId: NodeJS.Timeout | undefined;
     let isTimedOut = false;
@@ -1612,9 +1613,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Submit vote
-  app.post("/api/vote", async (req, res) => {
+  app.post("/api/vote", validations.vote, async (req, res) => {
     try {
-      const validated = insertArtVoteSchema.parse(req.body);
+      const validated = req.body; // Already validated by middleware
       const vote = await storage.createVote(validated);
       res.json(vote);
     } catch (error: any) {
@@ -2057,7 +2058,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Batch impression recording (for legacy artwork backfill + performance)
-  app.post("/api/artworks/batch-impressions", isAuthenticated, async (req: any, res) => {
+  app.post("/api/artworks/batch-impressions", isAuthenticated, validations.batchImpressions, async (req: any, res) => {
     const startTime = Date.now();
     
     try {
@@ -2462,7 +2463,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Artwork Generation with Queue Controller
   // ============================================================================
   
-  app.post('/api/artwork/generate', testAuthBypass, isAuthenticated, async (req: any, res) => {
+  app.post('/api/artwork/generate', testAuthBypass, isAuthenticated, validations.generateArt, async (req: any, res) => {
     try {
       const { sessionId, audioAnalysis, preferences } = req.body;
       

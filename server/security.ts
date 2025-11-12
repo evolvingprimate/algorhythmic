@@ -1,6 +1,7 @@
 /**
  * Security Configuration and Middleware
  * Implements defense-in-depth security measures for the application
+ * Enhanced with comprehensive rate limiting and validation from security-middleware
  */
 
 import cors from 'cors';
@@ -9,6 +10,20 @@ import rateLimit from 'express-rate-limit';
 import { validationResult, body, query, param } from 'express-validator';
 import type { Express, Request, Response, NextFunction } from 'express';
 import { telemetryService } from './telemetry-service';
+import { 
+  helmetConfig, 
+  corsConfig,
+  applyRouteRateLimits,
+  publicRateLimit,
+  generationRateLimit,
+  authRateLimit,
+  generalApiRateLimit,
+  websocketRateLimit,
+  uploadRateLimit,
+  jsonBodyLimit,
+  urlEncodedLimit,
+  securityUtils 
+} from './security-middleware';
 
 // ============================================================================
 // CORS Configuration
@@ -125,6 +140,9 @@ export function configureHelmet() {
 const isDevelopment = process.env.NODE_ENV !== 'production';
 const isTest = process.env.NODE_ENV === 'test' || process.env.TEST_SERVICE_TOKEN;
 
+// These rate limits are now imported from security-middleware
+// Keeping original ones for backwards compatibility but marking as deprecated
+/** @deprecated Use rate limits from security-middleware instead */
 export const generalRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: isDevelopment || isTest ? 1000 : 100, // Relaxed in dev/test: 1000 requests per 15 min
@@ -146,14 +164,16 @@ export const generalRateLimit = rateLimit({
   }
 });
 
-export const generationRateLimit = rateLimit({
+/** @deprecated Use rate limits from security-middleware instead */
+export const _generationRateLimit = rateLimit({
   windowMs: 5 * 60 * 1000, // 5 minutes
   max: isDevelopment || isTest ? 50 : 10, // Relaxed in dev/test: 50 requests per 5 min
   message: 'Too many generation requests, please slow down.',
   skipSuccessfulRequests: false
 });
 
-export const authRateLimit = rateLimit({
+/** @deprecated Use rate limits from security-middleware instead */
+export const _authRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: isDevelopment || isTest ? 20 : 5, // Relaxed in dev/test: 20 attempts per 15 min
   skipSuccessfulRequests: false
@@ -362,27 +382,45 @@ export function logSecurityEvent(
 
 /**
  * Apply all security middleware to Express app
+ * Enhanced with comprehensive rate limiting and validation
  */
 export function applySecurity(app: Express) {
-  // Apply security headers first
-  app.use(configureHelmet());
+  // 1. Apply enhanced helmet configuration from security-middleware
+  app.use(helmetConfig);
   
-  // Apply CORS
-  app.use(configureCORS());
+  // 2. Apply enhanced CORS configuration from security-middleware
+  app.use(corsConfig);
   
-  // Apply general rate limiting
-  app.use('/api/', generalRateLimit);
+  // 3. Trust proxy for accurate IP addresses (needed for rate limiting)
+  app.set('trust proxy', true);
   
-  // Apply specific rate limiting to sensitive endpoints
-  app.use('/api/generate', generationRateLimit);
-  app.use('/api/auth', authRateLimit);
+  // 4. Apply general API rate limit
+  app.use('/api/', generalApiRateLimit);
+  
+  // 5. Apply route-specific rate limits
+  applyRouteRateLimits(app);
   
   // Log all security middleware applied
-  console.log('[SECURITY] All security middleware applied successfully');
+  console.log('[SECURITY] All enhanced security middleware applied successfully');
   logSecurityEvent('security.initialized', 'info', {
-    cors: 'configured',
-    helmet: 'configured',
-    rateLimiting: 'configured',
-    ssrfProtection: 'enabled'
+    cors: 'enhanced',
+    helmet: 'enhanced_with_csp',
+    rateLimiting: 'tiered_limits',
+    ssrfProtection: 'enabled',
+    requestSizeLimits: jsonBodyLimit,
+    urlEncodedLimit: urlEncodedLimit
   });
 }
+
+// Export enhanced rate limits for use in routes
+// Note: generationRateLimit and authRateLimit are now imported from security-middleware
+export { 
+  publicRateLimit,
+  generalApiRateLimit,
+  websocketRateLimit,
+  uploadRateLimit,
+  securityUtils,
+  // Re-export the enhanced versions from security-middleware
+  generationRateLimit,
+  authRateLimit
+};
