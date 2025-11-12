@@ -222,25 +222,37 @@ export function useHealthMonitor(options: HealthMonitorOptions = {}) {
     if (!healthStatus) return null;
     
     const components = healthStatus.components;
+    
+    // Guard against undefined or null components
+    if (!components || typeof components !== 'object') {
+      return {
+        degraded: [],
+        down: [],
+        websocketClients: 0,
+        circuitBreakerState: 'unknown',
+        poolDepth: 0,
+      };
+    }
+    
     const criticalComponents = ['database', 'websocket', 'queue'];
     const degradedComponents = Object.entries(components)
       .filter(([key, value]: [string, any]) => 
-        criticalComponents.includes(key) && value.status === 'degraded'
+        criticalComponents.includes(key) && value?.status === 'degraded'
       )
       .map(([key]) => key);
     
     const downComponents = Object.entries(components)
       .filter(([key, value]: [string, any]) => 
-        criticalComponents.includes(key) && value.status === 'down'
+        criticalComponents.includes(key) && value?.status === 'down'
       )
       .map(([key]) => key);
     
     return {
       degraded: degradedComponents,
       down: downComponents,
-      websocketClients: components.websocket?.clients || 0,
-      circuitBreakerState: components.circuitBreaker?.state || 'unknown',
-      poolDepth: components.pool?.depth || 0,
+      websocketClients: components?.websocket?.clients || 0,
+      circuitBreakerState: components?.circuitBreaker?.state || 'unknown',
+      poolDepth: components?.pool?.depth || 0,
     };
   }, [healthStatus]);
   
