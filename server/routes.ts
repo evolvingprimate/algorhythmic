@@ -4,7 +4,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { raw } from "express";
 import Stripe from "stripe";
 import { storage } from "./storage";
-import { generateArtPrompt, generateArtImage, queueController, generationHealthService, recoveryManager, queueService } from "./bootstrap";
+import { generateArtPrompt, generateArtImage, queueController, generationHealthService, recoveryManager, queueService, poolMonitor } from "./bootstrap";
 import { identifyMusic } from "./music-service";
 import { insertArtVoteSchema, insertArtPreferenceSchema, type AudioAnalysis, type MusicIdentification, telemetryEvents } from "@shared/schema";
 import { and, sql } from "drizzle-orm";
@@ -472,6 +472,155 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ============================================================================
+  // Pool Monitoring Endpoints
+  // ============================================================================
+
+  // Get current pool metrics
+  app.get('/api/monitoring/pool', isAuthenticated, async (req: any, res) => {
+    try {
+      const metrics = await poolMonitor.getMetrics();
+      
+      res.json({
+        status: 'ok',
+        metrics,
+        config: {
+          preGenerationThreshold: 0.85,
+          criticalThreshold: 0.95,
+          targetPoolSize: 10,
+          minPoolSize: 2
+        }
+      });
+    } catch (error: any) {
+      console.error("Error getting pool metrics:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Get session-specific pool state
+  app.get('/api/monitoring/pool/session/:sessionId', isAuthenticated, async (req: any, res) => {
+    try {
+      const { sessionId } = req.params;
+      const userId = req.user.claims.sub;
+      
+      // Get session state from pool monitor
+      const sessionState = poolMonitor.getSessionState(sessionId);
+      
+      if (!sessionState) {
+        // If no state exists, try to refresh it
+        await poolMonitor.refreshSession(sessionId, userId);
+        const newState = poolMonitor.getSessionState(sessionId);
+        
+        if (!newState) {
+          return res.status(404).json({ 
+            message: 'Session not found in pool monitor',
+            sessionId 
+          });
+        }
+        
+        return res.json(newState);
+      }
+      
+      res.json(sessionState);
+    } catch (error: any) {
+      console.error("Error getting session pool state:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Manually trigger pool assessment (for testing)
+  app.post('/api/monitoring/pool/assess', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      
+      // Check if user is authorized (e.g., admin)
+      // For now, allow all authenticated users in dev mode
+      if (process.env.NODE_ENV === 'production') {
+        return res.status(403).json({ message: 'Not authorized' });
+      }
+      
+      // Get current metrics before assessment
+      const beforeMetrics = await poolMonitor.getMetrics();
+      
+      // Manually trigger assessment (this is private, so we'll emit an event instead)
+      poolMonitor.emit('manual-assessment');
+      
+      // Get metrics after assessment
+      const afterMetrics = await poolMonitor.getMetrics();
+      
+      res.json({
+        message: 'Pool assessment triggered',
+        beforeMetrics,
+        afterMetrics,
+        timestamp: new Date().toISOString()
+      });
+      
+      // Log the manual assessment
+      telemetryService.recordEvent({
+        event: 'pool_manual_assessment',
+        category: 'pool',
+        severity: 'info',
+        metrics: {
+          userId,
+          coverage: afterMetrics.poolCoveragePercentage
+        }
+      });
+    } catch (error: any) {
+      console.error("Error triggering pool assessment:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Force pre-generation (for testing)
+  app.post('/api/monitoring/pool/pre-generate', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { sessionId, count = 5, styles } = req.body;
+      
+      // Check if user is authorized (e.g., admin)
+      // For now, allow all authenticated users in dev mode
+      if (process.env.NODE_ENV === 'production') {
+        return res.status(403).json({ message: 'Not authorized' });
+      }
+      
+      if (!sessionId) {
+        return res.status(400).json({ message: 'sessionId is required' });
+      }
+      
+      // Enqueue pre-generation jobs
+      const jobIds = await queueService.enqueuePreGenerationJob(
+        userId,
+        sessionId,
+        styles || ['abstract', 'surrealism', 'impressionism'],
+        count,
+        'Manual trigger for testing'
+      );
+      
+      res.json({
+        message: 'Pre-generation jobs enqueued',
+        jobIds,
+        count,
+        sessionId,
+        timestamp: new Date().toISOString()
+      });
+      
+      // Log the manual pre-generation
+      telemetryService.recordEvent({
+        event: 'pool_manual_pregeneration',
+        category: 'pool',
+        severity: 'info',
+        metrics: {
+          userId,
+          sessionId,
+          count,
+          jobCount: jobIds.length
+        }
+      });
+    } catch (error: any) {
+      console.error("Error triggering pre-generation:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // Resilience Monitoring Endpoint
   // ============================================================================
 

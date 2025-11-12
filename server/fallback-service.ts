@@ -4,6 +4,7 @@ import type { IStorage } from "./storage";
 import { recentlyServedCache } from "./recently-served-cache";
 import { telemetryService } from "./telemetry-service";
 import { GenerationFailure } from "./openai-service";
+import type { PoolMonitor } from "./pool-monitor";
 
 export interface FallbackResult {
   artworks: ArtSession[];
@@ -15,6 +16,16 @@ export interface FallbackResult {
 
 // Track handled idempotency keys to prevent double processing
 const handledIdempotencyKeys = new Set<string>();
+
+// Pool monitor instance (will be set from bootstrap)
+let poolMonitor: PoolMonitor | null = null;
+
+/**
+ * Set the pool monitor instance for tracking consumption
+ */
+export function setPoolMonitor(monitor: PoolMonitor): void {
+  poolMonitor = monitor;
+}
 
 /**
  * Mark an idempotency key as handled to prevent double processing of late results
@@ -105,6 +116,15 @@ export async function resolveEmergencyFallback(
         if (useCache && sessionId) {
           const servedIds = result.artworks.map(a => a.id);
           recentlyServedCache.addServed(sessionId, userId, servedIds, 'fresh');
+        }
+        
+        // Track consumption in pool monitor
+        if (poolMonitor && sessionId) {
+          poolMonitor.recordConsumption(sessionId, userId);
+          // Update pool state after serving frames
+          poolMonitor.refreshSession(sessionId, userId).catch(err => 
+            console.error('[Fallback] Failed to update pool state:', err)
+          );
         }
         
         // Track telemetry

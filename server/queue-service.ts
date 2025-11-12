@@ -41,6 +41,8 @@ export interface JobPayload {
   dynamicMode?: boolean;
   previousVotes?: Array<{ prompt: string; vote: number }>;
   orientation?: 'portrait' | 'landscape' | 'square';
+  isPreGeneration?: boolean; // Flag for pre-generated frames
+  preGenerationReason?: string; // Reason for pre-generation
 }
 
 // Job result interface
@@ -125,6 +127,81 @@ export class QueueService {
         metrics: {
           error: error.message,
           userId,
+        }
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Enqueue a pre-generation job with lower priority
+   */
+  async enqueuePreGenerationJob(
+    userId: string,
+    sessionId: string,
+    styles: string[],
+    count: number = 1,
+    reason: string = 'Pool coverage threshold'
+  ): Promise<string[]> {
+    const jobIds: string[] = [];
+    
+    try {
+      // Create default audio analysis for pre-generation
+      const defaultAudioAnalysis = {
+        tempo: 120,
+        amplitude: 0.5,
+        frequency: 440,
+        bassLevel: 50,
+        trebleLevel: 50,
+        rhythmComplexity: 0.5,
+        mood: 'calm' as const,
+        genre: 'ambient'
+      };
+      
+      // Enqueue multiple jobs for the requested count
+      for (let i = 0; i < count; i++) {
+        // Rotate through styles to ensure diversity
+        const selectedStyles = [styles[i % styles.length]];
+        
+        const payload: JobPayload = {
+          sessionId,
+          audioAnalysis: defaultAudioAnalysis,
+          styles: selectedStyles,
+          artists: [],
+          dynamicMode: false,
+          orientation: 'landscape',
+          isPreGeneration: true,
+          preGenerationReason: reason
+        };
+        
+        // Use lower priority for pre-generation
+        const jobId = await this.enqueueJob(userId, payload, -10);
+        jobIds.push(jobId);
+      }
+      
+      telemetryService.recordEvent({
+        event: 'pre_generation_jobs_enqueued',
+        category: 'queue',
+        severity: 'info',
+        metrics: {
+          count,
+          userId,
+          sessionId,
+          reason
+        }
+      });
+      
+      return jobIds;
+    } catch (error) {
+      console.error('[QueueService] Failed to enqueue pre-generation jobs:', error);
+      telemetryService.recordEvent({
+        event: 'pre_generation_enqueue_failed',
+        category: 'queue',
+        severity: 'error',
+        metrics: {
+          error: error.message,
+          userId,
+          sessionId
         }
       });
       throw error;
