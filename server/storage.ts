@@ -1438,18 +1438,38 @@ export class PostgresStorage implements IStorage {
     const orientation = options?.orientation;
     
     try {
-      // Use ORDER BY RANDOM() for variety instead of same 2 frames every time
-      const result = await this.db.execute<ArtSession>(sql`
-        SELECT ${sql.join(Object.values(getTableColumns(artSessions)).map(column => sql.identifier(column.name)), sql`, `)}
-        FROM ${artSessions}
-        WHERE ${artSessions.imageUrl} IS NOT NULL
-          ${orientation ? sql`AND ${artSessions.orientation} = ${orientation}` : sql``}
-        ORDER BY RANDOM()
-        LIMIT ${limit}
-      `);
+      // Build WHERE conditions
+      const whereConditions = [];
       
-      console.log(`[EmergencyFallback] Retrieved ${result.rows.length} random artworks for variety`);
-      return result.rows;
+      // Always require imageUrl to be present
+      whereConditions.push(sql`${artSessions.imageUrl} IS NOT NULL`);
+      
+      // Add orientation filter if specified
+      if (orientation) {
+        whereConditions.push(eq(artSessions.orientation, orientation));
+      }
+      
+      // Use Drizzle query builder instead of raw SQL to ensure proper column mapping
+      const result = await this.db
+        .select()  // This will automatically handle snake_case to camelCase conversion
+        .from(artSessions)
+        .where(and(...whereConditions))
+        .orderBy(sql`RANDOM()`)  // Random ordering for variety
+        .limit(limit);
+      
+      console.log(`[EmergencyFallback] Retrieved ${result.length} random artworks for variety`);
+      
+      // Debug: Log first result to verify column mapping
+      if (result.length > 0) {
+        console.log('[EmergencyFallback] Sample result structure:', {
+          id: result[0].id,
+          hasImageUrl: 'imageUrl' in result[0],
+          imageUrlValue: result[0].imageUrl ? 'present' : 'missing',
+          keys: Object.keys(result[0]).slice(0, 10)
+        });
+      }
+      
+      return result;
     } catch (error) {
       console.error('[EmergencyFallback] Random query failed:', error);
       // Last resort: return any artworks we can find
@@ -1461,6 +1481,7 @@ export class PostgresStorage implements IStorage {
           .limit(limit);
         return fallback;
       } catch (e) {
+        console.error('[EmergencyFallback] Last resort query also failed:', e);
         return [];
       }
     }

@@ -39,6 +39,9 @@ export class WebSocketSequenceManager {
   private readonly ACK_TIMEOUT_MS = 5000;
   private readonly HEARTBEAT_INTERVAL_MS = 30000;
   
+  // WebSocket server reference for broadcasting
+  private wss: any = null;
+  
   /**
    * Get the current global sequence number (for sync)
    */
@@ -270,6 +273,70 @@ export class WebSocketSequenceManager {
     }
     
     return message;
+  }
+  
+  /**
+   * Set the WebSocket server reference for broadcasting
+   * @param wss - The WebSocket server instance
+   */
+  setWebSocketServer(wss: any): void {
+    this.wss = wss;
+    console.log('[WebSocketSequenceManager] WebSocket server reference set');
+  }
+  
+  /**
+   * Broadcast a message to all connected WebSocket clients
+   * @param message - Message to broadcast (can be an object or pre-created sequenced message)
+   */
+  broadcast(message: any): void {
+    if (!this.wss) {
+      console.error('[WebSocketSequenceManager] Cannot broadcast: WebSocket server not set');
+      return;
+    }
+    
+    // If message doesn't have a sequence number, create a sequenced message
+    let sequencedMessage = message;
+    if (!message.seq) {
+      // If it has a type field, use createSequencedMessage
+      if (message.type) {
+        sequencedMessage = this.createSequencedMessage(
+          message.type,
+          message.payload || message.data || message,
+          false
+        );
+      } else {
+        // Otherwise, wrap it in a generic broadcast message
+        sequencedMessage = this.createSequencedMessage(
+          'broadcast',
+          message,
+          false
+        );
+      }
+    }
+    
+    // Broadcast to all connected clients
+    try {
+      const messageString = JSON.stringify(sequencedMessage);
+      let broadcastCount = 0;
+      
+      // Check if wss has a clients property (standard WebSocketServer)
+      if (this.wss.clients) {
+        this.wss.clients.forEach((client: any) => {
+          if (client.readyState === 1) { // WebSocket.OPEN === 1
+            try {
+              client.send(messageString);
+              broadcastCount++;
+            } catch (error) {
+              console.error('[WebSocketSequenceManager] Error sending to client:', error);
+            }
+          }
+        });
+      }
+      
+      console.log(`[WebSocketSequenceManager] Broadcast to ${broadcastCount} clients:`, sequencedMessage.type);
+    } catch (error) {
+      console.error('[WebSocketSequenceManager] Broadcast failed:', error);
+    }
   }
 }
 

@@ -17,6 +17,7 @@ export class RecoveryManager {
   private probeSuccesses = 0;
   private isProbing = false;
   private nextProbeTime = 0;
+  private monitoringInterval: NodeJS.Timeout | null = null;
   
   // Configuration (based on reviewer feedback)
   private readonly HOURLY_BUDGET = 1.00; // $1/hour max for probes
@@ -311,7 +312,12 @@ export class RecoveryManager {
    * This should be called after the recovery manager is instantiated
    */
   startMonitoring(): void {
-    setInterval(() => {
+    // Clear any existing interval first
+    if (this.monitoringInterval) {
+      clearInterval(this.monitoringInterval);
+    }
+    
+    this.monitoringInterval = setInterval(() => {
       const breakerState = this.generationHealth.getCurrentState();
       
       // If breaker is open and we're not already probing, schedule a probe
@@ -321,6 +327,20 @@ export class RecoveryManager {
         }
       }
     }, 10000); // Check every 10 seconds
+    
+    console.log('[RecoveryManager] Monitoring started');
+  }
+  
+  /**
+   * Stop monitoring circuit breaker state
+   * Called during graceful shutdown
+   */
+  stopMonitoring(): void {
+    if (this.monitoringInterval) {
+      clearInterval(this.monitoringInterval);
+      this.monitoringInterval = null;
+      console.log('[RecoveryManager] Monitoring stopped');
+    }
   }
 }
 

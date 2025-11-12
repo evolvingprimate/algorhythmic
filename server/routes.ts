@@ -2280,6 +2280,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // WebSocket server for real-time audio coordination
   const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+  
+  // Connect WebSocket server to sequence manager for broadcasting
+  wsSequence.setWebSocketServer(wss);
 
   /**
    * Helper: Extract motifs (keywords) from DALL-E prompt

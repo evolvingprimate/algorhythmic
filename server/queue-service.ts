@@ -372,7 +372,10 @@ export class QueueService {
         return; // Another worker got this job
       }
 
-      const payload: JobPayload = JSON.parse(job.payload);
+      // Parse payload - it might already be an object or a string
+      const payload: JobPayload = typeof job.payload === 'string' 
+        ? JSON.parse(job.payload)
+        : job.payload;
 
       // Check user credits
       const creditsCheck = await this.storage.getCreditsContext(job.userId);

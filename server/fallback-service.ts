@@ -48,12 +48,35 @@ export function isIdempotencyHandled(idempotencyKey: string): boolean {
 
 // Validate artworks have imageUrl and are accessible
 export function filterValidImageUrls(artworks: ArtSession[]): ArtSession[] {
+  // Debug: Log first artwork to see its structure
+  if (artworks.length > 0) {
+    console.log('[DEBUG] Sample artwork object structure:', {
+      id: artworks[0].id,
+      keys: Object.keys(artworks[0]),
+      hasImageUrl: 'imageUrl' in artworks[0],
+      hasImage_url: 'image_url' in artworks[0],
+      imageUrlValue: (artworks[0] as any).imageUrl,
+      image_urlValue: (artworks[0] as any).image_url,
+      // Don't log full object to avoid spam, just the keys
+      firstFewKeys: Object.keys(artworks[0]).slice(0, 10)
+    });
+  }
+  
   return artworks.filter(artwork => {
-    if (!artwork.imageUrl) {
-      console.error(`[Validation] Artwork ${artwork.id} missing imageUrl - skipping`);
+    // Check both camelCase and snake_case
+    const imageUrl = artwork.imageUrl || (artwork as any).image_url;
+    if (!imageUrl) {
+      console.error(`[Validation] Artwork ${artwork.id} missing imageUrl - details:`, {
+        keys: Object.keys(artwork).slice(0, 10),
+        hasImageUrl: 'imageUrl' in artwork,
+        hasImage_url: 'image_url' in artwork
+      });
       return false;
     }
-    // Additional validation can be added here (e.g., object storage check)
+    // Fix the mapping if it's using snake_case
+    if (!artwork.imageUrl && (artwork as any).image_url) {
+      artwork.imageUrl = (artwork as any).image_url;
+    }
     return true;
   });
 }
