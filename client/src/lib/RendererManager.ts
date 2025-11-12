@@ -82,7 +82,14 @@ export class RendererManager {
       this.rejectReady(new Error('Container not found'));
       return;
     }
-    console.log('[RendererManager] Container found');
+    console.log('[RendererManager] Container found:', this.container);
+    
+    // Check if canvas already exists and remove it
+    const existingCanvas = document.getElementById('webgl-canvas');
+    if (existingCanvas) {
+      console.log('[RendererManager] Removing existing canvas');
+      existingCanvas.remove();
+    }
     
     this.canvas = document.createElement('canvas');
     this.canvas.id = 'webgl-canvas';
@@ -92,8 +99,14 @@ export class RendererManager {
     this.canvas.style.position = 'fixed';
     this.canvas.style.top = '0';
     this.canvas.style.left = '0';
-    this.canvas.style.zIndex = '0';
-    console.log('[RendererManager] Canvas element created');
+    this.canvas.style.zIndex = '1';  // Changed from '0' to '1' to ensure visibility
+    this.canvas.style.backgroundColor = 'black';  // Add black background to make it visible
+    console.log('[RendererManager] Canvas element created with styles:', {
+      width: this.canvas.style.width,
+      height: this.canvas.style.height,
+      position: this.canvas.style.position,
+      zIndex: this.canvas.style.zIndex
+    });
     
     this.gl = this.canvas.getContext('webgl2', {
       alpha: false,
@@ -127,6 +140,22 @@ export class RendererManager {
     if (this.container && this.canvas) {
       this.container.appendChild(this.canvas);
       console.log('[RendererManager] Canvas appended to container');
+      
+      // Force canvas to be visible
+      this.canvas.style.display = 'block';
+      this.canvas.style.visibility = 'visible';
+      
+      // Verify canvas is actually in DOM
+      const canvasInDom = document.getElementById('webgl-canvas');
+      if (canvasInDom) {
+        console.log('[RendererManager] ✅ Canvas successfully added to DOM');
+        console.log('[RendererManager] Canvas parent:', canvasInDom.parentElement?.id);
+        console.log('[RendererManager] Canvas dimensions:', canvasInDom.offsetWidth, 'x', canvasInDom.offsetHeight);
+      } else {
+        console.error('[RendererManager] ❌ Canvas NOT found in DOM after append!');
+      }
+    } else {
+      console.error('[RendererManager] ❌ Cannot append canvas - container or canvas is null');
     }
     
     this.resize();

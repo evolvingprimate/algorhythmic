@@ -1841,10 +1841,26 @@ function DisplayContent() {
 
   // Initialize Renderer (MorphEngine already initialized synchronously)
   useEffect(() => {
-    const device = detectDeviceCapabilities();
-    console.log(`[Display] Device tier ${device.tier} detected, max FPS: ${device.maxFPS}`);
+    // Ensure container exists before initializing renderer
+    const initRenderer = () => {
+      const container = document.getElementById('morphing-canvas-container');
+      if (!container) {
+        console.error('[Display] Canvas container not found - retrying...');
+        // Retry after a short delay
+        setTimeout(initRenderer, 100);
+        return;
+      }
+      
+      console.log('[Display] Canvas container found, initializing renderer...');
+      const device = detectDeviceCapabilities();
+      console.log(`[Display] Device tier ${device.tier} detected, max FPS: ${device.maxFPS}`);
+      
+      rendererRef.current = new RendererManager('morphing-canvas-container', selectedEngine);
+      console.log('[Display] RendererManager initialized successfully');
+    };
     
-    rendererRef.current = new RendererManager('morphing-canvas-container', selectedEngine);
+    // Start initialization
+    initRenderer();
     
     return () => {
       if (animationFrameRef.current) {
