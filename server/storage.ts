@@ -99,6 +99,7 @@ export interface IStorage {
   // Users (for subscription management and authentication)
   getUser(id: string): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
+  getUserSubscriptionTier(id: string): Promise<string>; // Get user's subscription tier
   createUser(user: InsertUser): Promise<User>;
   upsertUser(user: UpsertUser): Promise<User>; // For Replit Auth
   updateUserSubscription(id: string, tier: string, stripeCustomerId?: string, stripeSubscriptionId?: string): Promise<User>;
@@ -424,6 +425,11 @@ export class MemStorage implements IStorage {
     return Array.from(this.users.values()).find(
       (user) => user.email === email
     );
+  }
+
+  async getUserSubscriptionTier(id: string): Promise<string> {
+    const user = await this.getUser(id);
+    return user?.subscriptionTier || 'free';
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
@@ -1606,6 +1612,11 @@ export class PostgresStorage implements IStorage {
       .where(eq(users.email, email))
       .limit(1);
     return results[0];
+  }
+
+  async getUserSubscriptionTier(id: string): Promise<string> {
+    const user = await this.getUser(id);
+    return user?.subscriptionTier || 'free';
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
