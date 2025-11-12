@@ -172,13 +172,14 @@ export default function Landing() {
   const { isAuthenticated, isLoading } = useAuth();
   const [, navigate] = useLocation();
 
-  // Auto-redirect authenticated users to display page
-  useEffect(() => {
-    if (isAuthenticated && !isLoading) {
-      console.log('[Landing] User authenticated, redirecting to /display');
-      navigate('/display');
-    }
-  }, [isAuthenticated, isLoading, navigate]);
+  // Removed auto-redirect - users can now see the landing page even when authenticated
+  // This allows users to explore features, pricing, and navigate manually
+  // useEffect(() => {
+  //   if (isAuthenticated && !isLoading) {
+  //     console.log('[Landing] User authenticated, redirecting to /display');
+  //     navigate('/display');
+  //   }
+  // }, [isAuthenticated, isLoading, navigate]);
 
   return (
     <div className="min-h-screen relative">
