@@ -503,9 +503,8 @@ function DisplayContent() {
     // Primary: Use server's onboardingState if available (progressive enhancement)
     const serverOnboardingState = unseenResponse?.onboardingState;
     if (serverOnboardingState === 'incomplete' && setupStep === SetupStep.IDLE) {
-      console.log('[Display] Server indicates incomplete onboarding - showing wizard');
-      wizardActiveRef.current = true;
-      setSetupStep(SetupStep.STYLE);
+      console.log('[Display] Server indicates incomplete onboarding - ready for wizard');
+      // Don't auto-advance - let user click "Start Creating"
       setSetupComplete(false); // Local flag for UI state
       return;
     }
@@ -531,15 +530,14 @@ function DisplayContent() {
     if (!serverOnboardingState) {
       if (preferencesError) {
         // Preferences query failed - show wizard as fallback and warn user
-        console.error('[Display] Failed to load preferences - showing wizard as fallback');
+        console.error('[Display] Failed to load preferences - ready for wizard');
         toast({
           title: "Preferences Unavailable",
           description: "Couldn't load your saved preferences. You can select new ones now.",
           variant: "default",
         });
         if (setupStep === SetupStep.IDLE) {
-          wizardActiveRef.current = true;
-          setSetupStep(SetupStep.STYLE);
+          // Don't auto-advance - let user click "Start Creating"
           setSetupComplete(false);
         }
         return;
@@ -548,9 +546,8 @@ function DisplayContent() {
       // Check local preferences
       if (!preferences || !preferences.styles?.length) {
         if (setupStep === SetupStep.IDLE) {
-          console.log('[Display] No preferences found locally - showing wizard');
-          wizardActiveRef.current = true;
-          setSetupStep(SetupStep.STYLE);
+          console.log('[Display] No preferences found locally - ready for wizard');
+          // Don't auto-advance - let user click "Start Creating"
           setSetupComplete(false);
         }
       } else {
