@@ -14,6 +14,7 @@ import { generateWithFallback, resolveAutoMode, buildContextualPrompt } from "./
 import { createDefaultAudioAnalysis } from "./generation/audioAnalyzer";
 import { findBestCatalogMatch, type CatalogMatchRequest } from "./generation/catalogMatcher";
 import { recentlyServedCache, makeRecentKey } from "./recently-served-cache";
+import { idempotencyCache, IdempotencyCache } from './idempotency-cache';
 import { wsSequence, WS_MESSAGE_TYPES } from "./websocket-sequence";
 import { telemetryService } from "./telemetry-service";
 import { validators, handleValidationErrors, validateExternalUrl } from "./security";
@@ -1392,12 +1393,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }, timeout);
       
-      // IDEMPOTENCY: Check for duplicate requests (temporarily disabled - cache doesn't have get method)
-      // TODO: Implement proper idempotency cache with get/set methods
+      // IDEMPOTENCY: Check for duplicate requests
       if (idempotencyKey) {
-        // For now, skip idempotency check since recentlyServedCache doesn't have a get() method
-        // This was causing TypeError: recentlyServedCache.get is not a function
-        console.log(`[IdempotencyKey] Skipping check for key: ${idempotencyKey} (cache method not available)`);
+        const cacheKey = IdempotencyCache.makeKey(userId, idempotencyKey);
+        const cachedResponse = idempotencyCache.getResponse(cacheKey);
+        
+        if (cachedResponse) {
+          console.log(`[IdempotencyKey] Returning cached response for key: ${idempotencyKey}`);
+          
+          // Clear timeout since we're returning cached response
+          if (timeoutId) {
+            clearTimeout(timeoutId);
+          }
+          
+          return res.json(cachedResponse);
+        }
+        
+        console.log(`[IdempotencyKey] No cached response for key: ${idempotencyKey}, proceeding with generation`);
       }
 
       // TEMPORARILY DISABLED: Check daily limit
@@ -1543,9 +1555,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // IDEMPOTENCY: Cache successful response
       if (idempotencyKey) {
-        const cacheKey = `idempotency:${userId}:${idempotencyKey}`;
+        const cacheKey = IdempotencyCache.makeKey(userId, idempotencyKey);
         // Cache for 5 minutes to handle retries
-        await recentlyServedCache.set(cacheKey, JSON.stringify(response), 300);
+        idempotencyCache.setResponse(cacheKey, response, 300);
         console.log(`[IdempotencyKey] Cached response for key: ${idempotencyKey}`);
       }
 
