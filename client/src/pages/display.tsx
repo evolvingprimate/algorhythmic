@@ -587,17 +587,22 @@ function DisplayContent() {
 
   // Auto-generate artwork when unseen pool runs low (Freshness Pipeline)
   useEffect(() => {
-    // CRITICAL FIX: Trigger fallback generation even when frame count is 0 (empty pool scenario)
+    // CRITICAL FIX: Only trigger generation after setup is complete
+    // This prevents the validation error when the style selector first appears
+    // Check that setupStep is COMPLETE (meaning both style and audio selection are done)
     if (
       unseenResponse?.needsGeneration && 
-      !isGeneratingRef.current
+      !isGeneratingRef.current &&
+      setupStep === SetupStep.COMPLETE && // Both style and audio selection are complete
+      selectedStyles.length > 0 // Must have selected at least one style
     ) {
       const frameCount = morphEngineRef.current.getFrameCount();
       console.log(`[Freshness] Pool ${frameCount === 0 ? 'empty' : 'low'}, auto-generating artwork to ${frameCount === 0 ? 'populate' : 'refill'}...`);
-      const audioAnalysis = createDefaultAudioAnalysis();
-      generateArtMutation.mutate({ audioAnalysis, musicInfo: null });
+      const audioAnalysis = currentAudioAnalysis || createDefaultAudioAnalysis();
+      const musicInfo = currentMusicInfo || null;
+      generateArtMutation.mutate({ audioAnalysis, musicInfo });
     }
-  }, [unseenResponse?.needsGeneration]);
+  }, [unseenResponse?.needsGeneration, setupStep, selectedStyles, currentAudioAnalysis, currentMusicInfo]);
 
   // Mouse movement handler for fullscreen auto-hide controls
   useEffect(() => {
@@ -1304,8 +1309,7 @@ function DisplayContent() {
         // Phase 3D: Validate generated frame before adding
         if (!isValidArtworkFrame(data.session)) {
           console.error(`[GenerateMutation] Generated artwork ${data.session.id} failed validation - not adding to morphEngine`);
-          telemetryService.recordEvent({
-            event: 'generated_frame_invalid',
+          telemetryService.recordEvent('generated_frame_invalid', {
             category: 'display',
             severity: 'error',
             metrics: {
