@@ -20,6 +20,7 @@ import { telemetryService } from "./telemetry-service";
 import { validators, handleValidationErrors, validateExternalUrl } from "./security";
 import { body, validationResult } from "express-validator";
 import { validations } from "./validation-middleware";
+import { initializeHealthMonitor, getHealthMonitor } from "./health-monitor";
 
 // Initialize Stripe only if keys are available (optional for MVP)
 let stripe: Stripe | null = null;
@@ -95,6 +96,60 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Setup Replit Auth
   await setupAuth(app);
+
+  // Initialize health monitor
+  const healthMonitor = initializeHealthMonitor(storage);
+
+  // ============================================================================
+  // Health Check Endpoints (Public - no authentication required)
+  // ============================================================================
+
+  // Basic health check endpoint
+  app.get('/api/health', (req, res) => {
+    const health = healthMonitor.getBasicHealth();
+    const statusCode = health.status === 'healthy' ? 200 : 503;
+    res.status(statusCode).json(health);
+  });
+
+  // Readiness check - verifies all dependencies are ready
+  app.get('/api/ready', async (req, res) => {
+    try {
+      const readiness = await healthMonitor.getReadinessStatus();
+      const statusCode = readiness.status === 'ready' ? 200 : 503;
+      res.status(statusCode).json(readiness);
+    } catch (error) {
+      console.error('[Health] Readiness check failed:', error);
+      res.status(503).json({
+        status: 'not_ready',
+        checks: {},
+        timestamp: new Date().toISOString(),
+        error: 'Failed to check readiness',
+      });
+    }
+  });
+
+  // Liveness probe - simple check for container orchestration
+  app.get('/api/live', (req, res) => {
+    const liveness = healthMonitor.getLivenessStatus();
+    if (liveness.alive) {
+      res.status(200).send('OK');
+    } else {
+      res.status(503).send('Service Unavailable');
+    }
+  });
+
+  // Metrics endpoint - service performance and statistics
+  app.get('/api/metrics', async (req, res) => {
+    try {
+      const metrics = await healthMonitor.getMetrics();
+      res.json(metrics);
+    } catch (error) {
+      console.error('[Health] Metrics collection failed:', error);
+      res.status(500).json({
+        error: 'Failed to collect metrics',
+      });
+    }
+  });
 
   // Public object storage serving endpoint
   app.get("/public-objects/:filePath(*)", async (req, res) => {

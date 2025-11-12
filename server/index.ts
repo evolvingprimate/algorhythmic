@@ -47,6 +47,20 @@ app.use((req, res, next) => {
 
   res.on("finish", () => {
     const duration = Date.now() - start;
+    
+    // Track metrics with health monitor (excluding health check endpoints themselves)
+    if (!path.startsWith("/api/health") && !path.startsWith("/api/ready") && 
+        !path.startsWith("/api/live") && !path.startsWith("/api/metrics")) {
+      try {
+        const { getHealthMonitor } = require('./health-monitor');
+        const healthMonitor = getHealthMonitor();
+        const isError = res.statusCode >= 400;
+        healthMonitor.trackRequest(isError, duration);
+      } catch (e) {
+        // Health monitor may not be initialized yet
+      }
+    }
+    
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
       if (capturedJsonResponse) {
@@ -70,6 +84,15 @@ async function gracefulShutdown(signal: string) {
   isShuttingDown = true;
   
   console.log(`\n[Server] Received ${signal}, starting graceful shutdown...`);
+  
+  // Mark health monitor as shutting down
+  try {
+    const { getHealthMonitor } = require('./health-monitor');
+    const healthMonitor = getHealthMonitor();
+    healthMonitor.setShuttingDown(true);
+  } catch (e) {
+    // Health monitor may not be initialized
+  }
   
   // Stop accepting new connections
   if (httpServer) {
@@ -104,6 +127,16 @@ async function gracefulShutdown(signal: string) {
     if (poolMonitor) {
       console.log('[Server] Stopping pool monitor...');
       poolMonitor.stopMonitoring();
+    }
+    
+    // Stop health monitor metrics collection
+    try {
+      const { getHealthMonitor } = require('./health-monitor');
+      const healthMonitor = getHealthMonitor();
+      console.log('[Server] Stopping health monitor...');
+      healthMonitor.stopMetricsCollection();
+    } catch (e) {
+      // Health monitor may not be initialized
     }
     
     console.log('[Server] Graceful shutdown completed');

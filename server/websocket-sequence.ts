@@ -285,6 +285,24 @@ export class WebSocketSequenceManager {
   }
   
   /**
+   * Get the current number of connected WebSocket clients
+   */
+  getConnectionCount(): number {
+    if (!this.wss || !this.wss.clients) {
+      return 0;
+    }
+    
+    let count = 0;
+    this.wss.clients.forEach((client: any) => {
+      if (client.readyState === 1) { // WebSocket.OPEN === 1
+        count++;
+      }
+    });
+    
+    return count;
+  }
+  
+  /**
    * Broadcast a message to all connected WebSocket clients
    * @param message - Message to broadcast (can be an object or pre-created sequenced message)
    */
