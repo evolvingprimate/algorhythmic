@@ -264,7 +264,7 @@ export function StyleSelector({ selectedStyles, dynamicMode = false, onStylesCha
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4">
-      <Card className="w-full max-w-4xl h-[90vh] flex flex-col">
+      <Card className="w-full max-w-4xl h-[90vh] flex flex-col relative z-50">
         <div className="flex items-center justify-between p-6 border-b">
           <div>
             <h2 className="text-2xl font-bold">Choose Your Artistic Style</h2>
