@@ -9,6 +9,7 @@ import {
   getNetworkStatus 
 } from "@/lib/network-utils";
 import { Badge } from "@/components/ui/badge";
+import { useHealthMonitor } from "@/hooks/useHealthMonitor";
 import { Slider } from "@/components/ui/slider";
 import {
   Select,
@@ -234,6 +235,35 @@ export default function Display() {
   
   const { toast } = useToast();
   const { user, isAuthenticated } = useAuth();
+  
+  // Initialize health monitor
+  const {
+    isBackendAvailable,
+    connectionStatus,
+    healthStatus,
+    showStatusBanner,
+    StatusBanner,
+    queueMutation,
+    getComponentStatus,
+  } = useHealthMonitor({
+    onDisconnect: () => {
+      console.log('[Display] Backend disconnected - pausing operations');
+      // Stop WebSocket if disconnected
+      if (wsClientRef.current) {
+        wsClientRef.current.disconnect();
+      }
+    },
+    onReconnect: () => {
+      console.log('[Display] Backend reconnected - resuming operations');
+      // Reconnect WebSocket
+      if (wsClientRef.current && !wsClientRef.current.isConnected()) {
+        wsClientRef.current.connect();
+      }
+      // Refetch usage stats and preferences
+      refetchUsageStats();
+    },
+    enabled: isAuthenticated,
+  });
 
   // Redirect to login if not authenticated
   useEffect(() => {
@@ -2620,6 +2650,9 @@ export default function Display() {
 
   return (
     <div className="h-screen w-screen overflow-hidden bg-background relative">
+      {/* Health Status Banner */}
+      <StatusBanner />
+      
       {/* Art Canvas */}
       <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-background via-primary/5 to-background">
         {/* Morphing Canvas Container - PRIMARY DISPLAY */}
@@ -2876,6 +2909,7 @@ export default function Display() {
                 variant="outline"
                 size="icon"
                 onClick={() => isPlaying ? handleStopListening() : handleStartListening()}
+                disabled={!isBackendAvailable || isGenerating}
                 data-testid="button-play-pause"
               >
                 {isPlaying ? (

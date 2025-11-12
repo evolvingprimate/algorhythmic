@@ -27,7 +27,7 @@ export class WebSocketClient {
   private clientId: string | null = null;
   
   // Connection state
-  private isConnected = false;
+  private connected = false;
   private connectionPromise: Promise<void> | null = null;
   private connectionResolve: (() => void) | null = null;
 
@@ -54,7 +54,7 @@ export class WebSocketClient {
       this.ws.onopen = () => {
         console.log("[WebSocket] Connected");
         this.reconnectAttempts = 0;
-        this.isConnected = true;
+        this.connected = true;
         
         // Connection will be fully established after receiving CONNECTION_INIT
       };
@@ -103,12 +103,12 @@ export class WebSocketClient {
 
       this.ws.onerror = (error) => {
         console.error("[WebSocket] Error:", error);
-        this.isConnected = false;
+        this.connected = false;
       };
 
       this.ws.onclose = () => {
         console.log("[WebSocket] Disconnected");
-        this.isConnected = false;
+        this.connected = false;
         this.stopMissingSequenceCheck();
         this.attemptReconnect();
       };
@@ -208,12 +208,34 @@ export class WebSocketClient {
       
       console.log(`[WebSocket] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
       
+      // Dispatch reconnect attempt event for health monitor
+      window.dispatchEvent(new CustomEvent('websocket-reconnect-attempt', {
+        detail: { attempt: this.reconnectAttempts, delay }
+      }));
+      
       this.reconnectTimeout = window.setTimeout(() => {
         this.connect();
       }, delay);
     } else {
       console.error(`[WebSocket] Max reconnection attempts (${this.maxReconnectAttempts}) reached`);
+      
+      // Dispatch event for health monitor integration
+      window.dispatchEvent(new CustomEvent('websocket-max-reconnect', {
+        detail: { attempts: this.reconnectAttempts }
+      }));
     }
+  }
+  
+  // Public method to check connection status
+  public isConnected(): boolean {
+    return this.connected && this.ws?.readyState === WebSocket.OPEN;
+  }
+  
+  // Public method to force reconnect
+  public reconnect(): void {
+    this.disconnect();
+    this.reconnectAttempts = 0;
+    this.connect();
   }
   
   send(type: string, payload: any): void {

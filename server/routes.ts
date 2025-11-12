@@ -879,6 +879,147 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ============================================================================
+  // Health Check Endpoint - Comprehensive system monitoring
+  // ============================================================================
+  
+  app.get('/api/health', async (req, res) => {
+    const verbose = req.query.verbose === 'true';
+    const authToken = req.headers['x-health-token'];
+    
+    // Protect verbose mode with token (optional for MVP)
+    const allowVerbose = verbose && (
+      process.env.NODE_ENV !== 'production' ||
+      authToken === process.env.HEALTH_CHECK_TOKEN
+    );
+    
+    const healthChecks = {
+      http: { status: 'ok', message: 'HTTP server responding' },
+      database: { status: 'unknown', message: 'Not checked' },
+      websocket: { status: 'unknown', message: 'Not checked', clients: 0 },
+      queue: { status: 'unknown', message: 'Not checked' },
+      circuitBreaker: { status: 'unknown', message: 'Not checked', state: '' },
+      timestamp: new Date().toISOString()
+    };
+    
+    let overallStatus: 'ok' | 'degraded' | 'down' = 'ok';
+    
+    // 1. Check database connectivity
+    try {
+      await storage.ping(); // Assumes storage.ping() method exists
+      healthChecks.database.status = 'ok';
+      healthChecks.database.message = 'Database connection active';
+    } catch (error) {
+      healthChecks.database.status = 'down';
+      healthChecks.database.message = 'Database connection failed';
+      overallStatus = 'down';
+      console.error('[Health] Database check failed:', error);
+    }
+    
+    // 2. Check WebSocket server status
+    try {
+      const wsClientCount = wsServer.clients?.size || 0;
+      healthChecks.websocket.status = 'ok';
+      healthChecks.websocket.message = `WebSocket server active`;
+      healthChecks.websocket.clients = wsClientCount;
+      
+      if (allowVerbose) {
+        // Include client states if verbose
+        const clientStates = Array.from(wsServer.clients || []).map((client: any) => ({
+          readyState: client.readyState,
+          bufferedAmount: client.bufferedAmount
+        }));
+        (healthChecks.websocket as any).clientStates = clientStates;
+      }
+    } catch (error) {
+      healthChecks.websocket.status = 'degraded';
+      healthChecks.websocket.message = 'WebSocket server check failed';
+      if (overallStatus === 'ok') overallStatus = 'degraded';
+    }
+    
+    // 3. Check queue service health
+    try {
+      const queueHealth = queueController.getHealth();
+      healthChecks.queue.status = queueHealth.isHealthy ? 'ok' : 'degraded';
+      healthChecks.queue.message = `Queue: ${queueHealth.queueSize} items, ${queueHealth.activeJobs} active`;
+      
+      if (allowVerbose) {
+        (healthChecks.queue as any).metrics = queueHealth;
+      }
+      
+      if (!queueHealth.isHealthy && overallStatus === 'ok') {
+        overallStatus = 'degraded';
+      }
+    } catch (error) {
+      healthChecks.queue.status = 'degraded';
+      healthChecks.queue.message = 'Queue service check failed';
+      if (overallStatus === 'ok') overallStatus = 'degraded';
+    }
+    
+    // 4. Check circuit breaker state
+    try {
+      const breakerStatus = generationHealthService.getDetailedStatus();
+      healthChecks.circuitBreaker.status = 
+        breakerStatus.state === 'open' ? 'degraded' : 'ok';
+      healthChecks.circuitBreaker.message = `Circuit breaker: ${breakerStatus.state}`;
+      healthChecks.circuitBreaker.state = breakerStatus.state;
+      
+      if (allowVerbose) {
+        (healthChecks.circuitBreaker as any).details = breakerStatus;
+      }
+      
+      if (breakerStatus.state === 'open' && overallStatus === 'ok') {
+        overallStatus = 'degraded';
+      }
+    } catch (error) {
+      healthChecks.circuitBreaker.status = 'unknown';
+      healthChecks.circuitBreaker.message = 'Circuit breaker check failed';
+    }
+    
+    // 5. Check pool monitor health
+    try {
+      const poolStats = poolMonitor.getPoolStats();
+      const poolHealth = {
+        status: poolStats.poolDepth > 0 ? 'ok' : 'degraded',
+        message: `Pool depth: ${poolStats.poolDepth}, coverage: ${poolStats.styleCoverage}%`,
+        depth: poolStats.poolDepth,
+        coverage: poolStats.styleCoverage
+      };
+      (healthChecks as any).pool = poolHealth;
+      
+      if (poolStats.poolDepth === 0) {
+        overallStatus = 'degraded';
+      }
+    } catch (error) {
+      // Pool monitor is optional
+    }
+    
+    const response = {
+      status: overallStatus,
+      components: healthChecks,
+      timestamp: healthChecks.timestamp
+    };
+    
+    // Record health check telemetry if degraded/down
+    if (overallStatus !== 'ok') {
+      telemetryService.recordEvent({
+        event: 'health.check_failed',
+        category: 'health',
+        severity: overallStatus === 'down' ? 'error' : 'warning',
+        metrics: {
+          overall_status: overallStatus,
+          failed_components: Object.entries(healthChecks)
+            .filter(([_, check]: [string, any]) => check.status !== 'ok')
+            .map(([name]) => name)
+        }
+      });
+    }
+    
+    // Return appropriate status code
+    const statusCode = overallStatus === 'down' ? 503 : 200;
+    res.status(statusCode).json(response);
+  });
+
+  // ============================================================================
   // PHASE 2: RAI Telemetry API Routes
   // ============================================================================
 
@@ -2071,10 +2212,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Health check
-  app.get("/api/health", (req, res) => {
-    res.json({ status: "healthy", timestamp: new Date().toISOString() });
-  });
+  // Health check is defined earlier in the file with comprehensive checks
   
   // Circuit breaker state endpoint - used by client for adaptive retry
   app.get("/api/health/circuit-breaker-state", (req, res) => {

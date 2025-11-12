@@ -123,6 +123,9 @@ export interface IStorage {
   refundCredit(userId: string, amount: number, reason: string, metadata?: Record<string, any>): Promise<{ success: boolean; newBalance: number }>;
   getCreditHistory(userId: string, limit?: number): Promise<CreditLedger[]>;
   
+  // Health Check
+  ping(): Promise<void>;
+  
   // Image Catalogue Manager
   getCatalogCoverage(userId: string, orientation?: string): Promise<{
     totalLibrary: number;
@@ -876,6 +879,12 @@ export class MemStorage implements IStorage {
     // Return empty array for in-memory storage
     // Real telemetry is only tracked in PostgresStorage
     return [];
+  }
+  
+  // Health Check
+  async ping(): Promise<void> {
+    // MemStorage is always healthy if instantiated
+    return Promise.resolve();
   }
 }
 
@@ -2582,6 +2591,12 @@ export class PostgresStorage implements IStorage {
       consumptionRate: Number(recentConsumptionResult[0]?.count ?? 0), // Frames consumed per minute
       generationRate: Number(recentGenResult[0]?.count ?? 0), // Frames generated per minute
     };
+  }
+  
+  // Health Check
+  async ping(): Promise<void> {
+    // Execute a simple query to verify database connectivity
+    await this.db.execute(sql`SELECT 1`);
   }
 }
 
