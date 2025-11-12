@@ -1,0 +1,141 @@
+graph TB
+    subgraph "Audio Input Flow"
+        Mic[Microphone/Audio Input]
+        AudioBuffer[Audio Buffer]
+        FFT[FFT Analysis]
+        Features[Feature Extraction<br/>Bass/Treble/Tempo/Mood]
+    end
+    
+    subgraph "Generation Request Flow"
+        SessionData[Session ID +<br/>User Preferences]
+        AudioFeatures[Audio Features]
+        MusicID[Music Identification<br/>ACRCloud]
+        PromptGen[Prompt Generation]
+        CreditCheck{Credit<br/>Available?}
+    end
+    
+    subgraph "Image Generation Flow"
+        CircuitCheck{Circuit<br/>Breaker OK?}
+        DALLECall[DALL-E API Call<br/>45-90s timeout]
+        GenerationSuccess[Image URL]
+        GenerationFail[Generation Failed]
+    end
+    
+    subgraph "Fallback Cascade"
+        Tier1[Tier 1: Fresh Artworks<br/>Recent Generations]
+        Tier2[Tier 2: Style Match<br/>Catalog Search]
+        Tier3[Tier 3: Global Pool<br/>Random Catalog]
+        Tier4[Tier 4: Procedural<br/>Gradient/Particles]
+    end
+    
+    subgraph "Data Storage"
+        ArtSession[art_sessions Table<br/>Image URL, Prompt, DNA]
+        UserCredits[user_credits Table<br/>Balance Update]
+        CreditLedger[credit_ledger Table<br/>Transaction Log]
+        TelemetryEvents[telemetry_events Table<br/>Event Tracking]
+        ObjectStore[Object Storage<br/>Image Files]
+    end
+    
+    subgraph "Caching Layer"
+        RecentCache[Recently Served Cache<br/>LRU In-Memory]
+        SessionCache[Session State<br/>PostgreSQL JSON]
+        QueueState[Queue State<br/>In-Memory]
+    end
+    
+    subgraph "Client Display"
+        WebSocket[WebSocket Message<br/>ARTWORK_UPDATE]
+        TextureLoad[Texture Loading<br/>WebGL]
+        Morphing[Morphing Animation<br/>DNA Interpolation]
+        Canvas[Canvas Render<br/>60 FPS]
+    end
+    
+    subgraph "Telemetry Flow"
+        ClientMetrics[Client Metrics<br/>FPS, Latency]
+        ServerMetrics[Server Metrics<br/>Generation Time]
+        EventLog[Event Stream]
+        Dashboard[Analytics Dashboard]
+    end
+    
+    %% Audio processing flow
+    Mic --> AudioBuffer
+    AudioBuffer --> FFT
+    FFT --> Features
+    Features --> AudioFeatures
+    
+    %% Generation request assembly
+    AudioBuffer --> MusicID
+    MusicID --> PromptGen
+    AudioFeatures --> PromptGen
+    SessionData --> PromptGen
+    PromptGen --> CreditCheck
+    
+    %% Credit flow
+    CreditCheck -->|Yes| CircuitCheck
+    CreditCheck -->|No| GenerationFail
+    CreditCheck -.-> UserCredits
+    CreditCheck -.-> CreditLedger
+    
+    %% Generation flow
+    CircuitCheck -->|Open| Tier1
+    CircuitCheck -->|Closed| DALLECall
+    DALLECall -->|Success| GenerationSuccess
+    DALLECall -->|Timeout/Error| GenerationFail
+    
+    %% Fallback flow
+    GenerationFail --> Tier1
+    Tier1 -->|Found| GenerationSuccess
+    Tier1 -->|Empty| Tier2
+    Tier2 -->|Found| GenerationSuccess
+    Tier2 -->|Empty| Tier3
+    Tier3 -->|Found| GenerationSuccess
+    Tier3 -->|Empty| Tier4
+    Tier4 --> GenerationSuccess
+    
+    %% Data persistence
+    GenerationSuccess --> ArtSession
+    GenerationSuccess --> ObjectStore
+    GenerationSuccess -.-> TelemetryEvents
+    ArtSession --> RecentCache
+    SessionData --> SessionCache
+    
+    %% Client delivery
+    GenerationSuccess --> WebSocket
+    WebSocket --> TextureLoad
+    TextureLoad --> Morphing
+    Morphing --> Canvas
+    
+    %% Telemetry collection
+    Canvas --> ClientMetrics
+    DALLECall --> ServerMetrics
+    ClientMetrics --> EventLog
+    ServerMetrics --> EventLog
+    EventLog --> TelemetryEvents
+    TelemetryEvents --> Dashboard
+    
+    %% Cache interactions
+    Tier1 --> RecentCache
+    Tier2 --> RecentCache
+    Tier3 --> RecentCache
+    RecentCache -.->|Filter| Tier1
+    RecentCache -.->|Filter| Tier2
+    RecentCache -.->|Filter| Tier3
+    
+    %% Queue management
+    CircuitCheck --> QueueState
+    QueueState --> CircuitCheck
+    
+    %% Credit deduction flow
+    GenerationSuccess -.-> UserCredits
+    GenerationSuccess -.-> CreditLedger
+    
+    style Mic fill:#e3f2fd
+    style GenerationSuccess fill:#c8e6c9
+    style GenerationFail fill:#ffcdd2
+    style DALLECall fill:#fff3e0
+    style ArtSession fill:#fce4ec
+    style WebSocket fill:#e1bee7
+    style Canvas fill:#b2dfdb
+    style Tier1 fill:#ffe0b2
+    style Tier2 fill:#ffccbc
+    style Tier3 fill:#ffab91
+    style Tier4 fill:#ff8a65

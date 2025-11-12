@@ -1,0 +1,118 @@
+graph TB
+    subgraph "Client Layer"
+        Browser[Browser/Device]
+        UI[React UI<br/>TypeScript]
+        Audio[Audio Analyzer<br/>Web Audio API]
+        Renderer[WebGL/Canvas2D<br/>Morphing Engine]
+        WSClient[WebSocket Client]
+        Telemetry[Client Telemetry]
+    end
+    
+    subgraph "API Gateway"
+        Express[Express Server<br/>Node.js]
+        Auth[Replit Auth<br/>OIDC/JWT]
+        RateLimit[Credit-Based<br/>Rate Limiting]
+        Validation[Input Validation<br/>Zod Schemas]
+    end
+    
+    subgraph "Core Services"
+        GenService[Generation Service]
+        QueueCtrl[Queue Controller<br/>State Machine]
+        CreditCtrl[Credit Controller<br/>Titration Logic]
+        FallbackSvc[Fallback Service<br/>3-Tier Cascade]
+        WSServer[WebSocket Server<br/>Sequence Manager]
+    end
+    
+    subgraph "Resilience Layer"
+        Circuit[Circuit Breaker<br/>Token Bucket]
+        Recovery[Recovery Manager<br/>Health Probes]
+        DLQ[Dead Letter Queue]
+        Cache[Recently Served<br/>Cache LRU]
+    end
+    
+    subgraph "External Services"
+        OpenAI[OpenAI<br/>DALL-E 3]
+        ACR[ACRCloud<br/>Music ID]
+        Stripe[Stripe<br/>Payments]
+        Vision[GPT-4 Vision<br/>Analysis]
+    end
+    
+    subgraph "Data Layer"
+        PG[(PostgreSQL<br/>Neon)]
+        Storage[Object Storage<br/>Public/Private]
+        Sessions[(Session Store<br/>PG Store)]
+    end
+    
+    subgraph "Monitoring"
+        TelemetrySvc[Telemetry Service]
+        Metrics[Prometheus Metrics]
+        Logs[Audit Logs]
+    end
+    
+    %% Client to API connections
+    Browser --> UI
+    UI --> Express
+    UI --> WSClient
+    Audio --> WSClient
+    WSClient --> WSServer
+    Renderer --> UI
+    UI --> Telemetry
+    
+    %% API Gateway flow
+    Express --> Auth
+    Auth --> RateLimit
+    RateLimit --> Validation
+    Validation --> GenService
+    Validation --> CreditCtrl
+    
+    %% Generation flow
+    GenService --> QueueCtrl
+    QueueCtrl --> Circuit
+    Circuit --> OpenAI
+    Circuit --> Recovery
+    Circuit --> FallbackSvc
+    
+    %% Fallback flow
+    FallbackSvc --> Cache
+    FallbackSvc --> Storage
+    FallbackSvc --> PG
+    
+    %% External service connections
+    GenService --> OpenAI
+    Audio --> ACR
+    Express --> Stripe
+    GenService --> Vision
+    
+    %% Data connections
+    GenService --> PG
+    CreditCtrl --> PG
+    Express --> Sessions
+    FallbackSvc --> Storage
+    Cache --> PG
+    
+    %% WebSocket flow
+    WSServer --> GenService
+    WSServer --> PG
+    
+    %% Monitoring connections
+    GenService --> TelemetrySvc
+    Circuit --> TelemetrySvc
+    TelemetrySvc --> PG
+    TelemetrySvc --> Metrics
+    Express --> Logs
+    
+    %% Failure handling
+    OpenAI -.->|Failure| Circuit
+    Circuit -.->|Open| FallbackSvc
+    Recovery -.->|Probe| OpenAI
+    GenService -.->|Failed Jobs| DLQ
+    
+    style Browser fill:#e1f5fe
+    style UI fill:#e1f5fe
+    style Express fill:#fff3e0
+    style GenService fill:#f3e5f5
+    style Circuit fill:#ffebee
+    style OpenAI fill:#e8f5e9
+    style PG fill:#fce4ec
+    style Storage fill:#fce4ec
+    style TelemetrySvc fill:#f1f8e9

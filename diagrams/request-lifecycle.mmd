@@ -1,0 +1,147 @@
+sequenceDiagram
+    participant User
+    participant Browser
+    participant Express
+    participant Auth
+    participant CreditCtrl as Credit Controller
+    participant QueueCtrl as Queue Controller
+    participant Circuit as Circuit Breaker
+    participant OpenAI as DALL-E API
+    participant Fallback as Fallback Service
+    participant DB as PostgreSQL
+    participant Storage as Object Storage
+    participant WSServer as WebSocket Server
+    participant Cache as Recently Served Cache
+    
+    Note over User,Browser: 1. User Interaction
+    User->>Browser: Open /display page
+    Browser->>Express: GET /display
+    Express->>Auth: Check authentication
+    Auth->>Express: User authenticated
+    Express->>Browser: Return HTML/JS
+    
+    Note over Browser,WSServer: 2. WebSocket Connection
+    Browser->>WSServer: Connect WebSocket
+    WSServer->>Browser: Connection established
+    Browser->>WSServer: Send client info
+    
+    Note over Browser,WSServer: 3. Audio Processing Loop
+    loop Every 33ms
+        Browser->>Browser: Analyze audio (FFT)
+        Browser->>WSServer: AUDIO_FRAME message
+        WSServer->>DB: Store telemetry
+    end
+    
+    Note over Browser,Circuit: 4. Generation Request
+    Browser->>Express: POST /api/generate-art
+    Express->>Auth: Verify JWT token
+    Auth->>Express: Token valid
+    
+    Express->>CreditCtrl: Check credits
+    CreditCtrl->>DB: Get user balance
+    DB->>CreditCtrl: Balance: 50 credits
+    CreditCtrl->>CreditCtrl: Titration check
+    CreditCtrl->>Express: Approved (probability: 0.8)
+    
+    Express->>QueueCtrl: Check queue state
+    QueueCtrl->>DB: Get queue metrics
+    DB->>QueueCtrl: Queue size: 3
+    QueueCtrl->>QueueCtrl: State: SATISFIED
+    QueueCtrl->>Express: Should generate: true
+    
+    Note over Express,OpenAI: 5. Circuit Breaker Check
+    Express->>Circuit: Should attempt generation?
+    Circuit->>Circuit: Check state & tokens
+    
+    alt Circuit Breaker Closed
+        Circuit->>Express: Yes, attempt allowed
+        Express->>OpenAI: Generate image (45-90s timeout)
+        
+        alt Generation Success
+            OpenAI->>Express: Image URL
+            Express->>Storage: Save image
+            Express->>DB: Create art_session record
+            Express->>DB: Deduct credits
+            Express->>Cache: Mark as served
+        else Generation Timeout/Error
+            OpenAI--xExpress: Timeout after 60s
+            Express->>Circuit: Record failure
+            Circuit->>Circuit: Add failure token
+            Note over Express,Fallback: Activate Fallback
+        end
+        
+    else Circuit Breaker Open
+        Circuit->>Express: No, breaker open
+        Note over Express,Fallback: Direct to Fallback
+    end
+    
+    Note over Fallback,Storage: 6. Fallback Cascade
+    Express->>Fallback: Request fallback art
+    
+    Fallback->>DB: Get fresh artworks (Tier 1)
+    DB->>Fallback: Found 2 artworks
+    
+    alt Fresh artworks available
+        Fallback->>Cache: Filter recent
+        Cache->>Fallback: 1 not recent
+        Fallback->>Express: Return fresh artwork
+    else No fresh artworks
+        Fallback->>DB: Style-matched catalog (Tier 2)
+        alt Style matches found
+            DB->>Fallback: Found matches
+            Fallback->>Express: Return styled artwork
+        else No style matches
+            Fallback->>DB: Global catalog (Tier 3)
+            alt Global artworks found
+                DB->>Fallback: Random artworks
+                Fallback->>Express: Return random artwork
+            else No catalog available
+                Fallback->>Fallback: Generate procedural (Tier 4)
+                Fallback->>Express: Return gradient/particles
+            end
+        end
+    end
+    
+    Note over Express,Browser: 7. Response Delivery
+    Express->>Browser: Return artwork JSON
+    Browser->>Storage: Fetch image
+    Storage->>Browser: Image data
+    
+    Note over WSServer,Browser: 8. Real-time Update
+    WSServer->>Browser: ARTWORK_UPDATE message
+    Browser->>Browser: Load texture
+    Browser->>Browser: Start morphing
+    Browser->>WSServer: RENDER_ACK
+    WSServer->>Cache: Update recently served
+    
+    Note over Browser,DB: 9. Telemetry & Monitoring
+    Browser->>Express: POST /api/telemetry/events
+    Express->>DB: Store events
+    
+    loop Every frame (60 FPS)
+        Browser->>Browser: Interpolate DNA
+        Browser->>Browser: Apply effects
+        Browser->>Browser: Render canvas
+    end
+    
+    Note over Circuit,OpenAI: 10. Recovery Process (Background)
+    loop Every 2 minutes (if open)
+        Circuit->>Circuit: Check recovery time
+        Circuit->>OpenAI: Send health probe
+        alt Probe Success
+            OpenAI->>Circuit: Success
+            Circuit->>Circuit: Reduce tokens
+            Note over Circuit: After 3 successes → Close
+        else Probe Failure
+            OpenAI--xCircuit: Failure
+            Circuit->>Circuit: Reset recovery
+        end
+    end
+    
+    style User fill:#e1f5fe
+    style Browser fill:#fff3e0
+    style Express fill:#f3e5f5
+    style Circuit fill:#ffebee
+    style OpenAI fill:#e8f5e9
+    style DB fill:#fce4ec
+    style Fallback fill:#ffe0b2

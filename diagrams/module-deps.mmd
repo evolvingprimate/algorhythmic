@@ -1,0 +1,150 @@
+graph TB
+    subgraph "Frontend Dependencies"
+        React[React 18]
+        Vite[Vite]
+        TanStack[TanStack Query]
+        Tailwind[Tailwind CSS]
+        Shadcn[Shadcn UI]
+        Radix[Radix UI]
+        Wouter[Wouter]
+        WebAudio[Web Audio API]
+        WebGL[WebGL 2.0]
+    end
+    
+    subgraph "Backend Dependencies"
+        Node[Node.js]
+        Express[Express]
+        Drizzle[Drizzle ORM]
+        Passport[Passport.js]
+        WSLib[ws Library]
+        OpenAISDK[OpenAI SDK]
+        StripeSDK[Stripe SDK]
+    end
+    
+    subgraph "Application Modules"
+        App[App.tsx]
+        Routes[routes.ts]
+        Storage[storage.ts]
+        Schema[schema.ts]
+    end
+    
+    subgraph "Client Services"
+        MorphEngine[morphEngine.ts]
+        RendererMgr[RendererManager.ts]
+        AudioAnalyzer[AudioAnalyzer.ts]
+        WSClientMod[websocket-client.ts]
+        ClientTelemetry[client-telemetry.ts]
+    end
+    
+    subgraph "Server Services"
+        OpenAISvc[openai-service.ts]
+        GenHealth[generation-health.ts]
+        QueueController[queue-controller.ts]
+        RecoveryMgr[recovery-manager.ts]
+        FallbackSvc[fallback-service.ts]
+        TelemetrySvc[telemetry-service.ts]
+        ReplitAuth[replitAuth.ts]
+    end
+    
+    subgraph "Shared Modules"
+        SharedSchema[shared/schema.ts]
+        MaestroTypes[maestroTypes.ts]
+        StyleRelations[style-relations.ts]
+    end
+    
+    subgraph "Generation Pipeline"
+        AudioAnalyzerSvc[audioAnalyzer.ts]
+        CatalogMatcher[catalogMatcher.ts]
+        CreditController[creditController.ts]
+        FallbackOrch[fallbackOrchestrator.ts]
+    end
+    
+    subgraph "Renderer Engines"
+        Morpheus01[Morpheus01Renderer]
+        Morpheus02[Morpheus02Renderer]
+        Morpheus03[Morpheus03Renderer]
+        Morpheus04[Morpheus04Renderer]
+        Morpheus05[Morpheus05Renderer]
+        Morpheus06[Morpheus06Renderer]
+        EngineReg[EngineRegistry]
+    end
+    
+    %% Frontend structure
+    App --> React
+    App --> Wouter
+    App --> TanStack
+    App --> Tailwind
+    App --> Shadcn
+    Shadcn --> Radix
+    
+    %% Backend structure
+    Routes --> Express
+    Routes --> Storage
+    Storage --> Drizzle
+    Storage --> SharedSchema
+    Routes --> ReplitAuth
+    ReplitAuth --> Passport
+    
+    %% Client dependencies
+    MorphEngine --> RendererMgr
+    RendererMgr --> WebGL
+    RendererMgr --> Morpheus01
+    RendererMgr --> Morpheus02
+    RendererMgr --> Morpheus03
+    RendererMgr --> Morpheus04
+    RendererMgr --> Morpheus05
+    RendererMgr --> Morpheus06
+    RendererMgr --> EngineReg
+    
+    AudioAnalyzer --> WebAudio
+    WSClientMod --> ClientTelemetry
+    
+    %% Server dependencies
+    OpenAISvc --> OpenAISDK
+    OpenAISvc --> GenHealth
+    GenHealth --> RecoveryMgr
+    GenHealth --> TelemetrySvc
+    
+    Routes --> OpenAISvc
+    Routes --> QueueController
+    QueueController --> GenHealth
+    QueueController --> RecoveryMgr
+    
+    Routes --> FallbackSvc
+    FallbackSvc --> Storage
+    FallbackSvc --> FallbackOrch
+    
+    Routes --> CreditController
+    CreditController --> Storage
+    
+    %% Shared dependencies
+    Storage --> SharedSchema
+    Routes --> SharedSchema
+    App --> SharedSchema
+    
+    %% Generation pipeline
+    FallbackOrch --> AudioAnalyzerSvc
+    FallbackOrch --> CatalogMatcher
+    FallbackOrch --> Storage
+    
+    %% External service dependencies
+    Routes --> StripeSDK
+    OpenAISvc --> Vision[GPT-4 Vision]
+    AudioAnalyzerSvc --> ACRCloud[ACRCloud API]
+    
+    %% WebSocket dependencies
+    Routes --> WSLib
+    WSClientMod --> App
+    
+    %% Build dependencies
+    App --> Vite
+    Routes --> Node
+    
+    style React fill:#61dafb
+    style Node fill:#8cc84b
+    style Express fill:#259dff
+    style WebGL fill:#990000
+    style OpenAISDK fill:#00a67e
+    style StripeSDK fill:#635bff
+    style Drizzle fill:#c5f74f
+    style SharedSchema fill:#ffd700
