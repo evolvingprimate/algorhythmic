@@ -909,21 +909,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Batch insert telemetry events
   app.post('/api/telemetry/events', async (req, res) => {
     try {
-      const { events } = req.body;
+      const { events, sessionId, userId } = req.body;
       if (!Array.isArray(events) || events.length === 0) {
         return res.status(400).json({ message: "Events array is required" });
       }
       
-      // Validate and normalize each event before inserting
-      const validatedEvents = events.map(event => ({
-        ...event,
-        eventData: event.eventData ? 
-          (typeof event.eventData === 'string' ? event.eventData : JSON.stringify(event.eventData)) : 
-          '{}' // Default to empty JSON object if missing
-      }));
+      // Get session ID from request body or generate a new one
+      const session = sessionId || req.body.session_id || 'anonymous-' + Date.now();
       
-      await storage.createTelemetryEvents(validatedEvents);
-      res.json({ success: true, count: events.length });
+      // Ensure the RAI session exists (create if needed)
+      try {
+        // Try to find or create the session
+        const raiSessionId = await storage.findOrCreateRaiSessionForClientSession(
+          userId || 'anonymous',
+          session
+        );
+        
+        // Validate and normalize each event before inserting
+        const validatedEvents = events.map(event => ({
+          ...event,
+          sessionId: raiSessionId, // Use the RAI session ID
+          eventType: event.eventType || event.type || 'unknown', // Map type to eventType
+          // Convert timestamp string to Date object if needed
+          timestamp: event.timestamp ? new Date(event.timestamp) : new Date(),
+          eventData: event.eventData ? 
+            (typeof event.eventData === 'string' ? event.eventData : JSON.stringify(event.eventData)) : 
+            '{}' // Default to empty JSON object if missing
+        }));
+        
+        await storage.createTelemetryEvents(validatedEvents);
+        res.json({ success: true, count: events.length });
+      } catch (sessionError: any) {
+        // If session creation fails, try without session constraint
+        console.warn("Session creation failed, attempting sessionless insert:", sessionError);
+        
+        // For now, return error since DB has foreign key constraint
+        res.status(400).json({ 
+          message: "Session required for telemetry events. Please create a session first via /api/telemetry/session/start",
+          error: sessionError.message 
+        });
+      }
     } catch (error: any) {
       console.error("Error inserting telemetry events:", error);
       res.status(500).json({ message: error.message });

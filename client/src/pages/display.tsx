@@ -2519,8 +2519,10 @@ export default function Display() {
         // Graceful degradation: Continue with normal flow, wait for fresh generation
       });
     
-    // BUG FIX #3: Advance to AUDIO step (wizard remains latched until completion)
-    setSetupStep(SetupStep.AUDIO);
+    // BUG FIX: Complete the wizard after saving styles (dismiss modal)
+    // Audio setup is optional and can be done later from controls
+    setSetupStep(SetupStep.IDLE);
+    wizardActiveRef.current = false;  // Clear wizard latch to allow normal operation
     
     // Save preferences mutation (will refetch but latch prevents reset)
     savePreferencesMutation.mutate(
@@ -2528,10 +2530,14 @@ export default function Display() {
       {
         onSuccess: () => {
           // Mark setup as complete after first-time user saves preferences
-          if (!setupComplete) {
-            console.log('[Display] First-time setup complete - enabling artwork loading');
-            setSetupComplete(true);
-          }
+          console.log('[Display] First-time setup complete - enabling artwork loading');
+          setSetupComplete(true);
+          
+          // Toast notification to confirm successful save
+          toast({
+            title: "Style Preferences Saved",
+            description: "Your art station is ready! Artwork will start generating based on your chosen styles.",
+          });
           
           // BUG FIX: Invalidate artwork cache to fetch fresh images with new style
           queryClient.invalidateQueries({ queryKey: ['/api/artworks/recent'] });
