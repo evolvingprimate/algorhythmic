@@ -1681,12 +1681,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log('[ArtGeneration] 🚀 Enqueueing generation job for async processing...');
       
       // Prepare job payload with all necessary context
+      // FIX: Ensure audioAnalysis is always valid and use correct property name
       const jobPayload = {
         sessionId,
         prompt: result.prompt,
         dnaVector: result.dnaVector,
         explanation: result.explanation,
-        audioFeatures: finalAudio,
+        audioAnalysis: finalAudio || createDefaultAudioAnalysis(), // FIX: Changed from audioFeatures to audioAnalysis and ensure default
         musicInfo: music,
         styles: resolvedStyles,
         artists: preferences?.artists || [],

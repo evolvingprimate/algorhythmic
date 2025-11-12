@@ -398,9 +398,26 @@ export class QueueService {
       }
 
       try {
+        // FIX: Ensure audioAnalysis is always valid with defensive fallback
+        const audioAnalysis = payload.audioAnalysis || createDefaultAudioAnalysis();
+        
+        // Log if we had to use the default
+        if (!payload.audioAnalysis) {
+          console.warn(`[QueueService] Job ${job.id} had missing audioAnalysis, using defaults`);
+          telemetryService.recordEvent({
+            event: 'job_missing_audio_analysis',
+            category: 'queue',
+            severity: 'warning',
+            metrics: {
+              jobId: job.id,
+              userId: job.userId,
+            }
+          });
+        }
+        
         // Generate art prompt
         const promptResult = await generateArtPrompt({
-          audioAnalysis: payload.audioAnalysis,
+          audioAnalysis: audioAnalysis,
           musicInfo: payload.musicInfo,
           styles: payload.styles,
           artists: payload.artists,
@@ -425,7 +442,7 @@ export class QueueService {
             imageUrl,
             prompt: promptResult.prompt,
             dnaVector: JSON.stringify(promptResult.dnaVector),
-            audioFeatures: JSON.stringify(payload.audioAnalysis),
+            audioFeatures: JSON.stringify(audioAnalysis), // FIX: Use the validated audioAnalysis from above
             musicTrack: payload.musicInfo?.title,
             musicArtist: payload.musicInfo?.artist,
             musicGenre: payload.musicInfo?.genre,
