@@ -1638,28 +1638,18 @@ function DisplayContent() {
             setSelectedStyles(data.styles);
             setDynamicMode(data.dynamicMode || false);
             
-            // Skip style selector and go directly to audio selection for returning users
-            if (setupStep === SetupStep.IDLE) {
-              setSetupStep(SetupStep.AUDIO);
-              wizardActiveRef.current = true;
-            }
+            // Don't auto-advance - users should see welcome screen first
+            // They'll click "Start Creating" to begin
           } else {
             // First-time user or no preferences saved
-            console.log('[Display] No saved preferences found, showing style selector');
-            if (setupStep === SetupStep.IDLE) {
-              setSetupStep(SetupStep.STYLE);
-              wizardActiveRef.current = true;
-            }
+            console.log('[Display] No saved preferences found');
+            // Don't auto-advance - users should see welcome screen first
           }
         })
         .catch(err => {
           console.error('[Display] Failed to fetch user preferences:', err);
           setPreferencesLoaded(true);
-          // On error, show the style selector as fallback
-          if (setupStep === SetupStep.IDLE) {
-            setSetupStep(SetupStep.STYLE);
-            wizardActiveRef.current = true;
-          }
+          // Don't auto-advance on error - let user click "Start Creating"
         });
     }
   }, [isAuthenticated, preferencesLoaded, setupStep]);
@@ -2627,9 +2617,18 @@ function DisplayContent() {
   };
 
   const handleStartListening = () => {
-    // BUG FIX #3: Activate wizard latch and advance to STYLE
+    // Activate wizard and advance to appropriate step
     wizardActiveRef.current = true;
-    setSetupStep(SetupStep.STYLE);
+    
+    // If user has saved styles, skip style selection and go to audio
+    // Otherwise, go to style selection first
+    if (selectedStyles.length > 0) {
+      console.log('[Display] User has saved styles, advancing to audio selection');
+      setSetupStep(SetupStep.AUDIO);
+    } else {
+      console.log('[Display] No saved styles, showing style selector first');
+      setSetupStep(SetupStep.STYLE);
+    }
   };
 
   const handleAudioSourceConfirm = async (deviceId: string | undefined) => {
