@@ -2432,7 +2432,8 @@ function DisplayContent() {
         console.log('[Display] ✅ Placeholder frames active - waiting for DALL-E');
         
         // CRITICAL: Trigger generation for first-run users
-        const musicInfo = await identifyMusic();
+        // Use currentMusicInfo if set (e.g., from "No Audio" mode), otherwise try to identify
+        const musicInfo = currentMusicInfo || await identifyMusic();
         generateArtMutation.mutate({ audioAnalysis: analysis, musicInfo });
         generationTimeoutRef.current = undefined;
         return;
@@ -2440,7 +2441,8 @@ function DisplayContent() {
       
       // Trigger new artwork generation (smart sync will add it seamlessly)
       console.log('[Display] 🎨 Triggering timed generation - smart sync will add new frame without reset');
-      const musicInfo = await identifyMusic();
+      // Use currentMusicInfo if set (e.g., from "No Audio" mode), otherwise try to identify
+      const musicInfo = currentMusicInfo || await identifyMusic();
       generateArtMutation.mutate({ audioAnalysis: analysis, musicInfo });
       generationTimeoutRef.current = undefined;
     }, 0);
