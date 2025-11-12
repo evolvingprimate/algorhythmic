@@ -49,7 +49,8 @@ import {
   Clock,
   Zap,
   Bug,
-  Palette
+  Palette,
+  X
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { StyleSelector } from "@/components/style-selector";
@@ -148,6 +149,7 @@ function DisplayContent() {
   const [showDebugOverlay, setShowDebugOverlay] = useState(false);
   const [showEffectsMenu, setShowEffectsMenu] = useState(false);
   const [catalogueTier, setCatalogueTier] = useState<'exact' | 'related' | 'global' | 'procedural' | null>(null);
+  const [isLoadingFallback, setIsLoadingFallback] = useState(false);
   
   // Network status monitoring
   const [networkStatus, setNetworkStatus] = useState<NetworkStatus>(() => getNetworkStatus());
@@ -252,6 +254,17 @@ function DisplayContent() {
   const { toast } = useToast();
   const { user, isAuthenticated } = useAuth();
   
+  // Auto-dismiss catalog tier badge after 30 seconds
+  useEffect(() => {
+    if (catalogueTier) {
+      const timeout = setTimeout(() => {
+        setCatalogueTier(null);
+        setIsLoadingFallback(false);
+      }, 30000);
+      return () => clearTimeout(timeout);
+    }
+  }, [catalogueTier]);
+
   // Initialize health monitor
   const {
     isBackendAvailable,
@@ -490,6 +503,26 @@ function DisplayContent() {
       }
     }
   }, [preferences, isLoadingPreferences, preferencesError, setupStep, unseenResponse?.onboardingState]);
+
+  // Cleanup on unmount to prevent modal persistence
+  useEffect(() => {
+    const isDisplayActiveRef = { current: true };
+    
+    return () => {
+      isDisplayActiveRef.current = false;
+      setSetupStep(SetupStep.IDLE);
+      wizardActiveRef.current = false;
+      
+      // Cancel pending queries to prevent background refetches
+      queryClient.cancelQueries({ queryKey: ['/api/artworks/next', sessionId.current] });
+      queryClient.removeQueries({ queryKey: ['/api/artworks/next', sessionId.current] });
+      
+      // Clear any pending timeouts
+      if (generationTimeoutRef.current) {
+        clearTimeout(generationTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Auto-generate artwork when unseen pool runs low (Freshness Pipeline)
   useEffect(() => {
@@ -766,6 +799,12 @@ function DisplayContent() {
       return;
     }
     
+    // CRITICAL: Don't start loading artwork until setup is complete
+    if (!setupComplete) {
+      console.log(`[Display] ⏸️ Skipping artwork loading - setup not complete`);
+      return;
+    }
+    
     if (mergedArtworks && mergedArtworks.length > 0 && morphEngineRef.current.getFrameCount() === 0) {
       // Load and VALIDATE frames asynchronously
       const loadValidatedFrames = async () => {
@@ -972,7 +1011,7 @@ function DisplayContent() {
       // Execute async loading
       loadValidatedFrames();
     }
-  }, [mergedArtworks, toast]);
+  }, [mergedArtworks, toast, setupComplete]);
 
   // Smart sync: Add only new frames when recent artworks refreshes (after generation)
   useEffect(() => {
@@ -2953,7 +2992,7 @@ function DisplayContent() {
         <div className="fixed top-20 left-1/2 transform -translate-x-1/2 z-50">
           <Badge 
             variant="secondary" 
-            className="text-sm py-2 px-4 shadow-lg bg-background/90 backdrop-blur-md border-primary/30"
+            className="text-sm py-2 px-4 shadow-lg bg-background/90 backdrop-blur-md border-primary/30 flex items-center gap-2"
             data-testid="tier-badge"
           >
             {catalogueTier === 'related' && (
@@ -2965,6 +3004,17 @@ function DisplayContent() {
             {catalogueTier === 'procedural' && (
               <span>Loading a preview while we create your custom artwork...</span>
             )}
+            <Button 
+              size="icon" 
+              variant="ghost" 
+              className="ml-2 h-5 w-5 p-0"
+              onClick={() => {
+                setCatalogueTier(null);
+                setIsLoadingFallback(false);
+              }}
+            >
+              <X className="h-3 w-3" />
+            </Button>
           </Badge>
         </div>
       )}
