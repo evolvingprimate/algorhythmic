@@ -72,6 +72,8 @@ export const artSessions = pgTable("art_sessions", {
   catalogueTierIdx: index("art_sessions_catalogue_tier_idx").on(table.catalogueTier),
   // Composite index for library artwork selection queries (Architect recommendation)
   libraryOrientationIdx: index("art_sessions_library_orientation_idx").on(table.isLibrary, table.orientation, table.catalogueTier),
+  // PERFORMANCE: Composite index for session query performance (Architect recommendation)
+  sessionCreatedIdx: index("art_sessions_session_created_idx").on(table.sessionId, table.createdAt),
   // Note: GIN index on styles array created via raw SQL (Drizzle doesn't support custom index types)
 }));
 
@@ -264,6 +266,8 @@ export const telemetryEvents = pgTable("telemetry_events", {
   eventTypeIdx: index("telemetry_events_event_type_idx").on(table.eventType),
   timestampIdx: index("telemetry_events_timestamp_idx").on(table.timestamp),
   userIdIdx: index("telemetry_events_user_id_idx").on(table.userId),
+  // PERFORMANCE: Composite index for telemetry queries (Architect recommendation)
+  eventTypeTimestampIdx: index("telemetry_events_event_type_timestamp_idx").on(table.eventType, table.timestamp),
 }));
 
 // DNA Genomes - Baseline and evolved genome definitions
