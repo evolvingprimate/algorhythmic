@@ -4,7 +4,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { raw } from "express";
 import Stripe from "stripe";
 import { storage } from "./storage";
-import { generateArtPrompt, generateArtImage, queueController, generationHealthService, recoveryManager } from "./bootstrap";
+import { generateArtPrompt, generateArtImage, queueController, generationHealthService, recoveryManager, queueService } from "./bootstrap";
 import { identifyMusic } from "./music-service";
 import { insertArtVoteSchema, insertArtPreferenceSchema, type AudioAnalysis, type MusicIdentification, telemetryEvents } from "@shared/schema";
 import { and, sql } from "drizzle-orm";
@@ -972,7 +972,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Generate art based on audio analysis - REQUIRES AUTHENTICATION
+  // ============================================================================
+  // Job Status Endpoint
+  // ============================================================================
+  app.get("/api/jobs/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const jobId = req.params.id;
+      const userId = req.user.claims.sub;
+      
+      const job = await storage.getGenerationJob(jobId);
+      
+      if (!job) {
+        return res.status(404).json({ message: "Job not found" });
+      }
+      
+      // Ensure user can only see their own jobs
+      if (job.userId !== userId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      
+      res.json({
+        id: job.id,
+        status: job.status,
+        createdAt: job.createdAt,
+        startedAt: job.startedAt,
+        completedAt: job.completedAt,
+        result: job.result,
+        errorMessage: job.errorMessage,
+        retryCount: job.retryCount,
+      });
+    } catch (error: any) {
+      console.error("Error fetching job:", error);
+      res.status(500).json({ message: "Failed to fetch job status" });
+    }
+  });
+
+  // Generate art based on audio analysis - REQUIRES AUTHENTICATION (now queued)
   app.post("/api/generate-art", isAuthenticated, async (req: any, res) => {
     // Circuit breaker timeout guard
     let timeoutId: NodeJS.Timeout | undefined;
@@ -1148,68 +1183,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return;
       }
       
-      // Generate image using DALL-E
-      console.log('[ArtGeneration] 🎨 Generating image with DALL-E...');
-      const generationStart = Date.now();
-      const dalleUrl = await generateArtImage(result.prompt);
-      const generationDuration = Date.now() - generationStart;
-      console.log('[ArtGeneration] ✅ DALL-E generation complete in', generationDuration, 'ms:', dalleUrl);
+      // NEW: Enqueue job for async DALL-E processing
+      console.log('[ArtGeneration] 🚀 Enqueueing generation job for async processing...');
       
-      // Record success with circuit breaker
-      if (!isTimedOut) {
-        generationHealthService.recordSuccess(generationDuration);
-      }
-      
-      // Store image permanently in object storage with verification
-      // CRITICAL: This must succeed - no fallback to temporary DALL-E URLs
-      console.log('[ArtGeneration] 💾 Storing image permanently in Replit Object Storage...');
-      const objectStorageService = new ObjectStorageService();
-      const imageUrl = await objectStorageService.storeImageFromUrl(dalleUrl, userId);
-      console.log('[ArtGeneration] ✅ Image stored and verified:', imageUrl);
-
-      // DATABASE INTEGRITY CHECK: Validate imageUrl is a permanent storage path
-      if (!imageUrl.startsWith('/public-objects/')) {
-        throw new Error(
-          `Database integrity violation: imageUrl must be permanent storage path, got: ${imageUrl}`
-        );
-      }
-      console.log('[ArtGeneration] ✅ Database integrity check passed');
-
-      // Save session with music info, explanation, and DNA vector
-      console.log('[ArtGeneration] 💾 Saving to database...');
-      const session = await storage.createArtSession({
+      // Prepare job payload with all necessary context
+      const jobPayload = {
         sessionId,
-        userId,
-        imageUrl,
         prompt: result.prompt,
-        dnaVector: JSON.stringify(result.dnaVector),
-        audioFeatures: JSON.stringify(audio),
-        musicTrack: music?.title || null,
-        musicArtist: music?.artist || null,
-        musicGenre: null, // Could be populated from additional API call
-        musicAlbum: music?.album || null,
-        generationExplanation: result.explanation,
-        isSaved: false,
-        // BUG FIX: Store preference tags for filtering
+        dnaVector: result.dnaVector,
+        explanation: result.explanation,
+        audioFeatures: finalAudio,
+        musicInfo: music,
         styles: resolvedStyles,
         artists: preferences?.artists || [],
-      });
-
-      console.log('[ArtGeneration] ✅ Database save complete, session ID:', session.id);
-
+        provenance,
+      };
+      
+      // Enqueue the job with appropriate priority (higher for premium users)
+      const userTier = await storage.getUserSubscriptionTier(userId);
+      const priority = userTier === 'ultimate' ? 10 : (userTier === 'premium' ? 5 : 0);
+      
+      const job = await queueService.enqueueJob(userId, jobPayload, priority);
+      console.log('[ArtGeneration] ✅ Job enqueued:', job.id, 'with priority:', priority);
+      
       // Increment daily usage (user is always authenticated here)
       const today = new Date().toISOString().split('T')[0];
       await storage.incrementDailyUsage(userId, today);
       console.log('[ArtGeneration] ✅ Daily usage incremented');
-
-      console.log('[ArtGeneration] 🎉 Complete pipeline success: DALL-E → Storage → Verification → Database');
-
+      
+      // Return job ID for tracking
       const response = {
-        imageUrl,
+        jobId: job.id,
+        status: 'queued',
         prompt: result.prompt,
         explanation: result.explanation,
         musicInfo: music,
-        session,
+        message: 'Your artwork is being generated. You will be notified when complete.',
       };
       
       // IDEMPOTENCY: Cache successful response

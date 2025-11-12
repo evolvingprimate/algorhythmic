@@ -166,11 +166,17 @@ export interface IStorage {
   getTelemetryEventsSince(cutoffTime: Date): Promise<TelemetryEvent[]>;
   findOrCreateRaiSessionForClientSession(userId: string, clientSessionId: string): Promise<string>;
 
-  // Generation Jobs (Hybrid gen+retrieve)
+  // Generation Jobs (PostgreSQL-backed queue)
   createGenerationJob(job: InsertGenerationJob): Promise<GenerationJob>;
   getGenerationJob(id: string): Promise<GenerationJob | undefined>;
   updateGenerationJob(id: string, updates: Partial<GenerationJob>): Promise<GenerationJob>;
   getPoolCandidates(userId: string, limit?: number, minQuality?: number): Promise<ArtSession[]>;
+  
+  // Queue operations for async processing
+  getPendingJobs(limit?: number): Promise<GenerationJob[]>;
+  acquireJobLock(jobId: string, currentVersion: number): Promise<boolean>;
+  updateJobStatus(jobId: string, status: string, updates?: Partial<GenerationJob>): Promise<GenerationJob>;
+  getDeadLetterJobs(limit?: number): Promise<GenerationJob[]>;
   
   // Queue management (for Queue Controller)
   getFreshQueueSize(sessionId: string): Promise<number>;
@@ -672,6 +678,27 @@ export class MemStorage implements IStorage {
       })
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .slice(0, limit);
+  }
+
+  // Queue Operations for Async Processing (MemStorage stubs)
+  async getPendingJobs(limit: number = 5): Promise<GenerationJob[]> {
+    // MemStorage doesn't support generation jobs
+    return [];
+  }
+
+  async acquireJobLock(jobId: string, currentVersion: number): Promise<boolean> {
+    // MemStorage doesn't support generation jobs
+    return false;
+  }
+
+  async updateJobStatus(jobId: string, status: string, updates?: Partial<GenerationJob>): Promise<GenerationJob> {
+    // MemStorage doesn't support generation jobs
+    throw new Error('MemStorage does not support generation job updates');
+  }
+
+  async getDeadLetterJobs(limit: number = 10): Promise<GenerationJob[]> {
+    // MemStorage doesn't support generation jobs
+    return [];
   }
 
   // Monthly Credit System (MemStorage stubs)
@@ -2391,6 +2418,82 @@ export class PostgresStorage implements IStorage {
       .limit(limit);
     
     return results;
+  }
+
+  // ============================================================================
+  // Queue Operations for Async Processing
+  // ============================================================================
+
+  async getPendingJobs(limit: number = 5): Promise<GenerationJob[]> {
+    // Get pending jobs ordered by priority (DESC) and createdAt (ASC)
+    const jobs = await this.db
+      .select()
+      .from(generationJobs)
+      .where(eq(generationJobs.status, 'pending'))
+      .orderBy(
+        desc(generationJobs.priority),
+        generationJobs.createdAt
+      )
+      .limit(limit);
+    
+    return jobs;
+  }
+
+  async acquireJobLock(jobId: string, currentVersion: number): Promise<boolean> {
+    // Atomically update job to processing with optimistic locking
+    const result = await this.db
+      .update(generationJobs)
+      .set({
+        status: 'processing',
+        startedAt: new Date(),
+        version: sql`${generationJobs.version} + 1`,
+      })
+      .where(
+        and(
+          eq(generationJobs.id, jobId),
+          eq(generationJobs.status, 'pending'),
+          eq(generationJobs.version, currentVersion)
+        )
+      )
+      .returning({ id: generationJobs.id });
+    
+    return result.length > 0;
+  }
+
+  async updateJobStatus(jobId: string, status: string, updates: Partial<GenerationJob> = {}): Promise<GenerationJob> {
+    const updateData: any = {
+      status,
+      version: sql`${generationJobs.version} + 1`,
+      ...updates,
+    };
+
+    // Set completedAt for completed/failed/dead_letter statuses
+    if (['completed', 'failed', 'dead_letter'].includes(status)) {
+      updateData.completedAt = new Date();
+    }
+
+    const [updated] = await this.db
+      .update(generationJobs)
+      .set(updateData)
+      .where(eq(generationJobs.id, jobId))
+      .returning();
+
+    if (!updated) {
+      throw new Error(`Failed to update job ${jobId} status to ${status}`);
+    }
+
+    return updated;
+  }
+
+  async getDeadLetterJobs(limit: number = 10): Promise<GenerationJob[]> {
+    const jobs = await this.db
+      .select()
+      .from(generationJobs)
+      .where(eq(generationJobs.status, 'dead_letter'))
+      .orderBy(desc(generationJobs.createdAt))
+      .limit(limit);
+    
+    return jobs;
   }
   
   // Queue management methods (for Queue Controller)

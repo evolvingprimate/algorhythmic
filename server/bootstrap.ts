@@ -7,6 +7,8 @@ import { GenerationHealthService } from "./generation-health";
 import { OpenAIService } from "./openai-service";
 import { RecoveryManager } from "./recovery-manager";
 import { QueueController } from "./queue-controller";
+import { QueueService } from "./queue-service";
+import { storage } from "./storage";
 
 // Create concrete instances in the correct order
 
@@ -28,15 +30,24 @@ const queueController = new QueueController(
   recoveryManager
 );
 
-// 5. Start recovery manager monitoring
+// 5. Create QueueService for async DALL-E job processing
+const queueService = new QueueService(
+  storage,
+  generationHealthService,
+  openAIService
+);
+
+// 6. Start recovery manager monitoring and queue worker
 recoveryManager.startMonitoring();
+queueService.startWorker();
 
 // Export all services as singletons
 export {
   generationHealthService,
   openAIService,
   recoveryManager,
-  queueController
+  queueController,
+  queueService
 };
 
 // Export individual functions for backward compatibility

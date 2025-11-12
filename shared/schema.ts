@@ -212,23 +212,28 @@ export const storageMetrics = pgTable("storage_metrics", {
   userIdIdx: index("storage_metrics_user_id_idx").on(table.userId),
 }));
 
-// Generation Jobs - Hybrid gen+retrieve job tracking
+// Generation Jobs - PostgreSQL-backed queue for async DALL-E processing
 export const generationJobs = pgTable("generation_jobs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  warmStartArtworkId: varchar("warm_start_artwork_id").references(() => artSessions.id, { onDelete: "set null" }),
-  generatedArtworkId: varchar("generated_artwork_id").references(() => artSessions.id, { onDelete: "set null" }),
-  audioContext: text("audio_context"), // JSON: {musicId, audioFeatures, targetDNA, motifs}
-  status: varchar("status").notNull().default("pending"), // pending, processing, completed, failed
-  attemptCount: integer("attempt_count").notNull().default(0),
+  status: varchar("status", { enum: ["pending", "processing", "completed", "failed", "dead_letter"] }).notNull().default("pending"),
+  priority: integer("priority").notNull().default(0), // Higher priority = processed first
+  payload: text("payload").notNull(), // JSONB: generation parameters {prompt, styles, artists, audioAnalysis, etc}
+  retryCount: integer("retry_count").notNull().default(0),
+  maxRetries: integer("max_retries").notNull().default(3),
+  result: text("result"), // JSONB: generation result {imageUrl, artworkId, dnaVector, etc}
   errorMessage: text("error_message"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   startedAt: timestamp("started_at"),
   completedAt: timestamp("completed_at"),
+  // For optimistic locking
+  version: integer("version").notNull().default(1),
 }, (table) => ({
   userIdIdx: index("generation_jobs_user_id_idx").on(table.userId),
   statusIdx: index("generation_jobs_status_idx").on(table.status),
   createdAtIdx: index("generation_jobs_created_at_idx").on(table.createdAt),
+  // Composite index for queue polling (status, priority DESC, created_at ASC)
+  queuePollingIdx: index("generation_jobs_queue_polling_idx").on(table.status, table.priority, table.createdAt),
 }));
 
 // ============================================================================
