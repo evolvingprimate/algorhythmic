@@ -1309,7 +1309,8 @@ function DisplayContent() {
         // Phase 3D: Validate generated frame before adding
         if (!isValidArtworkFrame(data.session)) {
           console.error(`[GenerateMutation] Generated artwork ${data.session.id} failed validation - not adding to morphEngine`);
-          telemetryService.recordEvent('generated_frame_invalid', {
+          telemetryService.recordEvent('display_error', {
+            errorType: 'generated_frame_invalid',
             category: 'display',
             severity: 'error',
             metrics: {
