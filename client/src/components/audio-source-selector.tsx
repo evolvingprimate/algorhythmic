@@ -26,6 +26,7 @@ export function AudioSourceSelector({ open, onClose, onConfirm }: AudioSourceSel
   const [error, setError] = useState<string | null>(null);
   const [audioLevel, setAudioLevel] = useState(0);
   const [isPreviewing, setIsPreviewing] = useState(false);
+  const [useNoAudio, setUseNoAudio] = useState(false);
   
   const previewAnalyzerRef = useRef<AudioAnalyzer | null>(null);
   const previewIntervalRef = useRef<number | null>(null);
@@ -61,14 +62,21 @@ export function AudioSourceSelector({ open, onClose, onConfirm }: AudioSourceSel
       setDevices(normalizedDevices);
       
       if (normalizedDevices.length > 0) {
+        // Default to first microphone (not "No Audio")
         const firstDevice = normalizedDevices[0];
         setSelectedUiId(firstDevice.uiId);
+        setUseNoAudio(false);
         startPreview(firstDevice.originalDeviceId);
       } else {
-        setError("No audio input devices found");
+        // If no devices, default to "No Audio" option
+        setUseNoAudio(true);
+        setSelectedUiId("no-audio");
       }
     } catch (err: any) {
       setError(err.message || "Failed to access audio devices");
+      // Default to "No Audio" when microphone access fails
+      setUseNoAudio(true);
+      setSelectedUiId("no-audio");
     } finally {
       setIsLoading(false);
     }
@@ -119,17 +127,30 @@ export function AudioSourceSelector({ open, onClose, onConfirm }: AudioSourceSel
 
   const handleDeviceChange = (uiId: string) => {
     setSelectedUiId(uiId);
-    const device = devices.find(d => d.uiId === uiId);
-    if (device) {
-      startPreview(device.originalDeviceId);
+    
+    if (uiId === "no-audio") {
+      setUseNoAudio(true);
+      stopPreview();
+    } else {
+      setUseNoAudio(false);
+      const device = devices.find(d => d.uiId === uiId);
+      if (device) {
+        startPreview(device.originalDeviceId);
+      }
     }
   };
 
   const handleConfirm = () => {
     stopPreview();
-    const device = devices.find(d => d.uiId === selectedUiId);
-    // Pass original deviceId to API, or undefined for default device
-    onConfirm(device?.originalDeviceId || undefined);
+    
+    if (useNoAudio || selectedUiId === "no-audio") {
+      // Pass "no-audio" to indicate no audio should be used
+      onConfirm("no-audio");
+    } else {
+      const device = devices.find(d => d.uiId === selectedUiId);
+      // Pass original deviceId to API, or undefined for default device
+      onConfirm(device?.originalDeviceId || undefined);
+    }
   };
 
   const handleCancel = () => {
@@ -164,10 +185,28 @@ export function AudioSourceSelector({ open, onClose, onConfirm }: AudioSourceSel
             </Alert>
           )}
 
-          {!isLoading && !error && devices.length > 0 && (
+          {!isLoading && (
             <>
               <RadioGroup value={selectedUiId} onValueChange={handleDeviceChange}>
                 <div className="space-y-2">
+                  {/* No Audio Option */}
+                  <div
+                    className="flex items-center space-x-2 rounded-md border p-3 hover-elevate"
+                    data-testid="device-option-no-audio"
+                  >
+                    <RadioGroupItem value="no-audio" id="no-audio" data-testid="radio-no-audio" />
+                    <Label
+                      htmlFor="no-audio"
+                      className="flex-1 cursor-pointer font-normal"
+                    >
+                      <div className="flex items-center gap-2">
+                        <MicOff className="w-4 h-4 text-muted-foreground" />
+                        <span>No Audio (Visual Art Only)</span>
+                      </div>
+                    </Label>
+                  </div>
+                  
+                  {/* Microphone Options */}
                   {devices.map((device) => (
                     <div
                       key={device.uiId}
@@ -211,14 +250,6 @@ export function AudioSourceSelector({ open, onClose, onConfirm }: AudioSourceSel
             </>
           )}
 
-          {!isLoading && !error && devices.length === 0 && (
-            <Alert data-testid="alert-no-devices">
-              <MicOff className="h-4 w-4" />
-              <AlertDescription>
-                No microphone found. Please connect an audio input device.
-              </AlertDescription>
-            </Alert>
-          )}
         </div>
 
         <div className="flex gap-2 justify-end mt-4">
@@ -227,7 +258,7 @@ export function AudioSourceSelector({ open, onClose, onConfirm }: AudioSourceSel
           </Button>
           <Button
             onClick={handleConfirm}
-            disabled={devices.length === 0 || isLoading || !!error}
+            disabled={isLoading || (!selectedUiId && devices.length === 0)}
             data-testid="button-confirm"
           >
             Confirm & Start

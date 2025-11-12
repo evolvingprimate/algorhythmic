@@ -2453,9 +2453,62 @@ function DisplayContent() {
   };
 
   const handleAudioSourceConfirm = async (deviceId: string | undefined) => {
-    // BUG FIX #3: Clear wizard latch AFTER successful audio initialization
-    setSetupStep(SetupStep.COMPLETE);
+    // Handle "No Audio" option
+    if (deviceId === "no-audio") {
+      // Complete setup and dismiss modal for "No Audio"
+      setSetupStep(SetupStep.COMPLETE);
+      // Clear wizard latch for normal operation
+      wizardActiveRef.current = false;
+      
+      // Set default audio analysis values to prevent validation errors
+      // These values simulate a quiet, neutral audio environment
+      // All values must match server validation schema ranges
+      const defaultAudioAnalysis = {
+        lowEnergy: 0.3,        // 0-1 range
+        midEnergy: 0.3,        // 0-1 range
+        highEnergy: 0.3,       // 0-1 range
+        rms: 0.3,              // 0-1 range
+        zcr: 0.05,             // 0-1 range
+        spectralCentroid: 0.5, // 0-1 range (normalized)
+        spectralRolloff: 0.7,  // 0-1 range (normalized)
+        mfcc: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5], // Array of 13 values
+        bpm: 120,              // BPM can be > 1
+        beatIntensity: 0.3,    // 0-1 range
+        beatConfidence: 0.5,   // 0-1 range
+        isVocal: false,
+        timestamp: Date.now(),
+        amplitude: 30,         // Amplitude can be > 1
+        isBeat: false,
+        mood: "calm"
+      };
+      
+      // Immediately trigger handleAudioAnalysis with default values
+      // This ensures audioAnalysis is available for artwork generation
+      handleAudioAnalysis(defaultAudioAnalysis);
+      
+      // Set default musicInfo to prevent validation errors
+      // Server expects an object, not null
+      const defaultMusicInfo = {
+        track: undefined,
+        artist: undefined,
+        genre: undefined,
+        album: undefined
+      };
+      setCurrentMusicInfo(defaultMusicInfo);
+      
+      // Mark setup as complete
+      setSetupComplete(true);
+      setIsPlaying(false); // Not actively listening
+      
+      toast({
+        title: "Visual Art Mode",
+        description: "Creating art without audio input...",
+      });
+      
+      return;
+    }
 
+    // Handle microphone selection
     try {
       if (!audioAnalyzerRef.current) {
         const analyzer = new AudioAnalyzer();
@@ -2463,22 +2516,26 @@ function DisplayContent() {
         // Only assign after successful initialization
         audioAnalyzerRef.current = analyzer;
         
-        // BUG FIX #3: Clear wizard latch after successful completion
+        // Only dismiss modal and complete setup after successful initialization
+        setSetupStep(SetupStep.COMPLETE);
         wizardActiveRef.current = false;
         
+        // Mark setup as complete
+        setSetupComplete(true);
         setIsPlaying(true);
+        
         toast({
           title: "Listening Started",
           description: "Creating art from the sounds around you...",
         });
       }
     } catch (error: any) {
-      // BUG FIX #3: Clear latch on error to allow retry
-      wizardActiveRef.current = false;
+      // Keep modal open on error - user can retry or choose "No Audio"
+      // Don't change setupStep so modal remains visible
       audioAnalyzerRef.current = null;
       toast({
         title: "Microphone Access Denied",
-        description: error.message,
+        description: error.message + " - You can try again or select 'No Audio'",
         variant: "destructive",
       });
     }
@@ -2661,14 +2718,13 @@ function DisplayContent() {
       { styles, dynamicMode: isDynamicMode },
       {
         onSuccess: () => {
-          // Mark setup as complete after first-time user saves preferences
-          console.log('[Display] First-time setup complete - enabling artwork loading');
-          setSetupComplete(true);
+          // Setup is NOT complete yet - user must select audio source next
+          console.log('[Display] Style preferences saved - advancing to audio selection');
           
           // Toast notification to confirm successful save
           toast({
             title: "Style Preferences Saved",
-            description: "Your art station is ready! Artwork will start generating based on your chosen styles.",
+            description: "Now select your audio source to start generating artwork.",
           });
           
           // BUG FIX: Invalidate artwork cache to fetch fresh images with new style
