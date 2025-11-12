@@ -2,6 +2,7 @@ import { EngineRegistry, type IMorphRenderer, type RenderContext } from './rende
 import type { MorphState } from './morphEngine';
 import type { AudioAnalysis } from '@shared/schema';
 import type { Command } from '@shared/maestroTypes';
+import { Tier1Renderer } from './tier1Renderer';
 
 export class RendererManager {
   private canvas: HTMLCanvasElement | null = null;
@@ -11,6 +12,10 @@ export class RendererManager {
   private currentEngine: IMorphRenderer | null = null;
   private currentEngineKey: string = '';
   private pendingEngineKey: string | null = null;
+  
+  // Canvas2D fallback renderer for non-WebGL2 environments
+  private tier1Renderer: Tier1Renderer | null = null;
+  private isUsingFallback: boolean = false;
   
   // BUG FIX: Readiness tracking to prevent premature prewarm calls
   private isReady: boolean = false;
@@ -97,21 +102,23 @@ export class RendererManager {
     });
     
     if (!this.gl) {
-      console.error('[RendererManager] WebGL2 not supported');
-      // Still append canvas with fallback message
+      console.warn('[RendererManager] WebGL2 not supported, falling back to Canvas2D renderer');
+      
+      // Remove the WebGL canvas and initialize Tier1Renderer as fallback
       if (this.container && this.canvas) {
-        this.container.appendChild(this.canvas);
-        const ctx = this.canvas.getContext('2d');
-        if (ctx) {
-          ctx.fillStyle = '#000';
-          ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-          ctx.fillStyle = '#fff';
-          ctx.font = '24px sans-serif';
-          ctx.textAlign = 'center';
-          ctx.fillText('WebGL2 not supported', this.canvas.width / 2, this.canvas.height / 2);
-        }
+        // Remove the WebGL canvas as we won't be using it
+        this.canvas.remove();
+        this.canvas = null;
       }
-      this.rejectReady(new Error('WebGL2 not supported'));
+      
+      // Initialize Canvas2D fallback renderer
+      this.isUsingFallback = true;
+      this.tier1Renderer = new Tier1Renderer(containerId);
+      
+      // Mark as ready with fallback mode
+      this.isReady = true;
+      this.resolveReady();
+      console.log('[RendererManager] ✅ Canvas2D fallback renderer ready');
       return;
     }
     console.log('[RendererManager] WebGL2 context created');
@@ -377,6 +384,13 @@ export class RendererManager {
       return;
     }
     
+    // If using Canvas2D fallback, delegate to Tier1Renderer
+    if (this.isUsingFallback && this.tier1Renderer) {
+      await this.tier1Renderer.preloadImage(imageUrl);
+      console.log(`[RendererManager] 🔥 Prewarmed in Canvas2D: ${frameId}`);
+      return;
+    }
+    
     // Skip if already prewarmed
     if (this.prewarmCache.has(frameId)) {
       return;
@@ -467,6 +481,25 @@ export class RendererManager {
     morphState: MorphState,
     audioAnalysis?: AudioAnalysis
   ): Promise<void> {
+    // If using Canvas2D fallback, delegate to Tier1Renderer
+    if (this.isUsingFallback && this.tier1Renderer) {
+      const currentFrame = {
+        imageUrl: imageUrlA,
+        opacity: 1.0 - morphState.morphProgress
+      };
+      const nextFrame = {
+        imageUrl: imageUrlB,
+        opacity: morphState.morphProgress
+      };
+      
+      // Use the currentDNA from MorphState for Tier1Renderer
+      const dna = morphState.currentDNA || new Array(50).fill(0.5);
+      
+      await this.tier1Renderer.render(currentFrame, nextFrame, dna, audioAnalysis || null);
+      return;
+    }
+    
+    // Original WebGL2 rendering path
     if (!this.gl || !this.canvas || !this.currentEngine) {
       return;
     }
@@ -808,6 +841,12 @@ export class RendererManager {
     if (this.resizeHandler) {
       window.removeEventListener('resize', this.resizeHandler);
       this.resizeHandler = null;
+    }
+    
+    // If using Canvas2D fallback, destroy Tier1Renderer
+    if (this.isUsingFallback && this.tier1Renderer) {
+      this.tier1Renderer.destroy();
+      this.tier1Renderer = null;
     }
     
     // Destroy current engine

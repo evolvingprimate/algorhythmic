@@ -2267,6 +2267,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Client Telemetry GET Endpoint - Get frameDisplayCount
+  app.get('/api/telemetry/frameDisplayCount', async (req, res) => {
+    try {
+      // Get metrics summary from telemetry service
+      const summary = telemetryService.getMetricsSummary();
+      
+      // Return frameDisplayCount and other display metrics
+      const frameMetrics = {
+        frameDisplayCount: summary.display?.framesGenerated || 0,
+        blackFrameCount: summary.display?.blackFramesDetected || 0,
+        placeholderCount: summary.display?.placeholdersUsed || 0,
+        avgTransitionLatency: summary.display?.avgTransitionLatency || 0,
+        totalCycles: summary.display?.morphCyclesCompleted || 0,
+        uptime: summary.system?.uptimeSeconds || 0
+      };
+      
+      res.json(frameMetrics);
+    } catch (error) {
+      console.error('[API] Error fetching frame display count:', error);
+      res.status(500).json({ error: 'Failed to fetch frame display metrics' });
+    }
+  });
+
   // Client Telemetry Collection Endpoint
   app.post('/api/telemetry/client', async (req, res) => {
     try {

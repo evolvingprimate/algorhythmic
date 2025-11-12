@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Canvas2D Fallback Test</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #000;
+            color: #fff;
+            font-family: monospace;
+        }
+        #test-container {
+            width: 800px;
+            height: 600px;
+            position: relative;
+            border: 2px solid #fff;
+            margin: 20px 0;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            background: #333;
+            border-radius: 4px;
+        }
+        .success {
+            background: #2a4d3a;
+            color: #4ade80;
+        }
+        .error {
+            background: #4d2a2a;
+            color: #f87171;
+        }
+        .warning {
+            background: #4d4a2a;
+            color: #facc15;
+        }
+    </style>
+</head>
+<body>
+    <h1>Canvas2D Fallback Test</h1>
+    <div id="status-log"></div>
+    <div id="test-container"></div>
+    
+    <script type="module">
+        const statusLog = document.getElementById('status-log');
+        
+        function addStatus(message, type = 'info') {
+            const div = document.createElement('div');
+            div.className = `status ${type}`;
+            div.textContent = message;
+            statusLog.appendChild(div);
+            console.log(`[Test] ${message}`);
+        }
+        
+        // Test 1: Verify WebGL2 detection
+        const canvas = document.createElement('canvas');
+        const gl = canvas.getContext('webgl2');
+        
+        if (gl) {
+            addStatus('✓ WebGL2 is available in this browser', 'success');
+        } else {
+            addStatus('✗ WebGL2 is NOT available in this browser', 'warning');
+        }
+        
+        // Test 2: Simulate WebGL2 failure
+        addStatus('Testing Canvas2D fallback by simulating WebGL2 failure...');
+        
+        // Mock WebGL2 context creation to return null
+        const originalGetContext = HTMLCanvasElement.prototype.getContext;
+        HTMLCanvasElement.prototype.getContext = function(contextType, options) {
+            if (contextType === 'webgl2') {
+                addStatus('→ Blocking WebGL2 context creation to test fallback', 'warning');
+                return null;
+            }
+            return originalGetContext.call(this, contextType, options);
+        };
+        
+        // Test 3: Try to initialize RendererManager with simulated failure
+        try {
+            // Import and test the RendererManager
+            const { RendererManager } = await import('/src/lib/RendererManager.ts');
+            
+            addStatus('Testing RendererManager initialization...');
+            const manager = new RendererManager('test-container', 'morpheus_0.6');
+            
+            // Wait for initialization
+            await manager.whenReady();
+            
+            // Check if fallback was used
+            if (manager.isUsingFallback) {
+                addStatus('✓ Canvas2D fallback renderer was activated successfully!', 'success');
+                
+                // Test rendering with fallback
+                const testImageUrl = 'data:image/svg+xml;base64,' + btoa(`
+                    <svg width="100" height="100" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="100" height="100" fill="#4ade80"/>
+                        <text x="50" y="50" text-anchor="middle" fill="white">TEST</text>
+                    </svg>
+                `);
+                
+                await manager.render(
+                    testImageUrl,
+                    testImageUrl,
+                    { morphProgress: 0.5, dna: {} },
+                    null
+                );
+                
+                addStatus('✓ Canvas2D fallback renderer is rendering content!', 'success');
+            } else {
+                addStatus('✗ Fallback was not triggered (WebGL2 might be available)', 'error');
+            }
+            
+        } catch (error) {
+            addStatus(`✗ Error during test: ${error.message}`, 'error');
+            console.error(error);
+        }
+        
+        // Restore original getContext
+        HTMLCanvasElement.prototype.getContext = originalGetContext;
+        addStatus('Test complete. Original WebGL2 context creation restored.');
+    </script>
+</body>
+</html>
