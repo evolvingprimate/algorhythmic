@@ -622,8 +622,15 @@ export class OpenAIService {
     // Register job with health service
     this.generationHealth.registerJob(jobId, isProbe);
     
-    // Get adaptive timeout
-    const timeout = this.generationHealth.getTimeout();
+    // Get adaptive timeout with minimum floor to prevent immediate aborts
+    const MIN_TIMEOUT_MS = 45000; // 45 seconds minimum (matches GenerationHealthService.MIN_TIMEOUT_MS)
+    const rawTimeout = this.generationHealth.getTimeout();
+    const timeout = Math.max(MIN_TIMEOUT_MS, rawTimeout || MIN_TIMEOUT_MS);
+    
+    // Log if timeout was adjusted
+    if (rawTimeout !== timeout) {
+      console.log(`[GenerationHealth] WARNING: Timeout adjusted from ${rawTimeout}ms to ${timeout}ms (minimum enforced to prevent pre-aborted signals)`);
+    }
     console.log(`[GenerationHealth] Attempting DALL-E generation with ${timeout}ms timeout (job: ${jobId})`);
     
     // TELEMETRY: Record generation request
