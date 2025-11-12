@@ -2,6 +2,12 @@ import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
+import { 
+  getNetworkObserver, 
+  NetworkStatus, 
+  NetworkQuality,
+  getNetworkStatus 
+} from "@/lib/network-utils";
 import { Badge } from "@/components/ui/badge";
 import { Slider } from "@/components/ui/slider";
 import {
@@ -125,6 +131,10 @@ export default function Display() {
   const [showDebugOverlay, setShowDebugOverlay] = useState(false);
   const [showEffectsMenu, setShowEffectsMenu] = useState(false);
   const [catalogueTier, setCatalogueTier] = useState<'exact' | 'related' | 'global' | 'procedural' | null>(null);
+  
+  // Network status monitoring
+  const [networkStatus, setNetworkStatus] = useState<NetworkStatus>(() => getNetworkStatus());
+  const [circuitBreakerState, setCircuitBreakerState] = useState<'closed' | 'open' | 'half-open'>('closed');
   
   // Local EffectsConfig type (TODO: migrate to MaestroControlStore/EffectPreferences)
   type EffectsConfig = {
@@ -1427,6 +1437,66 @@ export default function Display() {
     
     return () => clearInterval(interval);
   }, []);
+
+  // Network status monitoring effect
+  useEffect(() => {
+    const networkObserver = getNetworkObserver();
+    
+    // Subscribe to network status changes
+    const unsubscribe = networkObserver.subscribe((status: NetworkStatus) => {
+      setNetworkStatus(status);
+      
+      // Log network changes
+      if (status.online) {
+        console.log(`[Display] Network status: ${status.quality} (downlink: ${status.downlink}Mbps, rtt: ${status.rtt}ms)`);
+        toast.success(`Connection restored (${status.quality})`, { duration: 2000 });
+        
+        // Immediately refetch when coming back online
+        if (!networkStatus.online) {
+          queryClient.invalidateQueries();
+        }
+      } else {
+        console.log('[Display] Network offline');
+        toast.error('Connection lost', { duration: 3000 });
+      }
+    });
+    
+    // Check circuit breaker state periodically
+    const checkCircuitBreaker = async () => {
+      try {
+        const response = await fetch('/api/health/circuit-breaker-state', {
+          credentials: 'include',
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          setCircuitBreakerState(data.state);
+          
+          // Log state changes
+          if (data.state !== circuitBreakerState) {
+            console.log(`[Display] Circuit breaker state: ${data.state}`);
+            
+            if (data.state === 'open') {
+              toast.warning('Generation service is experiencing issues', { duration: 5000 });
+            } else if (data.state === 'half-open') {
+              toast.info('Generation service is recovering', { duration: 3000 });
+            }
+          }
+        }
+      } catch (error) {
+        console.warn('[Display] Failed to check circuit breaker state:', error);
+      }
+    };
+    
+    // Check circuit breaker state every 30 seconds
+    const intervalId = setInterval(checkCircuitBreaker, 30000);
+    checkCircuitBreaker(); // Initial check
+    
+    return () => {
+      unsubscribe();
+      clearInterval(intervalId);
+    };
+  }, [circuitBreakerState, networkStatus.online]);
 
   // Initialize WebSocket
   useEffect(() => {

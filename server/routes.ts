@@ -974,11 +974,65 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Generate art based on audio analysis - REQUIRES AUTHENTICATION
   app.post("/api/generate-art", isAuthenticated, async (req: any, res) => {
+    // Circuit breaker timeout guard
+    let timeoutId: NodeJS.Timeout | undefined;
+    let isTimedOut = false;
+    
     try {
       const { sessionId, audioAnalysis, musicInfo, preferences, previousVotes, idempotencyKey } = req.body;
 
       // Get userId from authenticated user
       const userId = req.user.claims.sub;
+      
+      // Check circuit breaker state before attempting generation
+      const breakerState = generationHealthService.getBreakerState();
+      if (breakerState === 'open') {
+        console.log('[Generate] Circuit breaker is open - returning service unavailable');
+        telemetryService.recordEvent({
+          event: 'generation_rejected_breaker_open',
+          category: 'generation',
+          severity: 'warning',
+          userId,
+          sessionId
+        });
+        return res.status(503).json({ 
+          message: "Generation service is temporarily unavailable. Please try again later.",
+          retryAfter: 30
+        });
+      }
+      
+      // Get adaptive timeout from circuit breaker
+      const timeout = generationHealthService.getTimeout();
+      console.log(`[Generate] Using adaptive timeout: ${timeout}ms for generation (breaker state: ${breakerState})`);
+      
+      // Set timeout to cancel generation if it takes too long
+      timeoutId = setTimeout(() => {
+        isTimedOut = true;
+        console.log(`[Generate] Timeout reached (${timeout}ms) - marking as timed out`);
+        
+        // Record timeout with telemetry
+        telemetryService.recordEvent({
+          event: 'generation_timeout',
+          category: 'generation',
+          severity: 'error',
+          userId,
+          sessionId,
+          metrics: {
+            timeout_ms: timeout,
+            breaker_state: breakerState
+          }
+        });
+        
+        // Report failure to circuit breaker
+        generationHealthService.recordFailure();
+        
+        if (!res.headersSent) {
+          res.status(504).json({ 
+            message: "Generation request timed out. Please try again.",
+            retryAfter: 5
+          });
+        }
+      }, timeout);
       
       // IDEMPOTENCY: Check for duplicate requests
       if (idempotencyKey) {
@@ -986,6 +1040,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const cached = await recentlyServedCache.get(cacheKey);
         if (cached) {
           console.log(`[IdempotencyKey] Returning cached response for key: ${idempotencyKey}`);
+          clearTimeout(timeoutId);
           return res.json(JSON.parse(cached));
         }
       }
@@ -1087,10 +1142,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         previousVotes: previousVotes || [],
       });
 
+      // Check if we've timed out before starting generation
+      if (isTimedOut) {
+        console.log('[Generate] Aborting - request already timed out');
+        return;
+      }
+      
       // Generate image using DALL-E
       console.log('[ArtGeneration] 🎨 Generating image with DALL-E...');
+      const generationStart = Date.now();
       const dalleUrl = await generateArtImage(result.prompt);
-      console.log('[ArtGeneration] ✅ DALL-E generation complete:', dalleUrl);
+      const generationDuration = Date.now() - generationStart;
+      console.log('[ArtGeneration] ✅ DALL-E generation complete in', generationDuration, 'ms:', dalleUrl);
+      
+      // Record success with circuit breaker
+      if (!isTimedOut) {
+        generationHealthService.recordSuccess(generationDuration);
+      }
       
       // Store image permanently in object storage with verification
       // CRITICAL: This must succeed - no fallback to temporary DALL-E URLs
@@ -1152,9 +1220,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.log(`[IdempotencyKey] Cached response for key: ${idempotencyKey}`);
       }
 
+      // Clear timeout on successful completion
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      
       res.json(response);
     } catch (error: any) {
+      // Clear timeout on error
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      
+      // Don't send duplicate response if we already timed out
+      if (isTimedOut) {
+        console.log('[Generate] Request already timed out, not sending error response');
+        return;
+      }
+      
       console.error("Error generating art:", error);
+      
+      // Report failure to circuit breaker (unless it was a client error)
+      if (!error.message?.includes('400') && !error.message?.includes('401')) {
+        generationHealthService.recordFailure();
+      }
+      
       res.status(500).json({ message: "Failed to generate artwork: " + error.message });
     }
   });
@@ -1796,6 +1886,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Health check
   app.get("/api/health", (req, res) => {
     res.json({ status: "healthy", timestamp: new Date().toISOString() });
+  });
+  
+  // Circuit breaker state endpoint - used by client for adaptive retry
+  app.get("/api/health/circuit-breaker-state", (req, res) => {
+    const state = generationHealthService.getBreakerState();
+    const metrics = generationHealthService.getMetrics();
+    const timeout = generationHealthService.getTimeout();
+    const shouldAttempt = generationHealthService.shouldAttemptGeneration();
+    
+    res.json({
+      state,
+      shouldAttempt,
+      timeout,
+      metrics: {
+        consecutiveFailures: metrics.consecutiveFailures,
+        successRate: metrics.successRate,
+        p50Latency: metrics.p50Latency,
+        p95Latency: metrics.p95Latency,
+        p99Latency: metrics.p99Latency,
+        totalSuccesses: metrics.totalSuccesses,
+        totalTimeouts: metrics.totalTimeouts,
+      },
+      timestamp: new Date().toISOString(),
+    });
   });
 
   // Storage health monitoring endpoint
