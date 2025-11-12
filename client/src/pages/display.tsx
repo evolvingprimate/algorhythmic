@@ -1650,7 +1650,8 @@ export default function Display() {
       const readyStartTime = Date.now();
       
       while (Date.now() - readyStartTime < maxWait) {
-        if (rendererRef.current?.isFrameReady(frameId)) {
+        // FIX: Pass full imageUrl instead of just frameId for cache lookup
+        if (rendererRef.current?.isFrameReady(artwork.imageUrl)) {
           console.log(`[WebSocket] ✅ Texture ready in ${Date.now() - readyStartTime}ms`);
           break;
         }
@@ -1659,7 +1660,8 @@ export default function Display() {
       }
       
       const waitDuration = Date.now() - readyStartTime;
-      const timedOut = !rendererRef.current?.isFrameReady(frameId);
+      // FIX: Pass full imageUrl instead of just frameId for cache lookup
+      const timedOut = !rendererRef.current?.isFrameReady(artwork.imageUrl);
       
       if (timedOut) {
         console.warn(`[WebSocket] ⚠️ Texture not ready after ${maxWait}ms timeout - proceeding anyway (JIT fallback)`);

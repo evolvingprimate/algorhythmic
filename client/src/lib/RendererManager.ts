@@ -391,20 +391,21 @@ export class RendererManager {
       return;
     }
     
-    // Skip if already prewarmed
-    if (this.prewarmCache.has(frameId)) {
+    // FIX: Use imageUrl as cache key for consistency, not frameId
+    // This ensures we can retrieve prewarmed images correctly in render()
+    if (this.prewarmCache.has(imageUrl)) {
       return;
     }
     
     try {
-      console.log(`[RendererManager] 🔥 Prewarming frame: ${frameId}`);
+      console.log(`[RendererManager] 🔥 Prewarming frame: ${frameId} (URL: ${imageUrl})`);
       const startTime = performance.now();
       
       // Load and decode image
       const img = await this.loadImage(imageUrl);
       
-      // Mark as prewarmed (texture upload happens in render loop)
-      this.prewarmCache.set(frameId, {
+      // FIX: Store by imageUrl instead of frameId to match render() retrieval
+      this.prewarmCache.set(imageUrl, {
         image: img,
         textureReady: false,
         timestamp: Date.now(),
@@ -429,9 +430,16 @@ export class RendererManager {
   
   /**
    * BUG FIX: Check if frame is ready for display (prewarmed + texture uploaded)
+   * Now accepts imageUrl instead of frameId for consistency
    */
-  isFrameReady(frameId: string): boolean {
-    const cached = this.prewarmCache.get(frameId);
+  isFrameReady(imageUrlOrFrameId: string): boolean {
+    // Check both imageUrl and frameId for backward compatibility
+    let cached = this.prewarmCache.get(imageUrlOrFrameId);
+    if (!cached) {
+      // If not found by full URL, try extracting frameId and checking
+      const frameId = imageUrlOrFrameId.split('/').pop() || imageUrlOrFrameId;
+      cached = this.prewarmCache.get(frameId);
+    }
     return cached !== undefined && cached.textureReady;
   }
   
@@ -538,8 +546,9 @@ export class RendererManager {
       let imgA: HTMLImageElement;
       let imgB: HTMLImageElement;
       
-      const prewarmA = this.prewarmCache.get(frameIdA);
-      const prewarmB = this.prewarmCache.get(frameIdB);
+      // FIX: Use full imageUrl as cache key, not frameId
+      const prewarmA = this.prewarmCache.get(imageUrlA);
+      const prewarmB = this.prewarmCache.get(imageUrlB);
       
       if (prewarmA) {
         imgA = prewarmA.image;
@@ -613,19 +622,23 @@ export class RendererManager {
   
   private async loadImage(url: string): Promise<HTMLImageElement> {
     if (this.imageCache.has(url)) {
+      console.log(`[RendererManager] ✅ Image cache hit: ${url}`);
       return this.imageCache.get(url)!;
     }
     
+    console.log(`[RendererManager] 📥 Loading image: ${url}`);
     return new Promise((resolve, reject) => {
       const img = new Image();
       img.crossOrigin = 'anonymous';
       
       img.onload = () => {
+        console.log(`[RendererManager] ✅ Image loaded successfully: ${url}, dimensions: ${img.width}x${img.height}`);
         this.imageCache.set(url, img);
         resolve(img);
       };
       
-      img.onerror = () => {
+      img.onerror = (error) => {
+        console.error(`[RendererManager] ❌ Failed to load image: ${url}`, error);
         reject(new Error(`Failed to load image: ${url}`));
       };
       
