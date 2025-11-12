@@ -11,6 +11,7 @@ import { QueueService } from "./queue-service";
 import { storage } from "./storage";
 import { PoolMonitor } from "./pool-monitor";
 import { setPoolMonitor } from "./fallback-service";
+import { initializePredictiveEngine, PredictiveEngine } from "./predictive-engine";
 
 // Create concrete instances in the correct order
 
@@ -100,7 +101,10 @@ poolMonitor.on('emergency-generation', async (requests) => {
   }
 });
 
-// 9. Start recovery manager monitoring, queue worker, and pool monitor
+// 9. Initialize predictive engine after queue service is created
+const predictiveEngine = initializePredictiveEngine(storage, queueService, poolMonitor);
+
+// 10. Start recovery manager monitoring, queue worker, and pool monitor
 recoveryManager.startMonitoring();
 queueService.startWorker();
 poolMonitor.startMonitoring();
@@ -112,7 +116,8 @@ export {
   recoveryManager,
   queueController,
   queueService,
-  poolMonitor
+  poolMonitor,
+  predictiveEngine
 };
 
 // Export individual functions for backward compatibility

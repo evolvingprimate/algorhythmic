@@ -4,7 +4,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { raw } from "express";
 import Stripe from "stripe";
 import { storage } from "./storage";
-import { generateArtPrompt, generateArtImage, queueController, generationHealthService, recoveryManager, queueService, poolMonitor } from "./bootstrap";
+import { generateArtPrompt, generateArtImage, queueController, generationHealthService, recoveryManager, queueService, poolMonitor, predictiveEngine } from "./bootstrap";
 import { identifyMusic } from "./music-service";
 import { insertArtVoteSchema, insertArtPreferenceSchema, type AudioAnalysis, type MusicIdentification, telemetryEvents } from "@shared/schema";
 import { and, sql } from "drizzle-orm";
@@ -778,6 +778,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(preferences);
     } catch (error: any) {
       res.status(400).json({ message: error.message });
+    }
+  });
+
+  // Save authenticated user preferences with pre-generation trigger
+  app.post("/api/preferences/styles", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { sessionId, styles = [], artists = [], dynamicMode = false } = req.body;
+
+      // Save preferences
+      const preferences = await storage.saveArtPreferences(userId, {
+        styles,
+        artists,
+        dynamicMode
+      });
+
+      // Trigger pre-generation based on style preferences
+      if (styles.length > 0) {
+        await predictiveEngine.handleStylePreferenceUpdate(
+          userId,
+          sessionId || `session_${userId}_${Date.now()}`,
+          styles,
+          artists
+        );
+      }
+
+      res.json(preferences);
+    } catch (error: any) {
+      console.error("Error saving user preferences:", error);
+      res.status(500).json({ message: error.message });
     }
   });
 
@@ -1667,6 +1697,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Authenticated music identification with pre-generation trigger
+  app.post("/api/identify-music/authenticated", 
+    isAuthenticated,
+    raw({ type: 'audio/*', limit: '10mb' }), 
+    async (req: any, res) => {
+      try {
+        if (!req.body || !Buffer.isBuffer(req.body)) {
+          return res.status(400).json({ message: "Invalid audio data" });
+        }
+
+        const userId = req.user.claims.sub;
+        const musicInfo = await identifyMusic(req.body);
+        
+        // Extract genre information and trigger pre-generation
+        if (musicInfo && musicInfo.genre) {
+          const sessionId = req.headers['x-session-id'] || `session_${userId}_${Date.now()}`;
+          
+          await predictiveEngine.handleMusicGenreDetection(
+            userId,
+            sessionId,
+            musicInfo.genre,
+            musicInfo.artist
+          );
+        }
+        
+        res.json({ musicInfo });
+      } catch (error: any) {
+        console.error("Error identifying music:", error);
+        res.status(500).json({ message: "Failed to identify music: " + error.message });
+      }
+  });
+
   // Submit vote
   app.post("/api/vote", validations.vote, async (req, res) => {
     try {
@@ -1675,6 +1737,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(vote);
     } catch (error: any) {
       res.status(400).json({ message: error.message });
+    }
+  });
+
+  // Authenticated vote endpoint with pre-generation trigger
+  app.post("/api/artworks/vote", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { artworkId, vote, sessionId } = req.body;
+
+      // Validate vote value
+      if (vote !== 1 && vote !== -1 && vote !== 0) {
+        return res.status(400).json({ message: "Invalid vote value. Must be 1, -1, or 0" });
+      }
+
+      // Save the vote
+      const voteRecord = await storage.createVote({
+        sessionId: sessionId || `session_${userId}_${Date.now()}`,
+        artworkId,
+        vote
+      });
+
+      // Trigger pre-generation on upvote
+      if (vote === 1) {
+        await predictiveEngine.handlePositiveVote(
+          userId,
+          sessionId || `session_${userId}_${Date.now()}`,
+          artworkId
+        );
+      }
+
+      res.json(voteRecord);
+    } catch (error: any) {
+      console.error("Error submitting vote:", error);
+      res.status(500).json({ message: error.message });
     }
   });
 
@@ -2018,6 +2114,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         artists: [],
         dynamicMode: false,
       };
+
+      // Trigger session-based pre-generation for new sessions
+      await predictiveEngine.handleSessionStart(userId, sessionId);
       
       // Step 3: Find warm-start candidate from pool using ImagePool service
       const { ImagePoolService } = await import('./services/imagePool');
