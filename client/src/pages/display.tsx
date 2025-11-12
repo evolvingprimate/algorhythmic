@@ -1449,7 +1449,7 @@ export default function Display() {
       // Log network changes
       if (status.online) {
         console.log(`[Display] Network status: ${status.quality} (downlink: ${status.downlink}Mbps, rtt: ${status.rtt}ms)`);
-        toast.success(`Connection restored (${status.quality})`, { duration: 2000 });
+        toast({ title: `Connection restored (${status.quality})`, duration: 2000 });
         
         // Immediately refetch when coming back online
         if (!networkStatus.online) {
@@ -1457,7 +1457,7 @@ export default function Display() {
         }
       } else {
         console.log('[Display] Network offline');
-        toast.error('Connection lost', { duration: 3000 });
+        toast({ title: 'Connection lost', variant: "destructive", duration: 3000 });
       }
     });
     
@@ -1477,9 +1477,9 @@ export default function Display() {
             console.log(`[Display] Circuit breaker state: ${data.state}`);
             
             if (data.state === 'open') {
-              toast.warning('Generation service is experiencing issues', { duration: 5000 });
+              toast({ title: 'Generation service is experiencing issues', duration: 5000 });
             } else if (data.state === 'half-open') {
-              toast.info('Generation service is recovering', { duration: 3000 });
+              toast({ title: 'Generation service is recovering', duration: 3000 });
             }
           }
         }

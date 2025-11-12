@@ -2250,7 +2250,13 @@ export class PostgresStorage implements IStorage {
       return;
     }
 
-    await this.db.insert(telemetryEvents).values(events);
+    // Ensure all events have eventData (default to empty object if missing)
+    const validatedEvents = events.map(event => ({
+      ...event,
+      eventData: event.eventData || '{}'
+    }));
+
+    await this.db.insert(telemetryEvents).values(validatedEvents);
   }
 
   async getTelemetryEventsSince(cutoffTime: Date): Promise<TelemetryEvent[]> {

@@ -120,10 +120,14 @@ export function configureHelmet() {
 /**
  * Configure rate limiting for API endpoints
  * Different limits for different types of endpoints
+ * Relaxed limits for development/testing environments
  */
+const isDevelopment = process.env.NODE_ENV !== 'production';
+const isTest = process.env.NODE_ENV === 'test' || process.env.TEST_SERVICE_TOKEN;
+
 export const generalRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
+  max: isDevelopment || isTest ? 1000 : 100, // Relaxed in dev/test: 1000 requests per 15 min
   message: 'Too many requests from this IP, please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
@@ -137,21 +141,21 @@ export const generalRateLimit = rateLimit({
     });
     res.status(429).json({
       error: 'Too many requests',
-      retryAfter: 900 // seconds
+      retryAfter: isDevelopment || isTest ? 60 : 900 // 60s in dev/test, 900s in prod
     });
   }
 });
 
 export const generationRateLimit = rateLimit({
   windowMs: 5 * 60 * 1000, // 5 minutes
-  max: 10, // Limit each IP to 10 generation requests per 5 minutes
+  max: isDevelopment || isTest ? 50 : 10, // Relaxed in dev/test: 50 requests per 5 min
   message: 'Too many generation requests, please slow down.',
   skipSuccessfulRequests: false
 });
 
 export const authRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // Limit each IP to 5 auth attempts per 15 minutes
+  max: isDevelopment || isTest ? 20 : 5, // Relaxed in dev/test: 20 attempts per 15 min
   skipSuccessfulRequests: false
 });
 

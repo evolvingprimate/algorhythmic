@@ -914,7 +914,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Events array is required" });
       }
       
-      await storage.createTelemetryEvents(events);
+      // Validate and normalize each event before inserting
+      const validatedEvents = events.map(event => ({
+        ...event,
+        eventData: event.eventData ? 
+          (typeof event.eventData === 'string' ? event.eventData : JSON.stringify(event.eventData)) : 
+          '{}' // Default to empty JSON object if missing
+      }));
+      
+      await storage.createTelemetryEvents(validatedEvents);
       res.json({ success: true, count: events.length });
     } catch (error: any) {
       console.error("Error inserting telemetry events:", error);
@@ -1218,15 +1226,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }, timeout);
       
-      // IDEMPOTENCY: Check for duplicate requests
+      // IDEMPOTENCY: Check for duplicate requests (temporarily disabled - cache doesn't have get method)
+      // TODO: Implement proper idempotency cache with get/set methods
       if (idempotencyKey) {
-        const cacheKey = `idempotency:${userId}:${idempotencyKey}`;
-        const cached = await recentlyServedCache.get(cacheKey);
-        if (cached) {
-          console.log(`[IdempotencyKey] Returning cached response for key: ${idempotencyKey}`);
-          clearTimeout(timeoutId);
-          return res.json(JSON.parse(cached));
-        }
+        // For now, skip idempotency check since recentlyServedCache doesn't have a get() method
+        // This was causing TypeError: recentlyServedCache.get is not a function
+        console.log(`[IdempotencyKey] Skipping check for key: ${idempotencyKey} (cache method not available)`);
       }
 
       // TEMPORARILY DISABLED: Check daily limit
