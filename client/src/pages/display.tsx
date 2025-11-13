@@ -512,8 +512,8 @@ function DisplayContent() {
     }
   }, [unseenResponse?.artworks, pinnedArtwork]);
 
-  // First-Time Setup Wizard: Check if user has preferences
-  // PROGRESSIVE ENHANCEMENT: Use server's onboardingState as primary source of truth
+  // Session-Based Style Selection: Always show style selector each session
+  // Every user (new and returning) must select styles when the app opens
   useEffect(() => {
     // CRITICAL: Handle loading and error states to prevent blank screen
     if (isLoadingPreferences) {
@@ -527,67 +527,28 @@ function DisplayContent() {
       return;
     }
     
-    // Primary: Use server's onboardingState if available (progressive enhancement)
-    const serverOnboardingState = unseenResponse?.onboardingState;
-    if (serverOnboardingState === 'incomplete' && setupStep === SetupStep.IDLE) {
-      console.log('[Display] Server indicates incomplete onboarding - ready for wizard');
-      // Don't auto-advance - let user click "Start Creating"
-      setSetupComplete(false); // Local flag for UI state
-      return;
-    }
-    
-    // Server says complete - use styles from server response (includes defaults)
-    if (serverOnboardingState === 'complete') {
-      console.log('[Display] Server indicates complete onboarding - using server styles');
-      // Use styles from server (which includes defaults if no preferences)
-      if (unseenResponse?.selectedStyles) {
-        setSelectedStyles(unseenResponse.selectedStyles);
-      } else if (preferences?.styles) {
-        // Fallback to local preferences if server didn't send styles
-        setSelectedStyles(preferences.styles);
-      }
-      if (preferences?.dynamicMode !== undefined) {
-        setDynamicMode(preferences.dynamicMode);
-      }
-      setSetupComplete(true); // Enable local UI features
-      return;
-    }
-    
-    // Fallback: Use local preferences check if server state not available yet
-    if (!serverOnboardingState) {
-      if (preferencesError) {
-        // Preferences query failed - show wizard as fallback and warn user
-        console.error('[Display] Failed to load preferences - ready for wizard');
-        toast({
-          title: "Preferences Unavailable",
-          description: "Couldn't load your saved preferences. You can select new ones now.",
-          variant: "default",
-        });
-        if (setupStep === SetupStep.IDLE) {
-          // Don't auto-advance - let user click "Start Creating"
-          setSetupComplete(false);
-        }
-        return;
-      }
+    // SESSION-BASED SELECTION: Always start with style selector on mount
+    // Both new and returning users must select styles each session
+    if (setupStep === SetupStep.IDLE && !setupComplete) {
+      console.log('[Display] Starting session-based style selection');
+      setSetupStep(SetupStep.STYLE); // Always start with style selector
+      wizardActiveRef.current = true; // Latch wizard state
+      setSetupComplete(false); // Not complete until user goes through selection
       
-      // Check local preferences
-      if (!preferences || !preferences.styles?.length) {
-        if (setupStep === SetupStep.IDLE) {
-          console.log('[Display] No preferences found locally - ready for wizard');
-          // Don't auto-advance - let user click "Start Creating"
-          setSetupComplete(false);
-        }
-      } else {
-        // Has local preferences
-        console.log('[Display] Loading local preferences');
-        setSelectedStyles(preferences.styles);
-        if (preferences.dynamicMode !== undefined) {
-          setDynamicMode(preferences.dynamicMode);
-        }
-        setSetupComplete(true);
+      // Load any previous preferences as suggestions (but still require selection)
+      if (preferences?.styles) {
+        console.log('[Display] Loading previous preferences as suggestions');
+        // Don't auto-apply them - let user see and confirm/change them in the selector
       }
+      return;
     }
-  }, [preferences, isLoadingPreferences, preferencesError, setupStep, unseenResponse?.onboardingState]);
+    
+    // If setup is already complete this session, don't restart
+    if (setupComplete) {
+      console.log('[Display] Session setup already complete - using selected styles');
+      return;
+    }
+  }, [preferences, isLoadingPreferences, preferencesError, setupStep, setupComplete]);
 
   // Cleanup on unmount to prevent modal persistence
   useEffect(() => {
