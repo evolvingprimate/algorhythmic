@@ -959,11 +959,8 @@ function DisplayContent() {
       return;
     }
     
-    // CRITICAL: Don't start loading artwork until setup is complete
-    if (!setupComplete) {
-      console.log(`[Display] ⏸️ Skipping artwork loading - setup not complete`);
-      return;
-    }
+    // REMOVED: Wizard-blocking logic - allow artworks to load immediately when available
+    // The wizard will update preferences asynchronously without blocking display
     
     if (mergedArtworks && mergedArtworks.length > 0 && morphEngineRef.current.getFrameCount() === 0) {
       // Load and VALIDATE frames asynchronously
