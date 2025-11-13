@@ -12,6 +12,7 @@ import { storage } from "./storage";
 import { PoolMonitor } from "./pool-monitor";
 import { setPoolMonitor } from "./fallback-service";
 import { initializePredictiveEngine, PredictiveEngine } from "./predictive-engine";
+import { CreditController } from "./generation/creditController";
 
 // Create concrete instances in the correct order
 
@@ -21,38 +22,41 @@ const generationHealthService = new GenerationHealthService();
 // 2. Create OpenAIService with health service injected
 const openAIService = new OpenAIService(generationHealthService);
 
-// 3. Create RecoveryManager with health service and generateArtImage function
+// 3. Create CreditController with storage
+const creditController = new CreditController(storage);
+
+// 4. Create RecoveryManager with health service and generateArtImage function
 const recoveryManager = new RecoveryManager(
   generationHealthService,
   (prompt, options) => openAIService.generateArtImage(prompt, options)
 );
 
-// 4. Create QueueController with health service and recovery manager
+// 5. Create QueueController with health service and recovery manager
 const queueController = new QueueController(
   generationHealthService,
   recoveryManager
 );
 
-// 5. Create QueueService for async DALL-E job processing
+// 6. Create QueueService for async DALL-E job processing with proper CreditController
 const queueService = new QueueService(
   storage,
   generationHealthService,
-  openAIService as any, // Using as CreditController placeholder
+  creditController,
   (params: any) => openAIService.generateArtPrompt(params),
   (prompt: string, options?: any) => openAIService.generateArtImage(prompt, options)
 );
 
-// 6. Create PoolMonitor for real-time pool tracking
+// 7. Create PoolMonitor for real-time pool tracking with CreditController
 const poolMonitor = new PoolMonitor(
   storage,
-  generationHealthService
-  // Credit controller is optional, can be added later when implemented
+  generationHealthService,
+  creditController
 );
 
-// 7. Wire up pool monitor with fallback service
+// 8. Wire up pool monitor with fallback service
 setPoolMonitor(poolMonitor);
 
-// 8. Set up pool monitor event listeners for pre-generation
+// 9. Set up pool monitor event listeners for pre-generation
 poolMonitor.on('pre-generation', async (requests) => {
   console.log('[Bootstrap] Pre-generation triggered:', requests.length, 'requests');
   for (const request of requests) {
