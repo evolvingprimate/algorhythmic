@@ -17,8 +17,8 @@ import type { IStorage } from "./storage";
 import type { GenerationHealthPort } from "./types/generation-ports";
 import type { CreditController } from "./generation/creditController";
 import { telemetryService } from "./telemetry-service";
-import { generateArtPrompt, generateArtImage } from "./openai-service";
 import { wsSequence } from "./websocket-sequence";
+import { createDefaultAudioAnalysis } from "./generation/audioAnalyzer";
 
 // Job status enum
 export const JOB_STATUS = {
@@ -70,12 +70,22 @@ export class QueueService {
   private activeJobs = new Map<string, Promise<void>>();
   private pollInterval: NodeJS.Timeout | null = null;
   private backoffDelay = WORKER_CONFIG.INITIAL_BACKOFF;
+  
+  // Injected generation functions
+  private generateArtPrompt: (params: any) => Promise<any>;
+  private generateArtImage: (prompt: string, options?: any) => Promise<string>;
 
   constructor(
     private storage: IStorage,
     private generationHealth: GenerationHealthPort,
-    private creditController: CreditController
-  ) {}
+    private creditController: CreditController,
+    generateArtPrompt: (params: any) => Promise<any>,
+    generateArtImage: (prompt: string, options?: any) => Promise<string>
+  ) {
+    // Store the injected functions
+    this.generateArtPrompt = generateArtPrompt;
+    this.generateArtImage = generateArtImage;
+  }
 
   /**
    * Enqueue a new generation job
@@ -416,7 +426,7 @@ export class QueueService {
         }
         
         // Generate art prompt
-        const promptResult = await generateArtPrompt({
+        const promptResult = await this.generateArtPrompt({
           audioAnalysis: audioAnalysis,
           musicInfo: payload.musicInfo,
           styles: payload.styles,
@@ -431,7 +441,7 @@ export class QueueService {
 
         try {
           // Generate image
-          const imageUrl = await generateArtImage(promptResult.prompt);
+          const imageUrl = await this.generateArtImage(promptResult.prompt);
           
           // Mark job as successful
           const latency = Date.now() - generationStartTime;

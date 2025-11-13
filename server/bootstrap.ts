@@ -37,7 +37,9 @@ const queueController = new QueueController(
 const queueService = new QueueService(
   storage,
   generationHealthService,
-  openAIService
+  openAIService as any, // Using as CreditController placeholder
+  (params: any) => openAIService.generateArtPrompt(params),
+  (prompt: string, options?: any) => openAIService.generateArtImage(prompt, options)
 );
 
 // 6. Create PoolMonitor for real-time pool tracking
