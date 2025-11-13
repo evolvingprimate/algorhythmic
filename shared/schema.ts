@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, timestamp, boolean, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, timestamp, boolean, index, uniqueIndex, numeric } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -44,7 +44,7 @@ export const artSessions = pgTable("art_sessions", {
   isSaved: boolean("is_saved").notNull().default(false),
   // ImagePool metadata (optional fields for hybrid gen+retrieve system)
   motifs: text("motifs").array().default(sql`'{}'::text[]`), // Extracted visual themes: ["bell", "storm", "silhouette"]
-  qualityScore: integer("quality_score").default(50), // 0-100 aesthetic score (default 50)
+  qualityScore: numeric("quality_score", { precision: 3, scale: 1 }).default("50.0"), // 0.0-100.0 aesthetic score (default 50.0)
   perceptualHash: varchar("perceptual_hash"), // pHash/dHash for deduplication
   poolStatus: varchar("pool_status").default("active"), // active, archived, pending
   lastUsedAt: timestamp("last_used_at"), // For LRU eviction
