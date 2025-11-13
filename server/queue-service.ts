@@ -63,13 +63,25 @@ const WORKER_CONFIG = {
   BACKOFF_MULTIPLIER: 2,
   LOCK_TIMEOUT: 60000, // 60 seconds to process a job
   BATCH_SIZE: 5, // Number of jobs to fetch per poll
+  MAX_CONCURRENT_PREGEN: 1, // Max concurrent pre-generation jobs
 };
+
+// Priority levels for different job types
+export const JOB_PRIORITY = {
+  LIVE_USER: 100,      // User-requested generation
+  FRESH_PREGEN: 10,    // Recent style pre-generation
+  STALE_PREGEN: -10,   // Older pre-generation
+} as const;
 
 export class QueueService {
   private isRunning = false;
   private activeJobs = new Map<string, Promise<void>>();
   private pollInterval: NodeJS.Timeout | null = null;
   private backoffDelay = WORKER_CONFIG.INITIAL_BACKOFF;
+  
+  // Track active job types separately
+  private activeLiveJobs = 0;
+  private activePreGenJobs = 0;
   
   // Injected generation functions
   private generateArtPrompt: (params: any) => Promise<any>;
@@ -93,9 +105,14 @@ export class QueueService {
   async enqueueJob(
     userId: string,
     payload: JobPayload,
-    priority: number = 0
+    priority?: number
   ): Promise<string> {
     try {
+      // Default priority based on job type
+      if (priority === undefined) {
+        priority = payload.isPreGeneration ? JOB_PRIORITY.STALE_PREGEN : JOB_PRIORITY.LIVE_USER;
+      }
+      
       // Create job record
       const job = await this.storage.createGenerationJob({
         userId,
@@ -185,7 +202,7 @@ export class QueueService {
         };
         
         // Use lower priority for pre-generation
-        const jobId = await this.enqueueJob(userId, payload, -10);
+        const jobId = await this.enqueueJob(userId, payload, JOB_PRIORITY.FRESH_PREGEN);
         jobIds.push(jobId);
       }
       
@@ -339,19 +356,45 @@ export class QueueService {
 
       console.log(`[QueueService] Found ${jobs.length} pending jobs`);
       
-      // Process jobs concurrently
+      // Process jobs concurrently with type-based limits
       for (const job of jobs) {
         if (this.activeJobs.size >= WORKER_CONFIG.MAX_CONCURRENT_JOBS) {
-          break; // Max concurrency reached
+          break; // Max total concurrency reached
+        }
+
+        // Parse payload to check if pre-generation
+        const payload = typeof job.payload === 'string' 
+          ? JSON.parse(job.payload)
+          : job.payload;
+        
+        // Apply type-specific concurrency limits
+        if (payload.isPreGeneration) {
+          if (this.activePreGenJobs >= WORKER_CONFIG.MAX_CONCURRENT_PREGEN) {
+            console.log(`[QueueService] Skipping pre-gen job ${job.id} - max pre-gen concurrency reached`);
+            continue; // Skip this pre-gen job for now
+          }
         }
 
         // Start processing job
         const processingPromise = this.processJob(job)
           .finally(() => {
             this.activeJobs.delete(job.id);
+            // Update type-specific counters
+            if (payload.isPreGeneration) {
+              this.activePreGenJobs--;
+            } else {
+              this.activeLiveJobs--;
+            }
           });
 
         this.activeJobs.set(job.id, processingPromise);
+        
+        // Update type-specific counters
+        if (payload.isPreGeneration) {
+          this.activePreGenJobs++;
+        } else {
+          this.activeLiveJobs++;
+        }
       }
     } catch (error) {
       console.error('[QueueService] Poll and process error:', error);
@@ -375,17 +418,55 @@ export class QueueService {
     try {
       console.log(`[QueueService] Processing job ${job.id}`);
       
+      // Parse payload first to check if it's pre-generation
+      const payload: JobPayload = typeof job.payload === 'string' 
+        ? JSON.parse(job.payload)
+        : job.payload;
+      
+      // CHECK FOR STALE PRE-GENERATION JOBS
+      if (payload.isPreGeneration) {
+        const jobAge = Date.now() - new Date(job.createdAt).getTime();
+        const MAX_PRE_GEN_AGE = 30000; // 30 seconds
+        
+        if (jobAge > MAX_PRE_GEN_AGE) {
+          console.log(`[QueueService] Dropping stale pre-generation job ${job.id}, age: ${jobAge}ms`);
+          
+          // Mark as expired instead of processing
+          await this.storage.updateJobStatus(
+            job.id,
+            JOB_STATUS.DEAD_LETTER,
+            { 
+              errorMessage: 'Pre-generation job expired',
+              metadata: JSON.stringify({ 
+                expiredAt: new Date().toISOString(),
+                ageMs: jobAge,
+                reason: 'stale_pregen'
+              })
+            }
+          );
+          
+          telemetryService.recordEvent({
+            event: 'pre_gen_job_expired',
+            category: 'queue',
+            severity: 'info',
+            metrics: {
+              jobId: job.id,
+              userId: job.userId,
+              ageMs: jobAge,
+              styleKeys: payload.styles
+            }
+          });
+          
+          return; // Skip processing this expired job
+        }
+      }
+      
       // Atomically update job status to processing
       const acquired = await this.storage.acquireJobLock(job.id, job.version);
       if (!acquired) {
         console.log(`[QueueService] Failed to acquire lock for job ${job.id}`);
         return; // Another worker got this job
       }
-
-      // Parse payload - it might already be an object or a string
-      const payload: JobPayload = typeof job.payload === 'string' 
-        ? JSON.parse(job.payload)
-        : job.payload;
 
       // Check user credits
       const creditsCheck = await this.storage.getCreditsContext(job.userId);
@@ -637,13 +718,19 @@ export class QueueService {
   getMetrics(): {
     isRunning: boolean;
     activeJobs: number;
+    activeLiveJobs: number;
+    activePreGenJobs: number;
     maxConcurrent: number;
+    maxConcurrentPreGen: number;
     backoffDelay: number;
   } {
     return {
       isRunning: this.isRunning,
       activeJobs: this.activeJobs.size,
+      activeLiveJobs: this.activeLiveJobs,
+      activePreGenJobs: this.activePreGenJobs,
       maxConcurrent: WORKER_CONFIG.MAX_CONCURRENT_JOBS,
+      maxConcurrentPreGen: WORKER_CONFIG.MAX_CONCURRENT_PREGEN,
       backoffDelay: this.backoffDelay,
     };
   }

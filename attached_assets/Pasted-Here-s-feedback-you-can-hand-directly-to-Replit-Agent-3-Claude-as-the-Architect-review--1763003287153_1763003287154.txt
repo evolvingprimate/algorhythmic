@@ -1,0 +1,381 @@
+Here’s feedback you can hand directly to Replit Agent 3 / Claude as “the Architect review.”
+
+---
+
+### 🔍 Overall Assessment
+
+Architect, the root-cause analysis is solid: this is a **self-inflicted DoS** via aggressive pre-generation with no backpressure. The proposal is on the right track, but a few key refinements will make it more robust, easier to reason about, and less likely to regress:
+
+* Separate **queue admission control** from **generation timeouts**
+* Make pre-generation strictly **opportunistic** and **bounded**
+* Harden the **timeout model** so it protects the system instead of masking congestion
+* Tighten **state tracking** to avoid “stuck in backoff forever” behavior
+
+Below is detailed, code-level feedback.
+
+---
+
+## 1. Clarify the Failure Mode in the Model
+
+Right now you’re treating all timeouts as “generation” timeouts, but the report itself says many jobs **time out in the queue before they even touch DALL-E**.
+
+You should explicitly distinguish:
+
+1. **Queue wait timeout** – job sat in the queue too long before a worker picked it up
+2. **Generation timeout** – worker started DALL-E call, but it exceeded the API SLA
+
+This matters because the remediation paths differ:
+
+* Queue wait timeout → **admission control / pre-gen throttling / capacity**
+* Generation timeout → **per-job timeout / retries / provider health**
+
+👉 **Recommendation:**
+Add explicit fields to the job record:
+
+```ts
+type JobStatus = 'queued' | 'in_progress' | 'completed' | 'failed' | 'timed_out';
+
+type TimeoutOrigin = 'queue_wait' | 'generation';
+
+interface JobMeta {
+  createdAt: number;
+  startedAt?: number;
+  timedOutAt?: number;
+  timeoutOrigin?: TimeoutOrigin;
+  isPreGeneration?: boolean;
+  styleKey?: string;
+}
+```
+
+Then log/metric them separately so you can tell if future issues are queue-bound or provider-bound.
+
+---
+
+## 2. Pre-Generation Should Be Opportunistic, Not Persistent
+
+The **PoolMonitor** logic is the main offender. Right now, even with your changes, it still **polls on a timer** and triggers based on coverage in isolation.
+
+Instead, pre-gen should basically mean:
+
+> “If the system is healthy and idle enough, top up style pools a bit.”
+
+Concretely:
+
+* Only pre-gen when:
+
+  * `queueDepthLive == 0` and `queueDepthPreGen < PREGEN_MAX_QUEUE`
+  * `generation.timeout.rate` is below a threshold
+  * `cpu/load` and `memory` are not saturated (if you can measure this)
+
+### Suggested refinement to `PoolMonitor`
+
+Your pseudo-code is on the right track but needs a bit more structure and a proper decay for `recentTimeouts`:
+
+```ts
+class PoolMonitor {
+  private readonly MAX_CONCURRENT_PRE_GEN = 1;
+  private readonly MIN_INTERVAL_MS = 60000; // 60s
+  private readonly MIN_COVERAGE = 0.70;
+  private readonly MAX_QUEUE_DEPTH_PREGEN = 5;
+
+  private lastPreGenTime = 0;
+  private recentTimeoutEvents: number[] = []; // timestamps
+
+  recordTimeoutEvent() {
+    const now = Date.now();
+    this.recentTimeoutEvents.push(now);
+    // keep only the last 5 minutes of events
+    this.recentTimeoutEvents = this.recentTimeoutEvents.filter(
+      t => now - t < 5 * 60 * 1000
+    );
+  }
+
+  get recentTimeoutCount() {
+    return this.recentTimeoutEvents.length;
+  }
+
+  async checkPoolCoverage() {
+    const now = Date.now();
+
+    // 1) Respect recent timeout health
+    if (this.recentTimeoutCount > 3) {
+      console.log('[PoolMonitor] Skipping pre-gen due to recent timeouts');
+      return;
+    }
+
+    // 2) Respect global rate limit
+    if (now - this.lastPreGenTime < this.MIN_INTERVAL_MS) {
+      return;
+    }
+
+    const { coverage, deficit } = await this.getCoverage(); // compute coverage/deficit
+
+    // 3) Require meaningful deficit
+    if (coverage >= this.MIN_COVERAGE || deficit <= 0) {
+      return;
+    }
+
+    // 4) Check queue health before emitting
+    const { preGenQueueDepth, liveQueueDepth } = await this.queueService.getDepths();
+
+    if (liveQueueDepth > 0 || preGenQueueDepth >= this.MAX_QUEUE_DEPTH_PREGEN) {
+      console.log('[PoolMonitor] Skipping pre-gen due to queue depth');
+      return;
+    }
+
+    // 5) Emit a small, bounded pre-gen request
+    this.emit('pre-generation', {
+      count: Math.min(1, deficit),
+      priority: 'low'
+    });
+
+    this.lastPreGenTime = now;
+  }
+}
+```
+
+Key ideas:
+
+* **Decay-based timeout health** instead of a raw integer (`recentTimeouts`) that never resets.
+* Don’t just check coverage — also check **queue health** and **deficit**.
+* Pre-gen emits **tiny increments** and only when system is calm.
+
+---
+
+## 3. Queue Prioritization & Shaping
+
+Your `QueueService` modifications are directionally correct: prioritize live jobs and limit active pre-gen jobs. A few suggestions to make this more robust:
+
+### 3.1. Explicit Priority Queue
+
+Instead of requeueing pre-gen jobs manually, make `dequeuePrioritized()` understand priorities:
+
+```ts
+enum JobPriority {
+  LIVE = 100,
+  PREGEN = 10,
+}
+
+interface Job {
+  id: string;
+  priority: JobPriority;
+  metadata: JobMeta;
+}
+
+async dequeuePrioritized(): Promise<Job | null> {
+  // naive version; in practice you'd use a sorted structure in Redis/DB
+  const liveJob = await this.storage.dequeueHighestPriority(JobPriority.LIVE);
+  if (liveJob) return liveJob;
+
+  const preGenJob = await this.storage.dequeueHighestPriority(JobPriority.PREGEN);
+  return preGenJob;
+}
+```
+
+Then in `processQueue`:
+
+```ts
+class QueueService {
+  private activePreGenJobs = 0;
+  private activeLiveJobs = 0;
+  private readonly MAX_CONCURRENT_PREGEN = 1;
+  private readonly MAX_CONCURRENT_LIVE = 3; // or same as total if you only have 3 workers
+
+  async processQueue() {
+    const job = await this.dequeuePrioritized();
+    if (!job) return;
+
+    const isPreGen = job.metadata?.isPreGeneration === true;
+
+    if (isPreGen) {
+      if (this.activePreGenJobs >= this.MAX_CONCURRENT_PREGEN) {
+        await this.storage.requeueJob(job.id); // or delay/backoff
+        return;
+      }
+      this.activePreGenJobs++;
+    } else {
+      if (this.activeLiveJobs >= this.MAX_CONCURRENT_LIVE) {
+        await this.storage.requeueJob(job.id);
+        return;
+      }
+      this.activeLiveJobs++;
+    }
+
+    try {
+      const depth = await this.storage.getQueueDepth();
+      const timeout = await this.generationHealth.getAdaptiveTimeout(depth);
+
+      await this.executeWithTimeout(job, timeout);
+    } finally {
+      if (isPreGen) {
+        this.activePreGenJobs--;
+      } else {
+        this.activeLiveJobs--;
+      }
+    }
+  }
+}
+```
+
+**Goal:** live jobs never starve; pre-gen jobs cannot overrun worker capacity.
+
+### 3.2. Drop/Expire Stale Pre-Gen Jobs
+
+Pre-gen jobs are **nice-to-have**, not sacred. If they sit in the queue too long, they should **expire** instead of eventually executing:
+
+```ts
+const MAX_PREGEN_WAIT_MS = 30_000;
+
+if (job.metadata.isPreGeneration) {
+  const age = Date.now() - job.metadata.createdAt;
+  if (age > MAX_PREGEN_WAIT_MS) {
+    console.log('[QueueService] Dropping stale pre-gen job', job.id);
+    await this.storage.markDropped(job.id, 'stale_pregen');
+    return;
+  }
+}
+```
+
+This prevents old pre-gen jobs from clogging the system during recovery.
+
+---
+
+## 4. Adaptive Timeout: Don’t Just Increase the Ceiling
+
+Your `GenerationHealthService` is a good start, but a naive linear increase with queue depth can hide problems. A few refinements:
+
+1. Cap **queue-driven timeout** more aggressively for **live jobs** vs pre-gen.
+2. Use **p95/p99 historical latencies** instead of a flat base.
+3. Factor in whether the job is already **in progress** or still waiting.
+
+Example:
+
+```ts
+class GenerationHealthService {
+  async getAdaptiveTimeout(job: Job, queueDepth: number): Promise<number> {
+    const metrics = await this.metricsRepo.getRecentLatencyStats(); 
+    const base = metrics.p95GenerationMs || 60_000;
+
+    const queuePenalty = Math.min(queueDepth * 3_000, 30_000); // +3s per depth, max +30s
+
+    const maxTimeout = job.metadata.isPreGeneration ? 90_000 : 75_000;
+
+    return Math.min(base + queuePenalty, maxTimeout);
+  }
+}
+```
+
+Also consider a **separate timeout for queue wait**:
+
+```ts
+const MAX_QUEUE_WAIT_MS = 20_000; // 20 seconds
+
+const waitTime = Date.now() - job.metadata.createdAt;
+if (!job.metadata.startedAt && waitTime > MAX_QUEUE_WAIT_MS) {
+  // This is a queue timeout, not generation timeout
+  await this.failJob(job.id, {
+    reason: 'queue_timeout',
+    timeoutOrigin: 'queue_wait',
+  });
+  return;
+}
+```
+
+---
+
+## 5. Preventive Controls & Quotas
+
+The proposal’s prevention section is good; here’s how to make it more concrete:
+
+* **Per-style in-flight cap:**
+  `maxInFlightPreGenPerStyle = 1` – only one pre-gen job per style at any time.
+
+* **Session quotas:**
+  Track per session + per style:
+
+  ```ts
+  interface SessionPreGenStats {
+    [sessionId: string]: {
+      [styleKey: string]: {
+        lastRequestedAt: number;
+        preGenJobsInLastHour: number;
+      }
+    }
+  }
+  ```
+
+  Before enqueuing pre-gen, check:
+
+  * `preGenJobsInLastHour < 2`
+  * `Date.now() - lastRequestedAt < N minutes` if you want “recency” gating
+
+* **Circuit breaker feedback:**
+  When breaker is open (for DALL-E or your own generation service), PoolMonitor should **immediately back off** to something like `MIN_INTERVAL_MS = 10 * 60 * 1000` (10 minutes), plus a **jitter** to avoid thundering herds:
+
+  ```ts
+  const jitter = Math.floor(Math.random() * 30_000); // ±30s
+  this.MIN_INTERVAL_MS = 600_000 + jitter;
+  ```
+
+---
+
+## 6. Testing Strategy: Add Failure Injection & Chaos
+
+Your testing plan hits the basics, but you should also:
+
+* Add **chaos tests** that intentionally slow down DALL-E or the worker pool:
+
+  * Simulate 2×, 3×, 5× latency and ensure pre-gen backs off automatically.
+* Add tests where:
+
+  * Only pre-gen jobs exist → they run normally when system is idle.
+  * Live jobs arrive during heavy pre-gen → live jobs complete within SLA and pre-gen is throttled/dropped.
+* Validate that:
+
+  * `queue.depth.pre_gen` never exceeds a safe bound.
+  * `preGenJobsInLastHour` per session/style stays within quota.
+  * Old pre-gen jobs actually get **expired**, not just delayed forever.
+
+---
+
+## 7. Observability and Metrics
+
+The metrics you listed are excellent. I’d add:
+
+* `generation.timeout.origin.queue_wait` vs `generation.timeout.origin.generation`
+* `pregen.job.dropped.stale` count
+* `pregen.style.in_flight` (per style)
+* `pregen.requests.blocked_by_quota` (per session/style)
+
+Also log:
+
+* `job_id`, `styleKey`, `sessionId`, `isPreGeneration`, `timeoutOrigin`, `queueDepthAtStart`.
+
+This will make future incidents much easier to debug.
+
+---
+
+## 8. Rollout Plan: Make It Safer
+
+One small tweak to your rollout plan:
+
+* **Do NOT** start by simply “timeout increase (45s → 75s)” in isolation; that can **mask** the problem temporarily.
+* Instead:
+
+  1. **First deploy**: queue prioritization + pre-gen throttling + quotas (but keep timeouts at 45s).
+  2. Observe: if live jobs still hit queue timeouts under real load,
+  3. **Then** deploy adaptive timeouts (60–75s) for **live jobs only**, with a lower cap for pre-gen.
+
+This keeps timeouts meaningful and ensures you’re solving congestion, not just stretching user pain.
+
+---
+
+### TL;DR for Agent 3
+
+* Treat this as a **queue and admission control problem first**, not just a timeout tuning issue.
+* Make pre-generation **opportunistic, bounded, and droppable**.
+* Distinguish **queue wait vs generation timeouts** in both logic and metrics.
+* Prioritize live jobs with an explicit **priority queue** and per-style, per-session caps.
+* Use adaptive timeouts driven by **real latency metrics**, with stricter caps on pre-gen.
+
+If you implement the above, Algorhythmic’s pre-generation should shift from “self-DoS machine” to “polite background helper” that never blocks user-visible work.
