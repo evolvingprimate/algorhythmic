@@ -530,8 +530,7 @@ function DisplayContent() {
     // SESSION-BASED SELECTION: Always start with style selector on mount
     // Both new and returning users must select styles each session
     console.log('[Display] Starting session-based style selection flow');
-    setSetupStep(SetupStep.STYLE); // Always start with style selector
-    wizardActiveRef.current = true; // Latch wizard state (will be reset in handleAudioSourceConfirm)
+    transitionSetupStep(SetupStep.STYLE, 'initial session start');
     setSetupComplete(false); // Not complete until user goes through selection
     
     // Note: Previous preferences can be loaded in the StyleSelector component
@@ -544,6 +543,7 @@ function DisplayContent() {
     
     return () => {
       isDisplayActiveRef.current = false;
+      // Don't use transitionSetupStep here since the component is unmounting
       setSetupStep(SetupStep.IDLE);
       wizardActiveRef.current = false;
       
@@ -2589,18 +2589,45 @@ function DisplayContent() {
     }, 0);
   };
 
-  const handleStartListening = () => {
-    // Activate wizard and advance to appropriate step
-    wizardActiveRef.current = true;
+  /**
+   * Centralized setup step transition handler
+   * Ensures proper wizard sequencing and prevents modal overlap
+   */
+  const transitionSetupStep = (nextStep: SetupStep, reason?: string) => {
+    const currentStep = setupStep;
     
+    console.log(`[Display] Transitioning: ${currentStep} → ${nextStep} (reason: ${reason || 'user action'})`);
+    
+    // Validation: prevent invalid transitions
+    if (nextStep === SetupStep.AUDIO && selectedStyles.length === 0) {
+      console.warn('[Display] Cannot advance to AUDIO without selected styles');
+      return;
+    }
+    
+    // Manage wizardActiveRef based on state
+    if (nextStep === SetupStep.STYLE || nextStep === SetupStep.AUDIO) {
+      // Entering or staying in wizard flow
+      wizardActiveRef.current = true;
+    } else if (nextStep === SetupStep.COMPLETE) {
+      // Only clear wizard latch when fully complete
+      wizardActiveRef.current = false;
+      setSetupComplete(true);
+    } else if (nextStep === SetupStep.IDLE) {
+      // Going to IDLE should only happen when canceling the entire flow
+      wizardActiveRef.current = false;
+    }
+    
+    // Apply the transition
+    setSetupStep(nextStep);
+  };
+
+  const handleStartListening = () => {
     // If user has saved styles, skip style selection and go to audio
     // Otherwise, go to style selection first
     if (selectedStyles.length > 0) {
-      console.log('[Display] User has saved styles, advancing to audio selection');
-      setSetupStep(SetupStep.AUDIO);
+      transitionSetupStep(SetupStep.AUDIO, 'user has saved styles');
     } else {
-      console.log('[Display] No saved styles, showing style selector first');
-      setSetupStep(SetupStep.STYLE);
+      transitionSetupStep(SetupStep.STYLE, 'no saved styles');
     }
   };
 
@@ -2608,9 +2635,7 @@ function DisplayContent() {
     // Handle "No Audio" option
     if (deviceId === "no-audio") {
       // Complete setup and dismiss modal for "No Audio"
-      setSetupStep(SetupStep.COMPLETE);
-      // Clear wizard latch for normal operation
-      wizardActiveRef.current = false;
+      transitionSetupStep(SetupStep.COMPLETE, 'no audio selected');
       
       // Use the updated createDefaultAudioAnalysis that includes ALL required fields
       const defaultAudioAnalysis = createDefaultAudioAnalysis();
@@ -2623,8 +2648,6 @@ function DisplayContent() {
       // Server allows null for musicInfo
       setCurrentMusicInfo(null);
       
-      // Mark setup as complete
-      setSetupComplete(true);
       setIsPlaying(false); // Not actively listening
       
       toast({
@@ -2644,11 +2667,8 @@ function DisplayContent() {
         audioAnalyzerRef.current = analyzer;
         
         // Only dismiss modal and complete setup after successful initialization
-        setSetupStep(SetupStep.COMPLETE);
-        wizardActiveRef.current = false;
+        transitionSetupStep(SetupStep.COMPLETE, 'microphone initialized');
         
-        // Mark setup as complete
-        setSetupComplete(true);
         setIsPlaying(true);
         
         toast({
@@ -2867,9 +2887,7 @@ function DisplayContent() {
     
     // BUG FIX: Advance to audio selection step after saving styles
     // This ensures proper audio analysis data before generation starts
-    setSetupStep(SetupStep.AUDIO);
-    // Keep wizard active until audio selection is complete
-    wizardActiveRef.current = true;
+    transitionSetupStep(SetupStep.AUDIO, 'styles confirmed');
     
     // Save preferences mutation (will refetch but latch prevents reset)
     savePreferencesMutation.mutate(
@@ -3165,7 +3183,7 @@ function DisplayContent() {
                 size="icon"
                 onClick={() => {
                   setShowChangeStyles(true);
-                  setSetupStep(SetupStep.STYLE);
+                  transitionSetupStep(SetupStep.STYLE, 'change styles button clicked');
                 }}
                 title="Change art styles"
                 data-testid="button-change-styles"
@@ -3215,7 +3233,7 @@ function DisplayContent() {
             <Button 
               variant="outline" 
               size="icon"
-              onClick={() => setSetupStep(SetupStep.STYLE)}
+              onClick={() => transitionSetupStep(SetupStep.STYLE, 'style selector icon clicked')}
               data-testid="button-open-style-selector"
             >
               <Settings className="h-5 w-5" />
@@ -3445,19 +3463,23 @@ function DisplayContent() {
           dynamicMode={dynamicMode}
           onStylesChange={handleStylesChange}
           onClose={() => {
-            // BUG FIX: Return to IDLE instead of manually advancing to AUDIO
-            // handleStylesChange will advance to AUDIO when user confirms
-            setSetupStep(SetupStep.IDLE);
+            // Cancel entire wizard flow
+            transitionSetupStep(SetupStep.IDLE, 'style selector canceled');
           }}
         />
       )}
 
-      {/* Audio Source Selector Modal - BUG FIX: Sequential flow via SetupStep enum */}
-      <AudioSourceSelector
-        open={setupStep === SetupStep.AUDIO}
-        onClose={() => setSetupStep(SetupStep.IDLE)}
-        onConfirm={handleAudioSourceConfirm}
-      />
+      {/* Audio Source Selector Modal - BUG FIX: Use conditional rendering to prevent overlap */}
+      {setupStep === SetupStep.AUDIO && (
+        <AudioSourceSelector
+          open={true}
+          onClose={() => {
+            // Back navigation: return to style selection, not IDLE
+            transitionSetupStep(SetupStep.STYLE, 'back from audio to style');
+          }}
+          onConfirm={handleAudioSourceConfirm}
+        />
+      )}
 
       {/* Explanation Dialog */}
       <Dialog open={showExplanation} onOpenChange={setShowExplanation}>
