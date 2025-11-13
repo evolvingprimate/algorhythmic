@@ -15,6 +15,7 @@ import { generateArtPrompt } from '../openai-service';
 import { OpenAIService } from '../openai-service';
 import { generationHealthService } from '../generation-health';
 import { nanoid } from 'nanoid';
+import { storage } from '../storage';
 
 // Initialize OpenAI service with existing health service singleton
 const openaiService = new OpenAIService(generationHealthService);
@@ -43,7 +44,7 @@ export async function getCachedArtworks(
   limit: number = 3
 ): Promise<any[]> {
   try {
-    // Try to get recently generated artworks from this session
+    // Try to get recently generated artworks from this session first
     const recentArtworks = await db
       .select()
       .from(artSessions)
@@ -58,28 +59,37 @@ export async function getCachedArtworks(
     
     if (recentArtworks.length >= 2) {
       // Need at least 2 for morphing
-      console.log(`[AsyncArtwork] Returning ${recentArtworks.length} cached artworks for immediate display`);
+      console.log(`[AsyncArtwork] Returning ${recentArtworks.length} cached artworks from session`);
       return recentArtworks;
     }
     
-    // If not enough recent ones, get from library
-    const libraryArtworks = await db
+    // If not enough session artworks, pull from the pre-generated catalog
+    console.log(`[AsyncArtwork] Session has ${recentArtworks.length} artworks, fetching from catalog...`);
+    
+    // Use storage.getUnseenArtworks to access the 1400+ pre-generated artworks
+    const catalogArtworks = await storage.getUnseenArtworks(
+      userId,
+      limit,
+      undefined, // orientation
+      [], // styleTags
+      [], // artistTags
+      false // strictMode
+    );
+    
+    if (catalogArtworks.length > 0) {
+      console.log(`[AsyncArtwork] Returning ${catalogArtworks.length} artworks from catalog (${catalogArtworks.length} items)`);
+      return catalogArtworks;
+    }
+    
+    // Fallback: get any artworks from the database
+    const fallbackArtworks = await db
       .select()
       .from(artSessions)
-      .where(
-        and(
-          eq(artSessions.isLibrary, true),
-          or(
-            eq(artSessions.userId, userId),
-            eq(artSessions.poolStatus, 'active')
-          )
-        )
-      )
-      .orderBy(desc(artSessions.qualityScore))
+      .orderBy(desc(artSessions.createdAt))
       .limit(limit);
     
-    console.log(`[AsyncArtwork] Returning ${libraryArtworks.length} library artworks for immediate display`);
-    return libraryArtworks;
+    console.log(`[AsyncArtwork] Returning ${fallbackArtworks.length} fallback artworks`);
+    return fallbackArtworks;
   } catch (error) {
     console.error('[AsyncArtwork] Error fetching cached artworks:', error);
     return [];
