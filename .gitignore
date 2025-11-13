@@ -29,3 +29,35 @@ yarn-error.log*
 # Temporary files
 tmp/
 temp/
+
+# Replit specific files (not needed in GitHub)
+.replit
+.cache/
+.config/
+.upm/
+.pythonlibs/
+.breakpoints
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Build artifacts
+*.tsbuildinfo
+build/
+
+# Testing
+coverage/
+
+# OS generated files
+Thumbs.db
+
+# Package manager locks (managed by Replit)
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Local object storage cache
+attached_assets/generated_images/
+attached_assets/stock_images/
