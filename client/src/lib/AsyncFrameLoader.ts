@@ -108,15 +108,15 @@ export class AsyncFrameLoader {
             timeoutPromise
           ]);
         } catch (error: any) {
-          console.warn(`[AsyncFrameLoader] Polling failed: ${error.message}, returning empty fallback`);
-          // Return empty array to trigger FrameBuffer's placeholder
-          return [];
+          console.error(`[AsyncFrameLoader] Polling failed for job ${data.jobId}: ${error.message}`);
+          // Throw error to trigger React Query error handling and fallback mechanisms
+          throw new Error(`Frame generation failed for job ${data.jobId}: ${error.message}`);
         }
       }
       
-      // Unexpected response format - still return empty array (will trigger placeholder)
-      console.warn('[AsyncFrameLoader] Unexpected response format:', data);
-      return [];
+      // Unexpected response format - throw error to trigger fallback
+      console.error('[AsyncFrameLoader] Unexpected response format:', data);
+      throw new Error(`Unexpected response format from async endpoint: ${data.type || 'unknown'}`);
       
     } catch (error: any) {
       if (error.name === 'AbortError') {
@@ -199,10 +199,10 @@ export class AsyncFrameLoader {
             return status.artworks;
           }
           
-          // No fallback available - return empty array to trigger placeholder
-          console.warn('[AsyncFrameLoader] No fallback artworks available, returning empty');
+          // No fallback available - throw error to trigger React Query error handling
+          console.error('[AsyncFrameLoader] Job failed and no fallback artworks available');
           this.activeJobs.delete(jobId);
-          return [];
+          throw new Error(`Generation failed for job ${jobId}: ${status.error || 'Unknown error'} (no fallback available)`);
         }
         
         pollAttempt++;

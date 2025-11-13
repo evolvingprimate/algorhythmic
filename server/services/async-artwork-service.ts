@@ -11,10 +11,13 @@ import { db } from '../db';
 import { generationJobs, artSessions } from '@shared/schema';
 import { eq, desc, and, or, ne } from 'drizzle-orm';
 import crypto from 'crypto';
+import { generateArtPrompt } from '../openai-service';
+import { OpenAIService } from '../openai-service';
+import { generationHealthService } from '../generation-health';
+import { nanoid } from 'nanoid';
 
-// Simple in-memory job tracking (MVP)
-// In production, this would be Redis or similar
-const activeJobs = new Map<string, any>();
+// Initialize OpenAI service with existing health service singleton
+const openaiService = new OpenAIService(generationHealthService);
 
 // Job status type
 export type JobStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
@@ -114,16 +117,6 @@ export async function enqueueArtworkGeneration(
     createdAt: new Date()
   });
   
-  // Store in memory for fast access
-  activeJobs.set(jobId, {
-    id: jobId,
-    sessionId,
-    userId,
-    status: 'pending',
-    params,
-    createdAt: new Date()
-  });
-  
   // Start processing in background (don't await)
   processJobInBackground(jobId).catch(err => {
     console.error(`[AsyncArtwork] Background processing failed for job ${jobId}:`, err);
@@ -137,15 +130,23 @@ export async function enqueueArtworkGeneration(
  * Process job in background (runs async, doesn't block)
  */
 async function processJobInBackground(jobId: string): Promise<void> {
-  const job = activeJobs.get(jobId);
-  if (!job) {
-    console.error(`[AsyncArtwork] Job ${jobId} not found in active jobs`);
+  // Get job from database
+  const jobs = await db
+    .select()
+    .from(generationJobs)
+    .where(eq(generationJobs.id, jobId))
+    .limit(1);
+  
+  if (jobs.length === 0) {
+    console.error(`[AsyncArtwork] Job ${jobId} not found in database`);
     return;
   }
   
+  const job = jobs[0];
+  const params = job.payload ? JSON.parse(job.payload) : {};
+  
   try {
     // Update status to processing
-    job.status = 'processing';
     await db
       .update(generationJobs)
       .set({ 
@@ -153,64 +154,124 @@ async function processJobInBackground(jobId: string): Promise<void> {
         startedAt: new Date()
       })
       .where(eq(generationJobs.id, jobId));
-    
-    // Simulate generation (in real app, this would call OpenAI)
-    // For now, just wait and return mock data
-    await new Promise(resolve => setTimeout(resolve, 2000)); // Simulate 2s generation
-    
-    // Mock result (in real app, this would be actual artwork)
-    const mockArtwork = {
-      id: crypto.randomUUID(),
-      imageUrl: '/public-objects/default-artwork.png',
-      prompt: 'Generated artwork',
-      sessionId: job.sessionId,
-      userId: job.userId,
-      createdAt: new Date()
+    const audioAnalysis = params.audioContext || {
+      amplitude: 50,
+      tempo: 120,
+      mood: 'calm',
+      frequencies: {
+        bass: 0.3,
+        mid: 0.4,
+        treble: 0.3
+      }
     };
     
-    // Mark as completed
-    job.status = 'completed';
-    job.result = mockArtwork;
-    job.completedAt = new Date();
+    // Generate AI art prompt
+    const promptResult = await generateArtPrompt({
+      audioAnalysis,
+      musicInfo: params.musicInfo,
+      styles: params.styles || [],
+      artists: params.artists || [],
+      dynamicMode: params.dynamicMode || false,
+      previousVotes: []
+    });
     
+    console.log(`[AsyncArtwork] Generated prompt for job ${jobId}: ${promptResult.prompt.substring(0, 100)}...`);
+    
+    // Generate artwork using DALL-E
+    const imageUrl = await openaiService.generateArtImage(promptResult.prompt);
+    
+    console.log(`[AsyncArtwork] Generated image for job ${jobId}: ${imageUrl}`);
+    
+    // Store result in database
+    const artSession = await db.insert(artSessions).values({
+      id: nanoid(),
+      sessionId: job.sessionId || '',
+      userId: job.userId,
+      imageUrl,
+      prompt: promptResult.prompt,
+      dnaVector: JSON.stringify(promptResult.dnaVector),
+      audioFeatures: JSON.stringify(audioAnalysis),
+      generationExplanation: promptResult.explanation,
+      styles: params.styles || [],
+      artists: params.artists || [],
+      orientation: params.orientation || 'square',
+      poolStatus: 'active',
+      qualityScore: 0.8,
+      isLibrary: false,
+      createdAt: new Date()
+    }).returning();
+    
+    // Mark as completed
     await db
       .update(generationJobs)
       .set({
         status: 'completed',
-        result: JSON.stringify(mockArtwork),
+        result: JSON.stringify(artSession[0]),
         completedAt: new Date()
       })
       .where(eq(generationJobs.id, jobId));
     
-    console.log(`[AsyncArtwork] Job ${jobId} completed successfully`);
+    console.log(`[AsyncArtwork] Job ${jobId} completed successfully with real AI generation`);
   } catch (error: any) {
-    // Mark as failed
-    job.status = 'failed';
-    job.error = error.message;
-    
-    await db
-      .update(generationJobs)
-      .set({
-        status: 'failed',
-        errorMessage: error.message,
-        completedAt: new Date()
-      })
-      .where(eq(generationJobs.id, jobId));
-    
     console.error(`[AsyncArtwork] Job ${jobId} failed:`, error);
+    
+    // Check if we should retry
+    const retryCount = (job.retryCount || 0) + 1;
+    const maxRetries = job.maxRetries || 2;
+    
+    if (retryCount < maxRetries) {
+      // Update retry count and re-queue for retry
+      await db
+        .update(generationJobs)
+        .set({
+          status: 'pending',
+          retryCount: retryCount,
+          errorMessage: error.message
+        })
+        .where(eq(generationJobs.id, jobId));
+      
+      console.log(`[AsyncArtwork] Retrying job ${jobId} (attempt ${retryCount + 1}/${maxRetries})`);
+      
+      // Re-queue for processing with exponential backoff
+      const backoffMs = Math.min(1000 * Math.pow(2, retryCount), 10000); // Max 10s
+      setTimeout(() => {
+        processJobInBackground(jobId).catch(err => {
+          console.error(`[AsyncArtwork] Retry failed for job ${jobId}:`, err);
+        });
+      }, backoffMs);
+    } else {
+      // Max retries reached, mark as failed
+      await db
+        .update(generationJobs)
+        .set({
+          status: 'failed',
+          errorMessage: error.message,
+          completedAt: new Date()
+        })
+        .where(eq(generationJobs.id, jobId));
+      
+      console.error(`[AsyncArtwork] Job ${jobId} permanently failed after ${retryCount} retries`);
+      
+      // For failed jobs, try to include fallback artworks in the result
+      const fallbackArtworks = await getFallbackArtworks(job.userId, 3);
+      if (fallbackArtworks.length > 0) {
+        // Store fallback artworks in the result so polling can return them
+        await db
+          .update(generationJobs)
+          .set({
+            result: JSON.stringify({ fallback: true, artworks: fallbackArtworks })
+          })
+          .where(eq(generationJobs.id, jobId));
+        console.log(`[AsyncArtwork] Stored ${fallbackArtworks.length} fallback artworks for permanently failed job ${jobId}`);
+      }
+    }
   }
 }
 
 /**
- * Get job status for polling
+ * Get job status for polling (database-only persistence)
  */
 export async function getJobStatus(jobId: string): Promise<ArtworkJob | null> {
-  // Check memory first (fast)
-  const memoryJob = activeJobs.get(jobId);
-  if (memoryJob) {
-    return memoryJob;
-  }
-  
   // Check database (persistent)
   const dbJobs = await db
     .select()
@@ -223,12 +284,34 @@ export async function getJobStatus(jobId: string): Promise<ArtworkJob | null> {
   }
   
   const dbJob = dbJobs[0];
+  
+  // Parse result based on status
+  let result = undefined;
+  if (dbJob.result) {
+    try {
+      const parsed = JSON.parse(dbJob.result);
+      // Handle both success and fallback formats
+      if (parsed.fallback) {
+        // Failed job with fallback artworks
+        result = parsed.artworks || [];
+      } else if (Array.isArray(parsed)) {
+        // Legacy format (array of artworks)
+        result = parsed;
+      } else {
+        // Single artwork result
+        result = [parsed];
+      }
+    } catch (e) {
+      console.error(`[AsyncArtwork] Failed to parse job result for ${jobId}:`, e);
+    }
+  }
+  
   return {
     id: dbJob.id,
     sessionId: dbJob.sessionId || '',
     userId: dbJob.userId,
     status: dbJob.status as JobStatus,
-    result: dbJob.result ? JSON.parse(dbJob.result) : undefined,
+    result,
     error: dbJob.errorMessage || undefined,
     createdAt: dbJob.createdAt,
     completedAt: dbJob.completedAt || undefined
@@ -265,22 +348,79 @@ export async function getFallbackArtworks(
 }
 
 /**
- * Clean up old completed jobs from memory
+ * Clean up old completed jobs from database
  */
-export function cleanupOldJobs(): void {
-  const now = Date.now();
-  const maxAge = 5 * 60 * 1000; // 5 minutes
+export async function cleanupOldJobs(): Promise<void> {
+  const maxAge = new Date(Date.now() - 5 * 60 * 1000); // 5 minutes ago
   
-  for (const [jobId, job] of activeJobs.entries()) {
-    if (job.status === 'completed' || job.status === 'failed') {
-      const age = now - job.createdAt.getTime();
-      if (age > maxAge) {
-        activeJobs.delete(jobId);
-        console.log(`[AsyncArtwork] Cleaned up old job ${jobId}`);
+  try {
+    // Delete old completed and failed jobs
+    const result = await db
+      .delete(generationJobs)
+      .where(
+        and(
+          or(
+            eq(generationJobs.status, 'completed'),
+            eq(generationJobs.status, 'failed'),
+            eq(generationJobs.status, 'cancelled')
+          )
+        )
+      );
+    
+    console.log(`[AsyncArtwork] Cleaned up old jobs from database`);
+  } catch (error) {
+    console.error('[AsyncArtwork] Failed to cleanup old jobs:', error);
+  }
+}
+
+/**
+ * Recover orphaned jobs on server restart
+ */
+export async function recoverOrphanedJobs(): Promise<void> {
+  try {
+    // Find jobs that were processing when server stopped
+    const orphanedJobs = await db
+      .select()
+      .from(generationJobs)
+      .where(
+        or(
+          eq(generationJobs.status, 'processing'),
+          eq(generationJobs.status, 'pending')
+        )
+      );
+    
+    console.log(`[AsyncArtwork] Found ${orphanedJobs.length} orphaned jobs to recover`);
+    
+    for (const job of orphanedJobs) {
+      if (job.status === 'processing') {
+        // Mark processing jobs as failed (they were interrupted)
+        await db
+          .update(generationJobs)
+          .set({
+            status: 'failed',
+            errorMessage: 'Server restart - job interrupted',
+            completedAt: new Date()
+          })
+          .where(eq(generationJobs.id, job.id));
+        
+        console.log(`[AsyncArtwork] Marked interrupted job ${job.id} as failed`);
+      } else if (job.status === 'pending') {
+        // Re-queue pending jobs with a small delay to avoid overwhelming the system
+        console.log(`[AsyncArtwork] Re-queueing pending job ${job.id}`);
+        setTimeout(() => {
+          processJobInBackground(job.id).catch(err => {
+            console.error(`[AsyncArtwork] Failed to re-queue job ${job.id}:`, err);
+          });
+        }, 1000 * Math.random()); // Random delay up to 1s to spread load
       }
     }
+  } catch (error) {
+    console.error('[AsyncArtwork] Failed to recover orphaned jobs:', error);
   }
 }
 
 // Run cleanup every minute
 setInterval(cleanupOldJobs, 60 * 1000);
+
+// Recover orphaned jobs on startup
+recoverOrphanedJobs();
