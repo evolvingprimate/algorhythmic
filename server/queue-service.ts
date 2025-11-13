@@ -426,14 +426,16 @@ export class QueueService {
         });
 
         // Register job with health service
-        const jobHandle = this.generationHealth.registerJob(job.id, false);
+        this.generationHealth.registerJob(job.id, false);
+        const generationStartTime = Date.now();
 
         try {
           // Generate image
           const imageUrl = await generateArtImage(promptResult.prompt);
           
           // Mark job as successful
-          this.generationHealth.recordJobSuccess(jobHandle);
+          const latency = Date.now() - generationStartTime;
+          this.generationHealth.recordSuccess(latency, job.id);
 
           // Store result
           const artSession = await this.storage.createArtSession({
@@ -491,7 +493,7 @@ export class QueueService {
 
         } catch (generationError) {
           // Mark job as failed with health service
-          this.generationHealth.recordJobFailure(jobHandle, generationError);
+          this.generationHealth.recordFailure('unknown', job.id);
           throw generationError;
         }
 
