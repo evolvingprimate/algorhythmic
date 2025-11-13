@@ -3082,7 +3082,7 @@ function DisplayContent() {
               onClick={handleStartListening}
               data-testid="button-start-creating"
             >
-              {selectedStyles.length === 0 ? "Choose Styles" : "Start Creating"}
+              Create Art Now
             </Button>
           </div>
         )}
