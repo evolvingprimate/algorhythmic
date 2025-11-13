@@ -1,0 +1,308 @@
+Short version: this isn’t really a “React batching race” problem – it’s a **wizard state ownership** problem. Fix that, and the overlap goes away without hacks.
+
+Here’s feedback you can give directly to Replit Agent 3 / Claude.
+
+---
+
+## 1. Root Cause – Is the React batching diagnosis correct?
+
+**Probably not.**
+
+With this code:
+
+```tsx
+{setupStep === SetupStep.STYLE && <StyleSelector ... />}
+{setupStep === SetupStep.AUDIO && <AudioSourceSelector open={true} ... />}
+```
+
+you **cannot** get both mounted in the same render pass unless:
+
+1. There’s more than one copy of this wizard mounted; or
+2. `AudioSourceSelector` has its own internal `open` state and isn’t fully controlled; or
+3. There is *another* place where `AudioSourceSelector` is rendered.
+
+React 18’s batched updates will:
+
+* Apply all `setSetupStep(...)` calls in a tick
+* Compute a *single* final value for `setupStep`
+* Render based on that single value
+
+So if, in the same tick, you call:
+
+```ts
+setSetupStep(SetupStep.STYLE);
+setSetupStep(SetupStep.COMPLETE);
+```
+
+the **last one wins**. You don’t get “both steps at once”. You just get the final `setupStep`.
+
+Much more likely:
+
+* The wizard has **multiple pieces of state** that all try to describe the same UX:
+
+  * `setupStep`
+  * `open` inside `AudioSourceSelector` (Radix Dialog state)
+  * Maybe router state / query params / back button logic
+* Those states drift out of sync, so:
+
+  * The card for STYLE is shown because `setupStep === STYLE`
+  * The Radix Dialog is still open because its own `open` state was never driven back to `false` or it’s coming from a different instance.
+
+So the *real* root cause is:
+
+> “Wizard flow is described by multiple, partially independent states instead of one single source of truth, allowing inconsistent UI where STYLE and AUDIO appear simultaneously.”
+
+---
+
+## 2. Solution Preference
+
+### Hard “no” on A & B
+
+Both A and B rely on **timeouts** and **implicit timing assumptions**:
+
+#### A: Transition lock
+
+```ts
+const [isTransitioning, setIsTransitioning] = useState(false);
+const handleStylesChange = (styles) => {
+  if (isTransitioning) return;
+  setIsTransitioning(true);
+  setSetupStep(SetupStep.AUDIO);
+  setTimeout(() => setIsTransitioning(false), 100);
+};
+```
+
+Problems:
+
+* 100ms is arbitrary. On a slow device, 100ms is nothing; on a fast device it’s just magic delay.
+* You can still get out-of-order transitions from other handlers that don’t check `isTransitioning`.
+* It hides the real issue instead of modeling state properly.
+
+#### B: Clear state with delay
+
+```ts
+const handleStylesChange = (styles) => {
+  setSetupStep(SetupStep.IDLE);
+  setTimeout(() => setSetupStep(SetupStep.AUDIO), 50);
+};
+```
+
+Problems:
+
+* Same magic timing issue.
+* You can visually see flicker (STYLE → nothing → AUDIO).
+* Still doesn’t guarantee you don’t have two instances mounted somewhere else.
+
+These are “band-aid” fixes. I’d reject both for anything more than a quick emergency patch.
+
+---
+
+### C vs D: What I’d actually do
+
+#### ✅ Preferred: **C – State Machine / Single Source of Truth**
+
+Use a reducer to model wizard state explicitly:
+
+```ts
+type WizardStep = 'style' | 'audio' | 'complete';
+
+interface WizardState {
+  step: WizardStep;
+  audioDialogOpen: boolean;
+}
+
+type WizardAction =
+  | { type: 'ENTER_STYLE' }
+  | { type: 'CONFIRM_STYLE' }
+  | { type: 'OPEN_AUDIO' }
+  | { type: 'CONFIRM_AUDIO' }
+  | { type: 'CANCEL_AUDIO' }
+  | { type: 'FINISH' };
+
+const wizardReducer = (state: WizardState, action: WizardAction): WizardState => {
+  switch (action.type) {
+    case 'ENTER_STYLE':
+      return { step: 'style', audioDialogOpen: false };
+
+    case 'CONFIRM_STYLE':
+      return { step: 'audio', audioDialogOpen: true };
+
+    case 'OPEN_AUDIO':
+      return { ...state, step: 'audio', audioDialogOpen: true };
+
+    case 'CANCEL_AUDIO':
+      return { step: 'style', audioDialogOpen: false };
+
+    case 'CONFIRM_AUDIO':
+      return { step: 'complete', audioDialogOpen: false };
+
+    case 'FINISH':
+      return { step: 'complete', audioDialogOpen: false };
+
+    default:
+      return state;
+  }
+};
+```
+
+Hook it up:
+
+```tsx
+const [state, dispatch] = useReducer(wizardReducer, {
+  step: 'style',
+  audioDialogOpen: false,
+});
+
+{state.step === 'style' && (
+  <StyleSelector onStylesChange={() => dispatch({ type: 'CONFIRM_STYLE' })} />
+)}
+
+<AudioSourceSelector
+  open={state.audioDialogOpen}
+  onClose={() => dispatch({ type: 'CANCEL_AUDIO' })}
+/>
+```
+
+Key ideas:
+
+* **Single source of truth** (the reducer state).
+* All transitions go through `dispatch`, so no random `setSetupStep` scattered around.
+* `AudioSourceSelector` is a **fully controlled** dialog: its `open` prop is always derived from `audioDialogOpen`.
+
+This is robust, testable, and explicit.
+
+#### Also acceptable: **D – Single Dialog, swap content**
+
+```tsx
+<Dialog open={wizardOpen} onOpenChange={setWizardOpen}>
+  {state.step === 'style' && <StyleSelector ... />}
+  {state.step === 'audio' && <AudioSourceSelectorContent ... />}
+</Dialog>
+```
+
+This is actually *not* that “nuclear” – it’s quite clean:
+
+* You physically cannot have overlap because there is only **one** Dialog in the DOM.
+* You still use a reducer to decide which content to show.
+* The UX changes slightly (StyleSelector becomes modal instead of card), but if that’s acceptable, this is bullet-proof.
+
+If maintaining the current UX (card + modal) is important, choose **C**.
+If you can simplify the UX, **D** is beautifully simple.
+
+---
+
+## 3. Missing Considerations / Edge Cases
+
+Things that need explicit thought:
+
+1. **Radix Dialog controlled vs uncontrolled**
+
+   Ensure `AudioSourceSelector` does *not* hold its own `open` state internally:
+
+   ```tsx
+   // Inside AudioSourceSelector
+   <Dialog open={open} onOpenChange={(nextOpen) => {
+     if (!nextOpen) onClose();
+   }}>
+   ```
+
+   And **remove** any internal `useState(false)` for `open`.
+
+2. **Back button / navigation integration**
+
+   * Are you syncing the wizard step with the URL (query param, route segment)?
+   * If so, the reducer should be the single source of truth, and router changes should dispatch actions instead of directly setting state in multiple places.
+
+3. **React Strict Mode double-invocation**
+
+   * In React 18 dev mode, effects and some initializers run twice; if you wire listeners or step changes in effects, you might see confusing behavior.
+   * Make sure no `useEffect` is doing `setSetupStep` based on props or location without proper guards.
+
+4. **Rapid user actions**
+
+   * Double-click on “Next”
+   * Closing the audio dialog via ESC + clicking a “Back” button
+   * Browser back while dialog is open
+
+   A reducer makes these easier to reason about; you can log transitions and ensure they’re valid.
+
+---
+
+## 4. Simpler Alternative You Might Be Missing
+
+If you want a very small change that might already fix 90% of the issue without a full reducer:
+
+* Tie **AudioSourceSelector** strictly to `setupStep`:
+
+  ```tsx
+  const isAudioStep = setupStep === SetupStep.AUDIO;
+
+  <AudioSourceSelector
+    open={isAudioStep}
+    onClose={() => setSetupStep(SetupStep.STYLE)}
+  />
+  ```
+
+* Remove any other `open` state from inside the dialog or elsewhere.
+
+* Do not let `AudioSourceSelector` call `setSetupStep` directly; pass callbacks from the parent instead:
+
+  ```tsx
+  <AudioSourceSelector
+    open={isAudioStep}
+    onClose={handleAudioClose}
+    onConfirm={handleAudioConfirm}
+  />
+  ```
+
+This is the “controlled component” pattern. It’s less robust than a full reducer, but way better than timeouts.
+
+---
+
+## 5. Testing Strategy
+
+To verify the fix (especially for Claude / Agent 3):
+
+### Unit / Component Tests (React Testing Library)
+
+1. **Single source of truth test**
+
+   * Render the wizard with reducer.
+   * Fire “select style” → expect:
+
+     * `StyleSelector` not present.
+     * `AudioSourceSelector` with `open=true` present.
+
+2. **Cancel audio**
+
+   * While audio dialog open, fire `onClose`/ESC.
+   * Expect:
+
+     * `StyleSelector` visible.
+     * `AudioSourceSelector` still mounted but `open=false` (if persistent) or unmounted altogether.
+
+3. **Rapid actions**
+
+   * Simulate quick clicks “Next → Back → Next”.
+   * Assert that at no point in the DOM query do you see both:
+
+     * `StyleSelector` and `AudioSourceSelector` with `open=true`.
+
+### Manual QA
+
+* Try rapid clicking on next/back.
+* Hit ESC while clicking back.
+* Use browser back if URL state is involved.
+* Test on slow hardware / throttled CPU (DevTools) to ensure no janky overlap.
+
+---
+
+## Final Recommendations to Agent 3
+
+* Treat this as a **wizard state modeling** problem, not a “React race condition” problem.
+* **Do not** use setTimeout-based locks (A, B). They’re brittle and hide the real issue.
+* Implement **C (reducer/state machine)** with a fully controlled dialog, or **D (single modal)** if UX allows.
+* Ensure `AudioSourceSelector` is **controlled by parent state only** – no internal conflicting `open` state.
+* Add tests around the reducer and wizard flow to prevent regressions.
+
+If you adopt a reducer-based single source of truth, the overlapping modals should disappear permanently, and future steps (like adding a third “Review” step) will be far easier to implement safely.
