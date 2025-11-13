@@ -515,40 +515,28 @@ function DisplayContent() {
   // Session-Based Style Selection: Always show style selector each session
   // Every user (new and returning) must select styles when the app opens
   useEffect(() => {
-    // CRITICAL: Handle loading and error states to prevent blank screen
-    if (isLoadingPreferences) {
-      // Still loading preferences, wait...
+    // Only run this once on mount, not on every render
+    if (setupStep !== SetupStep.IDLE || setupComplete) {
+      // Already started or completed, don't restart
       return;
     }
     
     // BUG FIX #3: If wizard is active (user mid-flow), NEVER reset it during refetch
     if (wizardActiveRef.current) {
-      console.log('[Display] Wizard active - skipping reset during refetch');
+      console.log('[Display] Wizard already active - skipping');
       return;
     }
     
     // SESSION-BASED SELECTION: Always start with style selector on mount
     // Both new and returning users must select styles each session
-    if (setupStep === SetupStep.IDLE && !setupComplete) {
-      console.log('[Display] Starting session-based style selection');
-      setSetupStep(SetupStep.STYLE); // Always start with style selector
-      wizardActiveRef.current = true; // Latch wizard state
-      setSetupComplete(false); // Not complete until user goes through selection
-      
-      // Load any previous preferences as suggestions (but still require selection)
-      if (preferences?.styles) {
-        console.log('[Display] Loading previous preferences as suggestions');
-        // Don't auto-apply them - let user see and confirm/change them in the selector
-      }
-      return;
-    }
+    console.log('[Display] Starting session-based style selection flow');
+    setSetupStep(SetupStep.STYLE); // Always start with style selector
+    wizardActiveRef.current = true; // Latch wizard state (will be reset in handleAudioSourceConfirm)
+    setSetupComplete(false); // Not complete until user goes through selection
     
-    // If setup is already complete this session, don't restart
-    if (setupComplete) {
-      console.log('[Display] Session setup already complete - using selected styles');
-      return;
-    }
-  }, [preferences, isLoadingPreferences, preferencesError, setupStep, setupComplete]);
+    // Note: Previous preferences can be loaded in the StyleSelector component
+    // but users must actively select/confirm them each session
+  }, [setupStep, setupComplete]); // Simplified dependencies - don't wait for preferences
 
   // Cleanup on unmount to prevent modal persistence
   useEffect(() => {
