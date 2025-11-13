@@ -405,19 +405,46 @@ function DisplayContent() {
     selectedStyles?: string[];
   }>({
     queryKey: ["/api/artworks/next", sessionId.current, impressionVersionTrigger, artworkVersion],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       console.log('[Display] Query running - fetching /api/artworks/next');
-      const res = await fetch(`/api/artworks/next?sessionId=${sessionId.current}`, {
-        credentials: "include",
-      });
-      if (!res.ok) {
-        const errorText = await res.text();
-        console.error('[Display] Query failed:', res.status, errorText);
-        throw new Error(`${res.status}: ${errorText}`);
+      
+      // Create abort controller with 65-second timeout for AI generation
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        controller.abort();
+      }, 65000); // 65 seconds to accommodate backend's 60s timeout + buffer
+      
+      // Link the query's abort signal
+      if (signal) {
+        signal.addEventListener('abort', () => {
+          clearTimeout(timeoutId);
+          controller.abort();
+        });
       }
-      const data = await res.json();
-      console.log('[Display] Query success - received artworks:', data.artworks?.length);
-      return data;
+      
+      try {
+        const res = await fetch(`/api/artworks/next?sessionId=${sessionId.current}`, {
+          credentials: "include",
+          signal: controller.signal,
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (!res.ok) {
+          const errorText = await res.text();
+          console.error('[Display] Query failed:', res.status, errorText);
+          throw new Error(`${res.status}: ${errorText}`);
+        }
+        const data = await res.json();
+        console.log('[Display] Query success - received artworks:', data.artworks?.length);
+        return data;
+      } catch (error: any) {
+        clearTimeout(timeoutId);
+        if (error.name === 'AbortError') {
+          throw new Error('Request timeout after 65 seconds - AI generation may take longer, please try again');
+        }
+        throw error;
+      }
     },
     enabled: isAuthenticated, // Progressive enhancement: auth is the only gate
     staleTime: 0, // Always consider data stale - refetch on mount

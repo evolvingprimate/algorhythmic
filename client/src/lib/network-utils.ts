@@ -122,8 +122,21 @@ export function getNetworkStatus(): NetworkStatus {
 
 /**
  * Get adaptive timeout configuration based on network quality
+ * @param quality - Network quality level
+ * @param isGenerationRequest - Whether this is an AI generation request that needs longer timeout
  */
-export function getAdaptiveTimeoutConfig(quality: NetworkQuality): TimeoutConfig {
+export function getAdaptiveTimeoutConfig(quality: NetworkQuality, isGenerationRequest: boolean = false): TimeoutConfig {
+  // AI generation requests need much longer timeouts (backend uses 60s adaptive timeout)
+  if (isGenerationRequest) {
+    return {
+      baseTimeout: 65000, // 65 seconds to accommodate backend's 60s timeout + buffer
+      maxTimeout: 90000,  // Max 90 seconds
+      retryDelays: [5000, 10000, 20000], // Longer delays between retries
+      maxRetries: 2, // Fewer retries for expensive operations
+    };
+  }
+  
+  // Regular API requests use adaptive timeouts based on network quality
   switch (quality) {
     case NetworkQuality.OFFLINE:
       return {
