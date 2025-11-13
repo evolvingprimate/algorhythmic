@@ -170,11 +170,11 @@ export const catalogueBridgeSchema = z.object({
   orientation: z.enum(['portrait', 'landscape', 'square']).optional()
 });
 
-// Impression tracking validation
+// Impression tracking validation (for /api/impressions/rendered)
 export const impressionSchema = z.object({
-  sessionId: z.string().min(1).max(100),
-  artworkId: z.string().uuid(),
-  timestamp: z.number().optional()
+  sessionId: z.string().min(1).max(100).optional(),
+  artworkIds: z.array(z.string()).min(1).max(10), // Array of artwork IDs, max 10 per batch
+  source: z.enum(['bridge', 'fresh']).optional()
 });
 
 // Batch impressions validation
