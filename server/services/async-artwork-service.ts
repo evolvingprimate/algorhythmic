@@ -7,7 +7,7 @@
  * 3. Providing polling endpoints for job status
  */
 
-import { db } from '../drizzle/db';
+import { db } from '../db';
 import { generationJobs, artSessions } from '@shared/schema';
 import { eq, desc, and, or, ne } from 'drizzle-orm';
 import crypto from 'crypto';
