@@ -10,6 +10,7 @@ import { QueueController } from "./queue-controller";
 import { QueueService } from "./queue-service";
 import { storage } from "./storage";
 import { PoolMonitor } from "./pool-monitor";
+import { PreGenerationManager } from "./pre-generation-manager";
 import { setPoolMonitor } from "./fallback-service";
 import { initializePredictiveEngine, PredictiveEngine } from "./predictive-engine";
 import { CreditController } from "./generation/creditController";
@@ -53,59 +54,22 @@ const poolMonitor = new PoolMonitor(
   creditController
 );
 
-// 8. Wire up pool monitor with fallback service
+// 8. Create PreGenerationManager to handle all pre-gen orchestration
+const preGenerationManager = new PreGenerationManager(
+  storage,
+  generationHealthService,
+  queueService, // Required dependency
+  creditController
+);
+
+// 9. Wire PreGenerationManager to PoolMonitor
+poolMonitor.setPreGenerationManager(preGenerationManager);
+
+// 10. Wire up pool monitor with fallback service
 setPoolMonitor(poolMonitor);
 
-// 9. Set up pool monitor event listeners for pre-generation
-poolMonitor.on('pre-generation', async (requests) => {
-  console.log('[Bootstrap] Pre-generation triggered:', requests.length, 'requests');
-  for (const request of requests) {
-    try {
-      await queueService.enqueuePreGenerationJob(
-        request.userId,
-        request.sessionId,
-        request.styles,
-        request.count,
-        request.reason
-      );
-    } catch (error) {
-      console.error('[Bootstrap] Failed to enqueue pre-generation:', error);
-    }
-  }
-});
-
-poolMonitor.on('emergency-generation', async (requests) => {
-  console.error('[Bootstrap] EMERGENCY generation triggered:', requests.length, 'requests');
-  for (const request of requests) {
-    try {
-      // Use regular enqueue with high priority for emergency
-      await queueService.enqueueJob(
-        request.userId,
-        {
-          sessionId: request.sessionId,
-          audioAnalysis: {
-            tempo: 120,
-            amplitude: 0.5,
-            frequency: 440,
-            bassLevel: 50,
-            trebleLevel: 50,
-            rhythmComplexity: 0.5,
-            mood: 'calm',
-            genre: 'ambient'
-          },
-          styles: request.styles,
-          artists: [],
-          orientation: 'landscape',
-          isPreGeneration: true,
-          preGenerationReason: request.reason
-        },
-        request.priority
-      );
-    } catch (error) {
-      console.error('[Bootstrap] Failed to enqueue emergency generation:', error);
-    }
-  }
-});
+// Note: Removed legacy event listeners - PreGenerationManager now handles all pre-generation
+console.log('[Bootstrap] PreGenerationManager wired to PoolMonitor for coordinated throttling');
 
 // 9. Initialize predictive engine after queue service is created
 const predictiveEngine = initializePredictiveEngine(storage, queueService, poolMonitor);

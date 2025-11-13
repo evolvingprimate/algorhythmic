@@ -72,6 +72,8 @@ const POOL_CONFIG = {
   MAX_HOURLY_SPEND: 2.0, // Maximum $2/hour on pre-generation
 };
 
+import type { PreGenerationIntent, PreGenerationManager } from "./pre-generation-manager";
+
 export class PoolMonitor extends EventEmitter {
   private sessionPools = new Map<string, SessionPoolState>();
   private monitorInterval: NodeJS.Timeout | null = null;
@@ -83,12 +85,23 @@ export class PoolMonitor extends EventEmitter {
   // Track consumption events for rate calculation
   private consumptionEvents: Array<{ sessionId: string; timestamp: number }> = [];
   
+  // Suppression tracking
+  private suppressUntil = 0;
+  private preGenerationManager?: PreGenerationManager;
+  
   constructor(
     private storage: IStorage,
     private generationHealth: GenerationHealthPort,
     private creditController?: CreditController
   ) {
     super();
+  }
+  
+  /**
+   * Set the PreGenerationManager for coordinated throttling
+   */
+  setPreGenerationManager(manager: PreGenerationManager): void {
+    this.preGenerationManager = manager;
   }
   
   /**
@@ -396,7 +409,20 @@ export class PoolMonitor extends EventEmitter {
    * Trigger pre-generation for low pool sessions
    */
   private async triggerPreGeneration(metrics: PoolMetrics): Promise<void> {
-    console.log('[PoolMonitor] Triggering pre-generation, coverage:', metrics.poolCoveragePercentage);
+    console.log('[PoolMonitor] Considering pre-generation, coverage:', metrics.poolCoveragePercentage);
+    
+    // Check if we're suppressed
+    const now = Date.now();
+    if (this.suppressUntil > now) {
+      console.log('[PoolMonitor] Pre-generation suppressed until', new Date(this.suppressUntil));
+      return;
+    }
+    
+    // If no PreGenerationManager, fall back to logging
+    if (!this.preGenerationManager) {
+      console.warn('[PoolMonitor] No PreGenerationManager configured, skipping pre-generation');
+      return;
+    }
     
     // Find sessions that need frames
     const needySessions = Array.from(this.sessionPools.values())
@@ -410,47 +436,63 @@ export class PoolMonitor extends EventEmitter {
     // Select popular styles for diversity
     const popularStyles = await this.getPopularStyles();
     
-    // Create pre-generation requests
-    const requests: PreGenerationRequest[] = [];
-    let totalToGenerate = 0;
+    // Process only the neediest session to avoid flooding
+    const session = needySessions[0];
+    const needed = POOL_CONFIG.TARGET_POOL_SIZE - session.framesAvailable;
+    const toGenerate = Math.min(needed, POOL_CONFIG.PRE_GEN_BATCH_SIZE);
     
-    for (const session of needySessions.slice(0, POOL_CONFIG.MAX_CONCURRENT_PRE_GEN)) {
-      const needed = POOL_CONFIG.TARGET_POOL_SIZE - session.framesAvailable;
-      const toGenerate = Math.min(needed, POOL_CONFIG.PRE_GEN_BATCH_SIZE);
+    if (toGenerate > 0) {
+      // Create intent for PreGenerationManager
+      const intent: PreGenerationIntent = {
+        sessionId: session.sessionId,
+        userId: session.userId,
+        styles: this.selectDiverseStyles(popularStyles, toGenerate),
+        count: toGenerate,
+        reason: `Pool at ${(metrics.poolCoveragePercentage * 100).toFixed(1)}% coverage`,
+        urgency: metrics.poolCoveragePercentage > 0.9 ? 'high' : 'medium'
+      };
       
-      if (toGenerate > 0) {
-        requests.push({
-          sessionId: session.sessionId,
-          userId: session.userId,
-          styles: this.selectDiverseStyles(popularStyles, toGenerate),
-          count: toGenerate,
-          priority: POOL_CONFIG.PRE_GEN_PRIORITY,
-          reason: `Pool at ${(metrics.poolCoveragePercentage * 100).toFixed(1)}% coverage`,
-        });
+      // Process through PreGenerationManager
+      const result = await this.preGenerationManager.processIntent(intent);
+      
+      if (result.allowed) {
+        console.log('[PoolMonitor] Pre-generation allowed and executed');
         
-        totalToGenerate += toGenerate;
-      }
-    }
-    
-    if (requests.length > 0) {
-      // Emit pre-generation event
-      this.emit('pre-generation', requests);
-      
-      // Update tracking
-      this.lastPreGenTime = Date.now();
-      this.preGenCount += totalToGenerate;
-      
-      telemetryService.recordEvent({
-        event: 'pre_generation_triggered',
-        category: 'pool',
-        severity: 'info',
-        metrics: {
-          coverage: metrics.poolCoveragePercentage,
-          sessionCount: requests.length,
-          frameCount: totalToGenerate,
-          estimatedCost: totalToGenerate * POOL_CONFIG.COST_PER_GENERATION,
+        // Update tracking
+        this.lastPreGenTime = Date.now();
+        this.preGenCount += toGenerate;
+        
+        telemetryService.recordEvent({
+          event: 'pre_generation_triggered',
+          category: 'pool',
+          severity: 'info',
+          metrics: {
+            coverage: metrics.poolCoveragePercentage,
+            sessionId: session.sessionId,
+            frameCount: toGenerate,
+            estimatedCost: toGenerate * POOL_CONFIG.COST_PER_GENERATION,
+          }
+        });
+      } else {
+        console.log('[PoolMonitor] Pre-generation denied:', result.reason);
+        
+        // Update suppression time if provided
+        if (result.suppressUntil) {
+          this.suppressUntil = result.suppressUntil;
+          console.log('[PoolMonitor] Suppressing pre-generation until', new Date(this.suppressUntil));
         }
-      });
+        
+        telemetryService.recordEvent({
+          event: 'pre_generation_denied',
+          category: 'pool',
+          severity: 'info',
+          metrics: {
+            coverage: metrics.poolCoveragePercentage,
+            reason: result.reason,
+            suppressUntil: result.suppressUntil
+          }
+        });
+      }
     }
   }
   
