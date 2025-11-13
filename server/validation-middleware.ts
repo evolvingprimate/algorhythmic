@@ -179,8 +179,8 @@ export const impressionSchema = z.object({
 
 // Batch impressions validation
 export const batchImpressionsSchema = z.object({
-  sessionId: z.string().min(1).max(100),
-  artworkIds: z.array(z.string().uuid()).max(50) // Limit batch size
+  sessionId: z.string().min(1).max(100).optional(), // Made optional - not used by endpoint
+  artworkIds: z.array(z.string()).max(200) // Allow non-UUID strings for legacy IDs, increased limit to match endpoint
 });
 
 // Style transition validation
