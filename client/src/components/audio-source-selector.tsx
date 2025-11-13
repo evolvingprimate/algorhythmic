@@ -254,7 +254,7 @@ export function AudioSourceSelector({ open, onClose, onConfirm }: AudioSourceSel
 
         <div className="flex gap-2 justify-end mt-4">
           <Button variant="outline" onClick={handleCancel} data-testid="button-cancel">
-            Cancel
+            Back
           </Button>
           <Button
             onClick={handleConfirm}
