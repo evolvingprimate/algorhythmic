@@ -164,7 +164,7 @@ export function AudioSourceSelector({ open, onClose, onConfirm }: AudioSourceSel
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Mic className="w-5 h-5" />
-            Select Audio Source
+            Choose Audio Source
           </DialogTitle>
           <DialogDescription>
             Choose which microphone to use for audio-reactive art generation
