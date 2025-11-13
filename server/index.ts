@@ -4,6 +4,8 @@ import { setupVite, serveStatic, log } from "./vite";
 import { bootstrapDatabase } from "./db-bootstrap";
 import { applySecurity } from "./security";
 import { jsonBodyLimit, urlEncodedLimit } from "./security-middleware";
+import { getGenerationQueue } from "./services/job-queue";
+import { DatabaseJobStore } from "./services/db-job-store";
 
 const app = express();
 

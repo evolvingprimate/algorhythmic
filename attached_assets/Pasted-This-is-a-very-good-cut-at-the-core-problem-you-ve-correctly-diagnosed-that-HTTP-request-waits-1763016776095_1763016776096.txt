@@ -1,0 +1,374 @@
+This is a **very** good cut at the core problem: you’ve correctly diagnosed that “HTTP request waits 6–10s for OpenAI” is the real bug, and you’ve replaced it with the right pattern: **enqueue → ACK fast → push/poll result later.**
+
+I’ll walk through what you asked for:
+
+1. ✅ Correctness of the async architecture
+2. ✅ Completeness of error handling / edge cases
+3. 🔄 WebSocket vs polling tradeoffs
+4. 🧱 Job queue implementation choices (Redis vs in-memory, persistence, concurrency, etc.)
+5. ⚠️ Specific nitpicks in your code sketches (things to fix before handing to Agent 3 / Grok)
+
+---
+
+## 1. Is the async architecture *conceptually* correct?
+
+Yes. At a high level, this is exactly what you want:
+
+### Before (broken)
+
+* HTTP request lifetime ≈ OpenAI generation time (6–10s).
+* Network / proxy / Replit / browser timeout is ~5s.
+* ⇒ Guaranteed failure no matter how “fast” OpenAI is.
+
+### After (fixed)
+
+* HTTP request lifetime ≈ “enqueue job + maybe return cached frame” (<100ms).
+* Generation happens in the background with its *own* timeout window (e.g. 60s).
+* Delivery via WebSocket and/or polling.
+* ⇒ Network stack sees only fast, simple HTTP calls.
+
+That **decoupling** is the critical correctness move, and your design does it.
+
+Also, your integration story is clean:
+
+* FrameBuffer / MorphEngine don’t need to know/care how the frame was generated.
+* AsyncFrameLoader just promises “I’ll give you a frame eventually, or a fallback.”
+
+So: architecturally correct. No red flags.
+
+---
+
+## 2. Completeness of error handling / edge cases
+
+You’ve covered most of the core failure modes, but there are a few important gaps.
+
+### Covered well
+
+* **Generation timeout vs HTTP timeout**: separated (5s vs 60s).
+* **Retries**: jobs can be retried up to 2 times.
+* **Fallback chain**: cached → queued → object storage → static.
+* **WebSocket drop**: you already have polling as a backup.
+
+### Edge cases to address
+
+#### 2.1 Server restart / crash
+
+Right now your `GenerationQueue` is in-memory:
+
+```ts
+private queue: GenerationJob[] = [];
+private processing = new Map<string, GenerationJob>();
+```
+
+If the process restarts:
+
+* All queued/processing jobs are lost.
+* Clients still polling `/job/:jobId` will get “unknown job” or nothing.
+* Users see hangs or “failed” without clear reason.
+
+**Mitigation:**
+
+* For MVP single-instance: acceptable **if**:
+
+  * You document it as “jobs may be lost on restart”.
+  * You treat “unknown job” as “failed, use fallback frame” on the client.
+* For anything beyond toy: you want at least:
+
+  * **Persistent job table** (DB or Redis):
+
+    * `id, sessionId, status, createdAt, updatedAt, resultRef`
+  * On startup, resume any `processing` jobs as `failed` or `queued` with a note.
+
+#### 2.2 WebSocket event listener leaks
+
+In `AsyncFrameLoader.waitForJob`:
+
+```ts
+this.ws.addEventListener('message', (event) => {
+  const msg = JSON.parse(event.data);
+  if (msg.type === 'frame-ready' && msg.jobId === jobId) {
+    resolve(msg.frame);
+  }
+});
+```
+
+Issues:
+
+* Every job adds a new `message` listener.
+* You never remove it after resolving → memory leak + multiple resolves.
+* If multiple jobs are in flight, one job’s handler might mis-handle another job’s message if you aren’t careful.
+
+**Fix pattern:**
+
+* Use **one** WebSocket listener that dispatches into a `pendingJobs` map:
+
+```ts
+class AsyncFrameLoader {
+  private ws: WebSocket;
+  private pendingJobs = new Map<string, (frame: ArtworkFrame) => void>();
+
+  constructor() {
+    this.ws = new WebSocket(/* ... */);
+    this.ws.addEventListener('message', (event) => {
+      const msg = JSON.parse(event.data);
+      if (msg.type === 'frame-ready') {
+        const handler = this.pendingJobs.get(msg.jobId);
+        if (handler) {
+          handler(msg.frame);
+          this.pendingJobs.delete(msg.jobId);
+        }
+      }
+    });
+  }
+
+  private waitForJob(jobId: string, estimatedTime: number): Promise<ArtworkFrame> {
+    return new Promise((resolve) => {
+      this.pendingJobs.set(jobId, resolve);
+      // … set up polling + timeout
+    });
+  }
+}
+```
+
+Now you don’t leak listeners.
+
+#### 2.3 Duplicate / late messages
+
+A classic distributed-systems thing:
+
+* WebSocket push could deliver a frame.
+* Polling might also get the frame a few ms later.
+* You might resolve more than once, or stick an already-consumed frame back into the buffer.
+
+**Mitigation:**
+
+* Treat job completion as **idempotent**:
+
+  * At the job layer: “completed” is idempotent; pushing twice just overwrites the same record.
+  * At the client layer: if `pendingJobs` has no entry for that jobId, ignore the message.
+
+#### 2.4 Security / isolation
+
+You’re broadcasting frames by `sessionId`:
+
+```ts
+broadcast(sessionId: string, message: any)
+```
+
+Make sure:
+
+* Session IDs are **not guessable** (they should be opaque tokens).
+* WebSocket is authenticated:
+
+  * Either via a header token or session cookie that binds to that `sessionId`.
+  * Server must confirm “this socket belongs to this session” before subscribing.
+
+Otherwise, someone could *theoretically* subscribe to another user’s frames.
+
+---
+
+## 3. WebSocket vs polling tradeoffs
+
+Your hybrid approach is solid:
+
+* Primary: WebSocket (low-latency, push-based).
+* Secondary: Polling (`/job/:jobId` every 2s).
+* Tertiary: Time-based fallback to object storage.
+
+A couple of tweaks:
+
+### 3.1 MVP path
+
+If Agent 3 struggles with WS, a rock-solid MVP is:
+
+* **No WebSockets at all.**
+* Client:
+
+  * `POST /next` → get `jobId`
+  * Poll `/job/:jobId` every 1–2s up to N attempts (e.g. 6–8).
+  * On failure → fallback frame.
+
+You can add WebSockets **later** as an optimization, without changing the contract.
+
+### 3.2 SSE (Server-Sent Events) as middle ground
+
+If you ever find WebSocket management painful, SSE can do:
+
+* One-way push from server → client.
+* Simpler than WS but good enough for “frame-ready” events.
+
+Not required now, but worth knowing as an option.
+
+---
+
+## 4. Job queue implementation choices
+
+### 4.1 Redis vs in-memory
+
+**For MVP (single Replit instance)**:
+
+* In-memory queue is fine.
+* Just:
+
+  * Wrap it in a `JobStore` interface so you can swap implementations later.
+  * Handle “job not found” on `/job/:jobId` gracefully (treat as failed).
+
+**For anything production-ish / multi-instance:**
+
+* Use Redis (or similar) for:
+
+  * Shared queue (list / sorted set for priorities).
+  * Job metadata (hash keyed by jobId).
+* Pattern:
+
+  * `BRPOP` / `BZPOPMIN` style consumption.
+  * Workers can scale horizontally.
+
+### 4.2 Persistence
+
+I’d recommend:
+
+* Persist **job status + result reference** (e.g. URL of frame in object storage).
+* TTL jobs after X hours/days.
+* Benefits:
+
+  * You can debug weird cases.
+  * On restart, you don’t lose all knowledge of what happened.
+  * It’s useful for analytics (success rate, duration, etc.).
+
+### 4.3 Concurrency limits
+
+You asked:
+
+> How many concurrent generations should we allow per user?
+
+I’d do:
+
+* **Per-user limit**: 1–2 concurrent generation jobs.
+* **Global limit**: e.g. 10–20 (whatever is comfortable for your OpenAI quota + CPU).
+
+Pseudo:
+
+```ts
+const MAX_CONCURRENT_GLOBAL = 20;
+const MAX_CONCURRENT_PER_USER = 2;
+```
+
+When enqueuing:
+
+* If user already has `>= MAX_CONCURRENT_PER_USER` jobs in `processing`, assign **lower priority** or drop / defer new jobs.
+* If global processing count is at cap, don’t start more.
+
+That prevents a single heavy user from flooding you.
+
+### 4.4 Job cancellation
+
+You asked:
+
+> Should we implement job cancellation?
+
+For MVP:
+
+* Implement **logical cancellation**:
+
+  * Mark job as `cancelled`.
+  * If it’s still queued → never process it.
+  * If it’s processing → best-effort:
+
+    * You can’t always abort OpenAI easily; you just ignore result when it returns.
+* Don’t bother with deep “cancel at OpenAI mid-call” — complexity isn’t worth it initially.
+
+This is enough to avoid generating frames that nobody wants any more (e.g., user skipped ahead, closed app, etc.).
+
+---
+
+## 5. Misc nits and suggestions
+
+### 5.1 Progress field
+
+You reference `job.progress` in the polling endpoint, but it’s not in `GenerationJob`.
+
+You can either:
+
+* Drop progress for v1 (status-only is fine), **or**
+* Approximate progress:
+
+  * `queued` → 0
+  * `processing` → maybe `(now - startedAt) / estimatedTime` clamped at [0.1, 0.9]
+  * `completed` → 1.0
+
+This keeps it simple.
+
+### 5.2 Don’t trust `estimatedTime` too much
+
+You use:
+
+```ts
+setTimeout(() => {
+  clearInterval(pollInterval);
+  this.loadFallbackFrame().then(resolve);
+}, estimatedTime * 2);
+```
+
+That’s fine as a **soft** bound, but add a hard cap too, e.g.:
+
+* `maxWaitMs = Math.min(estimatedTime * 2, 30000)` (30s).
+
+So if estimates are wrong, you don’t wait forever.
+
+### 5.3 Tie-in with Progressive Loader
+
+You’re right that **async generation is the foundation**, and progressive loading sits on top. The final picture should be:
+
+* `ProgressiveLoader` asks backend for N frames.
+* Backend:
+
+  * Returns *any ready ones* now (cached/fresh).
+  * Enqueues jobs for the rest.
+* Async job system + WebSocket/polling dribble in new frames.
+* FrameBuffer receives them and keeps morphing.
+
+You’ve cleanly separated these concerns; just make sure not to re-introduce synchronous waits in the progressive layer.
+
+---
+
+## Direct answers to your review questions
+
+> **Correctness of the async architecture?**
+
+Yes. It correctly decouples HTTP from generation, uses a queue, and supports push/poll delivery. This is the right fix for your timeout problem.
+
+> **Completeness of error handling?**
+
+Good start. Add:
+
+* Handling for server restarts (job “missing” → treat as failed).
+* WebSocket listener cleanup via a central dispatcher.
+* Idempotent handling for duplicate/late messages.
+* Security: make sure session-bound WS connections can’t leak frames between users.
+
+> **WebSocket vs polling tradeoffs?**
+
+* WebSocket + polling fallback is robust.
+* If implementing WS is painful, you can absolutely ship v1 with just polling and add WS later without changing the fundamentals.
+
+> **Job queue implementation choices?**
+
+* MVP: in-memory is fine if you accept restart loss and handle it gracefully.
+* Production: Redis-backed queue + job store.
+* Persist status & result references with TTL.
+* Add global and per-user concurrency caps.
+* Implement simple logical cancellation.
+
+> **Any missing edge cases?**
+
+* Server restart / crash.
+* Listener leaks & double resolves.
+* Auth/authorization on WebSocket.
+* Job “not found” states on polling.
+
+---
+
+If you want, I can next:
+
+* Turn this into a **checklist-style implementation ticket set** (e.g. “ALG-101: Implement GenerationQueue interface”, “ALG-102: Add /api/artworks/next async endpoint…”) with acceptance criteria so Agent 3 / Grok has a very tight set of tasks to execute.

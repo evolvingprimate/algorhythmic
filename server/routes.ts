@@ -1954,6 +1954,99 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // TASK FIX: Removed shadowing Map variable that was causing catalogue bridge to crash
   // Now using the imported singleton recentlyServedCache with composite keys
 
+  // ASYNC VERSION: Returns immediately to prevent timeouts
+  // Returns cached artworks or a jobId for polling
+  app.get("/api/artworks/next/async", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const sessionId = req.query.sessionId as string;
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : 3; // Reduced default for faster response
+      
+      // Import async service
+      const { getCachedArtworks, enqueueArtworkGeneration } = await import('./services/async-artwork-service');
+      
+      // Try to get cached artworks for immediate response
+      const cached = await getCachedArtworks(userId, sessionId, limit);
+      
+      if (cached.length >= 2) {
+        // We have enough for morphing - return immediately
+        console.log(`[AsyncEndpoint] Returning ${cached.length} cached artworks immediately`);
+        return res.json({
+          type: 'immediate',
+          artworks: cached,
+          poolSize: cached.length,
+          source: 'cache'
+        });
+      }
+      
+      // Not enough cached - enqueue generation and return jobId
+      const jobId = await enqueueArtworkGeneration(userId, sessionId, {
+        styles: req.query.styles ? JSON.parse(req.query.styles as string) : undefined,
+        artists: req.query.artists ? JSON.parse(req.query.artists as string) : undefined,
+        orientation: req.query.orientation as string
+      });
+      
+      console.log(`[AsyncEndpoint] Enqueued job ${jobId}, returning immediately`);
+      return res.json({
+        type: 'queued',
+        jobId,
+        estimatedTime: 8000,
+        message: 'Artwork generation in progress'
+      });
+      
+    } catch (error: any) {
+      console.error('[AsyncEndpoint] Error:', error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Polling endpoint for job status
+  app.get("/api/artworks/job/:jobId", isAuthenticated, async (req: any, res) => {
+    try {
+      const jobId = req.params.jobId;
+      const { getJobStatus, getFallbackArtworks } = await import('./services/async-artwork-service');
+      
+      const job = await getJobStatus(jobId);
+      
+      if (!job) {
+        return res.status(404).json({ error: 'Job not found' });
+      }
+      
+      // Validate user owns this job
+      if (job.userId !== req.user.claims.sub) {
+        return res.status(403).json({ error: 'Unauthorized' });
+      }
+      
+      if (job.status === 'completed') {
+        return res.json({
+          status: 'completed',
+          artworks: [job.result], // Wrap in array for consistency
+          source: 'generated'
+        });
+      } else if (job.status === 'failed') {
+        // Return fallback artworks on failure
+        const fallbacks = await getFallbackArtworks(job.userId, 3);
+        return res.json({
+          status: 'failed',
+          artworks: fallbacks,
+          source: 'fallback',
+          error: job.error
+        });
+      }
+      
+      // Still processing or pending
+      return res.json({
+        status: job.status,
+        message: 'Generation in progress'
+      });
+      
+    } catch (error: any) {
+      console.error('[JobStatus] Error:', error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ORIGINAL SYNCHRONOUS VERSION (kept for backward compatibility)
   // GET endpoint with PRIORITY QUEUE: fresh → unseen
   // Fresh artwork (this session's last 15 min) shown FIRST, storage pool is fallback only
   app.get("/api/artworks/next", isAuthenticated, async (req: any, res) => {

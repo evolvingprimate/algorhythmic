@@ -217,8 +217,9 @@ export const storageMetrics = pgTable("storage_metrics", {
 // Generation Jobs - PostgreSQL-backed queue for async DALL-E processing
 export const generationJobs = pgTable("generation_jobs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sessionId: varchar("session_id"), // Added for async architecture (nullable to avoid data loss)
   userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  status: varchar("status", { enum: ["pending", "processing", "completed", "failed", "dead_letter"] }).notNull().default("pending"),
+  status: varchar("status", { enum: ["pending", "processing", "completed", "failed", "dead_letter", "cancelled"] }).notNull().default("pending"),
   priority: integer("priority").notNull().default(0), // Higher priority = processed first
   payload: text("payload").notNull(), // JSONB: generation parameters {prompt, styles, artists, audioAnalysis, etc}
   retryCount: integer("retry_count").notNull().default(0),

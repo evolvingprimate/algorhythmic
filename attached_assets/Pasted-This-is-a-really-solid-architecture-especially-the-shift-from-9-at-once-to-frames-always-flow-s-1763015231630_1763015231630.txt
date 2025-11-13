@@ -1,0 +1,307 @@
+This is a really solid architecture, especially the shift from “9 at once” to “frames always flow, scale up only when safe.” I’d ship this directionally as-is, with a few surgical upgrades so it plays nicely with everything else you’ve already designed (catalogue bridge, hung-frame detection, etc.).
+
+I’ll break this into:
+
+1. What’s already excellent
+2. Things to tighten / clarify
+3. Concrete implementation notes (with sample TS skeletons)
+4. How it ties into hung-frame detection + catalogue bridge
+
+---
+
+## 1. What’s already excellent
+
+* **You’ve killed the 9-frame trap.** The prefetchTarget=9 antipattern is clearly identified and retired.
+* **Instant start from storage** → this aligns perfectly with your catalogue-bridge / pre-generated library ideas. Great for “TV just came on, show *something* now.”
+* **Explicit phases** (Seed → Bootstrap → Progressive Expansion → Refill) give you a clean mental model and map nicely onto a state machine.
+* **Adaptive concurrency** instead of a fixed “always 3” or “always 9.” This is exactly what you want when generation time is in the 6–10s range but your HTTP timeout is 5s.
+* **Clear fallback hierarchy**: fresh → cached → stored → emergency static. That’s how you keep the screen from ever going dark.
+
+The main missing piece is: **decoupling slow generation from network timeouts** at the HTTP layer and making the ProgressiveLoader a proper *session-scoped state machine* instead of just “a helper class with some counters.”
+
+---
+
+## 2. Things to tighten / clarify
+
+### A. HTTP timeout vs generation time
+
+Right now the doc implies:
+
+> “Each frame takes 6–10s, timeout is 5s → failure.”
+
+That happens because the **frontend request is waiting for the entire generation**. That’s the first thing I’d correct:
+
+* **Don’t tie OpenAI generation duration to a single HTTP response**.
+* Backend should:
+
+  * Enqueue generation job.
+  * Return a quick “accepted” response (or a ready frame if you already have one from cache).
+  * Client polls / streams frames as they become available.
+
+You’re *already* moving toward this with the catalogue bridge & object-storage seeding. Just make sure this doc explicitly says:
+
+> “All generation is asynchronous, and client never blocks on a single 6–10s HTTP call.”
+
+### B. ProgressiveLoader should be a state machine
+
+Right now it’s described as a class with some metrics. I’d make it explicitly:
+
+* **Per-session**, not global.
+* With **states** like:
+
+  * `SEEDING` → `BOOTSTRAP` → `STABLE` → `DEGRADED`
+* And a clearly defined **contract** with the FrameBuffer:
+
+  * “Whenever buffer < minBuffer, call `loader.refill(bufferDeficit)`”
+  * “Loader will decide *how many* new frames to actually request, based on metrics.”
+
+### C. Use an exponential moving average instead of raw averages
+
+For `avgResponseTime` and `successRate`, do something like:
+
+* `avgMs = 0.8 * avgMs + 0.2 * lastDuration`
+* `successRate = 0.9 * successRate + 0.1 * (success ? 1 : 0)`
+
+That makes the system **responsive to recent conditions** instead of being polluted by ancient slow frames.
+
+### D. Clarify “never exceed network timeout window”
+
+Really what you want is:
+
+* **Short-lived HTTP calls** (e.g. ≤ 2–3s) that:
+
+  * Either return already-generated frames (from DB/cache/object storage), or
+  * Kick off long-running generation and acknowledge it quickly.
+* Any *actual* OpenAI call or heavy gen should be wrapped in your **hung-frame detection** (`generateWithTimeout(60s)` etc.).
+
+So I’d refine that bullet to:
+
+> “Client never waits on a single HTTP call longer than X seconds. Long-lived generation is always asynchronous with poll/stream.”
+
+---
+
+## 3. Concrete implementation notes
+
+### 3.1 ProgressiveLoader skeleton
+
+Here’s a slightly more fleshed-out version you could drop into a `progressive-loader.ts`:
+
+```ts
+type GenerationResult =
+  | { ok: true; durationMs: number; frameIds: string[] }
+  | { ok: false; durationMs: number; error: Error };
+
+export class ProgressiveLoader {
+  private inFlight = 0;
+  private maxConcurrent = 1;
+  private successRate = 1.0;     // EMA
+  private avgDuration = 0;       // EMA in ms
+
+  private readonly maxConcurrentCap = 3; // or 4
+  private readonly minBufferSize = 2;
+  private readonly throttle: ThrottleStrategy;
+
+  constructor(throttle: ThrottleStrategy) {
+    this.throttle = throttle;
+  }
+
+  /** Called by FrameBuffer when it needs N more frames in the pool */
+  async refill(desiredCount: number, requestFn: (count: number) => Promise<GenerationResult>) {
+    // Don't exceed concurrency cap
+    const allowed = Math.min(
+      desiredCount,
+      this.maxConcurrent - this.inFlight
+    );
+    if (allowed <= 0) return;
+
+    this.inFlight += 1;
+    try {
+      const started = performance.now();
+      const result = await requestFn(allowed);
+      const durationMs = performance.now() - started;
+
+      this.updateMetrics(result, durationMs);
+      this.adjustConcurrency();
+
+      // Caller is responsible for adding frames to buffer on success
+      return result;
+    } finally {
+      this.inFlight -= 1;
+    }
+  }
+
+  private updateMetrics(result: GenerationResult, durationMs: number) {
+    const alpha = 0.2;
+    const beta = 0.1;
+
+    this.avgDuration = this.avgDuration === 0
+      ? durationMs
+      : this.avgDuration * (1 - alpha) + durationMs * alpha;
+
+    const sample = result.ok ? 1 : 0;
+    this.successRate = this.successRate * (1 - beta) + sample * beta;
+  }
+
+  private adjustConcurrency() {
+    const { successThreshold, failureThreshold, timeoutThreshold } = this.throttle;
+
+    if (
+      this.successRate >= successThreshold &&
+      this.avgDuration < timeoutThreshold * 0.6 &&
+      this.maxConcurrent < this.maxConcurrentCap
+    ) {
+      this.maxConcurrent += 1;
+    }
+
+    if (
+      this.successRate <= failureThreshold ||
+      this.avgDuration > timeoutThreshold * 0.9
+    ) {
+      this.maxConcurrent = Math.max(1, this.maxConcurrent - 1);
+    }
+  }
+
+  getMetrics() {
+    return {
+      inFlight: this.inFlight,
+      maxConcurrent: this.maxConcurrent,
+      successRate: this.successRate,
+      avgDuration: this.avgDuration,
+    };
+  }
+}
+```
+
+### 3.2 React integration (FrameBuffer + hook)
+
+On the client:
+
+* FrameBuffer manages **frame list and pointer**.
+* ProgressiveLoader manages **when and how aggressively to refill**.
+
+```ts
+// useFramePool.ts
+export function useFramePool(sessionId: string) {
+  const [frames, setFrames] = useState<ArtworkFrame[]>([]);
+  const loaderRef = useRef<ProgressiveLoader>();
+
+  useEffect(() => {
+    loaderRef.current = new ProgressiveLoader({
+      successThreshold: 0.8,
+      failureThreshold: 0.5,
+      timeoutThreshold: 4000,
+      backoffMultiplier: 2,
+    });
+
+    // Phase 1: seed from object storage
+    (async () => {
+      const initialSeed = await fetch(`/api/artworks/seed?count=3&sessionId=${sessionId}`)
+        .then(r => r.json());
+      setFrames(initialSeed.frames);
+    })();
+  }, [sessionId]);
+
+  const ensureBuffer = useCallback(async () => {
+    const minBuffer = 2;
+    const deficit = minBuffer - frames.length;
+    if (deficit <= 0 || !loaderRef.current) return;
+
+    const loader = loaderRef.current;
+
+    await loader.refill(deficit, async (count) => {
+      // This endpoint should be asynchronous-friendly:
+      // return cached frames immediately; queue new ones server-side
+      const res = await fetch(`/api/artworks/next?limit=${count}&sessionId=${sessionId}`);
+      if (!res.ok) {
+        return { ok: false as const, durationMs: 0, error: new Error('fetch failed'), frameIds: [] };
+      }
+      const data = await res.json();
+      setFrames(prev => [...prev, ...data.frames]);
+      return { ok: true as const, durationMs: 0, frameIds: data.frames.map((f: any) => f.id) };
+    });
+  }, [frames.length, sessionId]);
+
+  // Call ensureBuffer whenever a frame is consumed
+  const consumeFrame = useCallback(() => {
+    setFrames(prev => {
+      const [, ...rest] = prev;
+      return rest;
+    });
+    void ensureBuffer();
+  }, [ensureBuffer]);
+
+  return { frames, consumeFrame };
+}
+```
+
+Hook usage in `display.tsx`:
+
+```tsx
+const { frames, consumeFrame } = useFramePool(sessionId);
+
+// MorphEngine pulls from `frames[0]` as “current” and `frames[1]` as “next”.
+// Whenever a cycle completes → call consumeFrame().
+```
+
+---
+
+## 4. Integrating with existing systems
+
+You already have a few big pieces in flight:
+
+1. **Catalogue bridge / object storage pool**
+
+   * `GET /api/artworks/seed?count=3` should simply be:
+
+     * Filter by orientation + style if available.
+     * Exclude recently seen frames.
+     * Return from your stored pool (Replit object storage / DB) in <100ms.
+
+2. **Hung-frame detection & recovery**
+
+   * The ProgressiveLoader’s notion of `success` should **plug into your `generateWithTimeout` wrapper**:
+
+     * If OpenAI call hits timeout → mark failure, reduce concurrency, and **fall back to storage frames**.
+   * Server side: never let a single generation block the queue indefinitely; you’ve already got the pattern.
+
+3. **Telemetry** (this is huge for tuning)
+   Log per-session:
+
+   * `frame_seed_count` (how many frames came from storage vs generation)
+   * `gen_success_rate`, `gen_avg_duration_ms`
+   * `progressive_max_concurrent_over_time`
+   * Startup metrics:
+
+     * `t_first_frame_ms` (goal: <100ms)
+     * `t_first_fresh_frame_ms` (goal: 6–10s)
+   * Startup failures:
+
+     * `launch_timeout_rate` (goal: ~0)
+
+   That gives you proof that the architecture is doing what it claims.
+
+---
+
+## 5. Timeline realism
+
+Your phase-hour estimates (2 + 3 + 2 + 1 + 2 = 10 hours) are **possible** if:
+
+* API surface is already there, and
+* You keep v1 very lean (no fancy UI controls, just doing the orchestration).
+
+But given:
+
+* Integration with existing React Query hooks / FrameBuffer,
+* Telemetry + QA (slow network emulation, high-latency OpenAI),
+
+I’d mentally treat this as **a 1–2 day effort of focused work**, not “half a day,” so you’re not disappointed.
+
+---
+
+## TL;DR feedback you can hand to Agent 3 / Architect
+
+If you want a one-sentence brief to feed another agent:
+
+> Keep the progressive loading design, but make all generation asynchronous (no 6–10s HTTP waits), implement ProgressiveLoader as a per-session state machine that refills the frame buffer based on recent success rate and latency, seed instantly from object storage, plug into the existing hung-frame detector, and log startup + generation metrics so we can tune concurrency caps and buffer sizes.
+
+If you’d like, next step I can help you turn this into a **specific implementation ticket list** (Jira-style) for Agent 3 with acceptance criteria for each phase.

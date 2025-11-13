@@ -451,9 +451,21 @@ function DisplayContent() {
     });
   }, [isAuthenticated, impressionVersionTrigger]);
 
-  // Fetch UNSEEN artwork only - Freshness Pipeline ensures never seeing repeats
-  // PROGRESSIVE ENHANCEMENT: Frames flow immediately on auth, setup wizard enhances
-  // CRITICAL: staleTime=0 forces fresh fetch on mount, cache invalidation on impressions
+  // Import AsyncFrameLoader at top of component (will be added separately)
+  const asyncFrameLoaderRef = useRef<any>(null);
+  
+  // Initialize AsyncFrameLoader once
+  useEffect(() => {
+    if (!asyncFrameLoaderRef.current) {
+      import('../lib/AsyncFrameLoader').then(({ AsyncFrameLoader }) => {
+        asyncFrameLoaderRef.current = new AsyncFrameLoader();
+        console.log('[Display] AsyncFrameLoader initialized');
+      });
+    }
+  }, []);
+
+  // Fetch UNSEEN artwork only - Now using ASYNC endpoint for faster response
+  // CRITICAL: 20-second timeout prevents network timeouts, uses polling for long operations
   // BUG FIX: Include impressionVersion in queryKey for proper cache invalidation
   const { data: unseenResponse, isError: artworkError, error: artworkErrorDetails } = useQuery<{
     artworks: any[];
@@ -465,47 +477,57 @@ function DisplayContent() {
     tier?: string;
     selectedStyles?: string[];
   }>({
-    queryKey: ["/api/artworks/next", sessionId.current, impressionVersionTrigger, artworkVersion],
+    queryKey: ["/api/artworks/next/async", sessionId.current, impressionVersionTrigger, artworkVersion],
     queryFn: async ({ signal }) => {
-      console.log('[Display] Query running - fetching /api/artworks/next');
+      console.log('[Display] Query running - fetching /api/artworks/next/async (non-blocking)');
       
-      // Create abort controller with 65-second timeout for AI generation
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => {
-        controller.abort();
-      }, 65000); // 65 seconds to accommodate backend's 60s timeout + buffer
-      
-      // Link the query's abort signal
-      if (signal) {
-        signal.addEventListener('abort', () => {
-          clearTimeout(timeoutId);
-          controller.abort();
-        });
+      // Use AsyncFrameLoader if available, fallback to direct fetch
+      if (asyncFrameLoaderRef.current) {
+        try {
+          const artworks = await asyncFrameLoaderRef.current.fetchArtworks(
+            sessionId.current,
+            signal,
+            {
+              styles: preferences?.selectedStyles,
+              artists: preferences?.selectedArtists,
+              orientation: preferences?.preferredOrientation,
+            }
+          );
+          
+          console.log('[Display] AsyncFrameLoader returned', artworks.length, 'artworks');
+          
+          // Return in expected format
+          return {
+            artworks: artworks || [],
+            poolSize: artworks?.length || 0,
+            freshCount: 0,
+            storageCount: artworks?.length || 0,
+            needsGeneration: artworks?.length < 3,
+            onboardingState: preferences ? 'complete' : 'incomplete',
+            tier: 'async',
+            selectedStyles: preferences?.selectedStyles || [],
+          };
+        } catch (error: any) {
+          console.error('[Display] AsyncFrameLoader error:', error);
+          throw error;
+        }
       }
       
-      try {
-        const res = await fetch(`/api/artworks/next?sessionId=${sessionId.current}`, {
-          credentials: "include",
-          signal: controller.signal,
-        });
-        
-        clearTimeout(timeoutId);
-        
-        if (!res.ok) {
-          const errorText = await res.text();
-          console.error('[Display] Query failed:', res.status, errorText);
-          throw new Error(`${res.status}: ${errorText}`);
-        }
-        const data = await res.json();
-        console.log('[Display] Query success - received artworks:', data.artworks?.length);
-        return data;
-      } catch (error: any) {
-        clearTimeout(timeoutId);
-        if (error.name === 'AbortError') {
-          throw new Error('Request timeout after 65 seconds - AI generation may take longer, please try again');
-        }
-        throw error;
+      // Fallback to original synchronous endpoint if AsyncFrameLoader not ready
+      console.warn('[Display] AsyncFrameLoader not ready, falling back to sync endpoint');
+      const res = await fetch(`/api/artworks/next?sessionId=${sessionId.current}`, {
+        credentials: "include",
+        signal,
+      });
+      
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.error('[Display] Query failed:', res.status, errorText);
+        throw new Error(`${res.status}: ${errorText}`);
       }
+      const data = await res.json();
+      console.log('[Display] Query success - received artworks:', data.artworks?.length);
+      return data;
     },
     enabled: isAuthenticated, // Progressive enhancement: auth is the only gate
     staleTime: 0, // Always consider data stale - refetch on mount
