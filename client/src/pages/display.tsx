@@ -2678,13 +2678,9 @@ function DisplayContent() {
     // User explicitly clicked "Start Creating" - now we can show the wizard
     console.log('[Display] User clicked Start Creating - initiating wizard');
     
-    // If user has saved styles, skip style selection and go to audio
-    // Otherwise, go to style selection first
-    if (selectedStyles.length > 0) {
-      dispatch({ type: 'OPEN_AUDIO_SELECTION' });
-    } else {
-      dispatch({ type: 'START_STYLE_SELECTION' });
-    }
+    // Always show style selector first so users can confirm or change their preferences
+    // This ensures the session-based style selection pattern
+    dispatch({ type: 'START_STYLE_SELECTION' });
   };
 
   const handleAudioSourceConfirm = async (deviceId: string | undefined) => {
@@ -2767,7 +2763,7 @@ function DisplayContent() {
     });
   };
 
-  const handleStylesChange = (styles: string[], isDynamicMode: boolean) => {
+  const handleStylesChange = (styles: string[], isDynamicMode: boolean, userConfirmed: boolean = true) => {
     setSelectedStyles(styles);
     setDynamicMode(isDynamicMode);
     
@@ -2943,9 +2939,11 @@ function DisplayContent() {
         // Graceful degradation: Continue with normal flow, wait for fresh generation
       });
     
-    // BUG FIX: Advance to audio selection step after saving styles
-    // This ensures proper audio analysis data before generation starts
-    dispatch({ type: 'CONFIRM_STYLES' });
+    // Only advance to audio selection if user explicitly confirmed their selection
+    // Don't auto-advance when preferences are just being loaded
+    if (userConfirmed) {
+      dispatch({ type: 'CONFIRM_STYLES' });
+    }
     
     // Save preferences mutation (will refetch but latch prevents reset)
     savePreferencesMutation.mutate(
