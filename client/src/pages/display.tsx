@@ -573,29 +573,18 @@ function DisplayContent() {
     }
   }, [unseenResponse?.artworks, pinnedArtwork]);
 
-  // Session-Based Style Selection: Always show style selector each session
-  // Every user (new and returning) must select styles when the app opens
+  // Session-Based Style Selection: Track if user needs to select styles this session
+  // But DON'T automatically show the modal - wait for user interaction
+  const [needsSessionSetup, setNeedsSessionSetup] = useState(true);
+  
+  // Track session setup requirement (but don't auto-show modal)
   useEffect(() => {
-    // Only run this once on mount, not on every render
-    if (wizardState.step !== WizardStep.IDLE || setupComplete) {
-      // Already started or completed, don't restart
-      return;
+    // Only set the flag, don't trigger any UI
+    if (wizardState.step === WizardStep.IDLE && !setupComplete) {
+      console.log('[Display] Session needs setup - will wait for user action');
+      setNeedsSessionSetup(true);
     }
-    
-    // BUG FIX #3: If wizard is active (user mid-flow), NEVER reset it during refetch
-    if (wizardActiveRef.current) {
-      console.log('[Display] Wizard already active - skipping');
-      return;
-    }
-    
-    // SESSION-BASED SELECTION: Always start with style selector on mount
-    // Both new and returning users must select styles each session
-    console.log('[Display] Starting session-based style selection flow');
-    dispatch({ type: 'START_STYLE_SELECTION' });
-    
-    // Note: Previous preferences can be loaded in the StyleSelector component
-    // but users must actively select/confirm them each session
-  }, [setupComplete]); // Simplified dependencies - don't wait for preferences
+  }, []); // Run once on mount
   
   // Sync setupComplete with wizard state
   useEffect(() => {
@@ -2664,6 +2653,9 @@ function DisplayContent() {
   // No longer needed - using dispatch actions instead
 
   const handleStartListening = () => {
+    // User explicitly clicked "Start Creating" - now we can show the wizard
+    console.log('[Display] User clicked Start Creating - initiating wizard');
+    
     // If user has saved styles, skip style selection and go to audio
     // Otherwise, go to style selection first
     if (selectedStyles.length > 0) {
@@ -2678,6 +2670,7 @@ function DisplayContent() {
     if (deviceId === "no-audio") {
       // Complete setup and dismiss modal for "No Audio"
       dispatch({ type: 'CONFIRM_AUDIO' });
+      setNeedsSessionSetup(false); // Clear the session setup flag
       
       // Use the updated createDefaultAudioAnalysis that includes ALL required fields
       const defaultAudioAnalysis = createDefaultAudioAnalysis();
@@ -2710,6 +2703,7 @@ function DisplayContent() {
         
         // Only dismiss modal and complete setup after successful initialization
         dispatch({ type: 'CONFIRM_AUDIO' });
+        setNeedsSessionSetup(false); // Clear the session setup flag
         
         setIsPlaying(true);
         
