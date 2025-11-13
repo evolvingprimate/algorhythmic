@@ -1857,7 +1857,9 @@ export class PostgresStorage implements IStorage {
       return existing[0];
     }
     
-    const [created] = await this.db
+    // Use ON CONFLICT to handle race conditions where multiple concurrent
+    // requests try to initialize credits for the same user
+    const result = await this.db
       .insert(userCredits)
       .values({
         userId,
@@ -1868,18 +1870,30 @@ export class PostgresStorage implements IStorage {
         billingCycleEnd: cycleEnd,
         timezone: 'UTC',
       })
+      .onConflictDoNothing()
       .returning();
     
-    await this.db.insert(creditLedger).values({
-      userId,
-      eventType: 'grant',
-      amount: baseQuota,
-      balanceAfter: baseQuota,
-      description: 'Initial credit grant',
-      metadata: JSON.stringify({ tier: tierKey }),
-    });
+    // If the insert was successful (not conflicted)
+    if (result.length > 0) {
+      await this.db.insert(creditLedger).values({
+        userId,
+        eventType: 'grant',
+        amount: baseQuota,
+        balanceAfter: baseQuota,
+        description: 'Initial credit grant',
+        metadata: JSON.stringify({ tier: tierKey }),
+      });
+      return result[0];
+    }
     
-    return created;
+    // If we got a conflict, fetch the existing record
+    const [existingAfterConflict] = await this.db
+      .select()
+      .from(userCredits)
+      .where(eq(userCredits.userId, userId))
+      .limit(1);
+    
+    return existingAfterConflict;
   }
 
   async getCreditsContext(userId: string): Promise<{
