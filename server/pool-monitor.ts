@@ -47,31 +47,7 @@ interface SessionPoolState {
   isActive: boolean;
 }
 
-// Configuration for pool monitoring
-const POOL_CONFIG = {
-  // Thresholds
-  PRE_GENERATION_THRESHOLD: 0.85, // Trigger at 85% pool coverage
-  CRITICAL_THRESHOLD: 0.95, // Critical alert at 95% coverage
-  TARGET_POOL_SIZE: 10, // Target frames per session
-  MIN_POOL_SIZE: 2, // Minimum frames required (MorphEngine needs 2)
-  
-  // Pre-generation settings
-  PRE_GEN_BATCH_SIZE: 5, // Generate 5 frames per batch
-  PRE_GEN_COOLDOWN_MS: 300000, // 5 minute cooldown between batches
-  MAX_CONCURRENT_PRE_GEN: 2, // Max concurrent pre-generation jobs
-  PRE_GEN_PRIORITY: -10, // Lower priority than user requests
-  
-  // Monitoring intervals
-  MONITOR_INTERVAL_MS: 30000, // Check pool every 30 seconds
-  CONSUMPTION_WINDOW_MS: 300000, // 5 minute window for rate calculation
-  SESSION_INACTIVE_MS: 600000, // Consider session inactive after 10 minutes
-  
-  // Cost controls
-  MAX_PRE_GEN_PER_HOUR: 50, // Maximum pre-generations per hour
-  COST_PER_GENERATION: 0.04, // Estimated cost per DALL-E generation
-  MAX_HOURLY_SPEND: 2.0, // Maximum $2/hour on pre-generation
-};
-
+import { POOL_CONFIG } from './config/pool.config';
 import type { PreGenerationIntent, PreGenerationManager } from "./pre-generation-manager";
 
 export class PoolMonitor extends EventEmitter {

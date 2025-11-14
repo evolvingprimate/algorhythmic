@@ -6,6 +6,7 @@ import Stripe from "stripe";
 import { storage } from "./storage";
 import { generateArtPrompt, generateArtImage, queueController, generationHealthService, recoveryManager, queueService, poolMonitor, predictiveEngine } from "./bootstrap";
 import { identifyMusic } from "./music-service";
+import { POOL_CONFIG } from './config/pool.config';
 import { insertArtVoteSchema, insertArtPreferenceSchema, type AudioAnalysis, type MusicIdentification, telemetryEvents } from "@shared/schema";
 import { and, sql } from "drizzle-orm";
 import { setupAuth, isAuthenticated } from "./replitAuth";
@@ -2132,8 +2133,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
         combinedArtworks.push(...uniqueUnseen);
       }
-      
-      const needsGeneration = combinedArtworks.length < 5;
+
+      // Log pool check before needsGeneration
+      console.log(`[ArtworksNext] Pool check: ${combinedArtworks.length}/${POOL_CONFIG.MIN_POOL_THRESHOLD} frames`);
+      const needsGeneration = combinedArtworks.length < POOL_CONFIG.MIN_POOL_THRESHOLD;
       
       // REMOVED: Don't mark as recently-served here - wait for render-ack
       // This fixes fresh artwork being filtered out before display
@@ -2155,8 +2158,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log(`[Style Filtering] Result breakdown:`, telemetry);
       
       // EMERGENCY FALLBACK: NEVER return <2 frames - morphEngine needs at least 2 to prevent glitches
-      if (telemetry.pool_exhausted || combinedArtworks.length < 2) {
-        console.error(`[ALERT] 🚨 Pool exhausted or insufficient frames (<2) for user ${userId} session ${sessionId} - EMERGENCY FALLBACK ACTIVATED`);
+      if (telemetry.pool_exhausted || combinedArtworks.length < POOL_CONFIG.MIN_POOL_SIZE) {
+        console.error(`[ALERT] 🚨 Pool exhausted or insufficient frames (<${POOL_CONFIG.MIN_POOL_SIZE}) for user ${userId} session ${sessionId} - EMERGENCY FALLBACK ACTIVATED`);
         
         try {
           // Use clean 3-tier fallback service
@@ -2170,7 +2173,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               styleTags,
               artistTags,
               recentlyServedIds,
-              minFrames: 2 // MorphEngine requirement
+              minFrames: POOL_CONFIG.MIN_POOL_SIZE // MorphEngine requirement
             }
           );
           
@@ -2236,7 +2239,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // BACKWARD COMPATIBLE: Legacy behavior if no audio context
       if (!audioContext || !generateRealTime) {
         const unseenArtworks = await storage.getUnseenArtworks(userId, { limit });
-        const needsGeneration = unseenArtworks.length < 5;
+        const needsGeneration = unseenArtworks.length < POOL_CONFIG.MIN_POOL_THRESHOLD;
         
         console.log(`[Freshness] User ${userId} - Legacy mode - Unseen pool: ${unseenArtworks.length} artworks`);
         
