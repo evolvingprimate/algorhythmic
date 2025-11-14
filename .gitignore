@@ -61,3 +61,4 @@ pnpm-lock.yaml
 # Local object storage cache
 attached_assets/generated_images/
 attached_assets/stock_images/
+.aider*
