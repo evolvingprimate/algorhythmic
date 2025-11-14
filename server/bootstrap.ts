@@ -74,10 +74,17 @@ console.log('[Bootstrap] PreGenerationManager wired to PoolMonitor for coordinat
 // 9. Initialize predictive engine after queue service is created
 const predictiveEngine = initializePredictiveEngine(storage, queueService, poolMonitor);
 
-// 10. Start recovery manager monitoring, queue worker, and pool monitor
+ // 10. Start recovery manager monitoring and pool monitor
 recoveryManager.startMonitoring();
-queueService.startWorker();
 poolMonitor.startMonitoring();
+
+// Conditionally start the async worker in the HTTP server process
+if (process.env.START_WORKER_IN_SERVER === 'true') {
+  console.log('[Bootstrap] Starting worker in HTTP server process');
+  queueService.startWorker();
+} else {
+  console.log('[Bootstrap] Worker NOT started in HTTP server process. Run standalone worker with: npm run worker');
+}
 
 // Export all services as singletons
 export {
