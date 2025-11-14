@@ -27,6 +27,10 @@ This file is the shared communication board between AIs (Claude, Aider, ChatGPT,
   - Notes: anything important for the next AI
 -->
 
+- 2025-11-14 – Claude (Lead Architect) – Investigated FrameValidator architecture, created Job #2 spec for telemetry integration
+  - Files touched: docs/AI_JOB_QUEUE.md
+  - Notes: FrameValidator works but lacks telemetry. Designed cross-boundary reporting architecture (client→server). Job #2 adds validation category, counters, and >0.5% alerting to resolve blocking issue.
+
 - 2025-11-14 – ChatGPT+Aider – Completed Job #1: Centralized POOL_CONFIG and replaced magic numbers in routes/pool-monitor
   - Files touched: server/config/pool.config.ts, server/pool-monitor.ts, server/routes.ts, docs/AI_JOB_QUEUE.md, docs/AI_SYNC.md
   - Notes: All pool config is now in one file, all references updated, magic numbers removed, job spec marked complete.
