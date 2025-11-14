@@ -700,9 +700,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const queueState = queueController.getState();
       const queueDecision = queueController.getGenerationDecision();
       
-      // Get recovery manager status  
+      // Get recovery manager status
       const recoveryStatus = recoveryManager.getStatus();
-      
+
+      // Get telemetry metrics summary for validator stats
+      const telemetrySummary = telemetryService.getMetricsSummary();
+
       // Compile comprehensive resilience status
       const resilienceStatus = {
         circuitBreaker: {
@@ -745,6 +748,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           fallbackTier: gen.metadata?.fallbackTier || null,
           error: gen.metadata?.error || null
         })),
+        validator: {
+          rejectionRate: telemetrySummary.validatorRejectionRate,
+          rejectionsTotal: telemetrySummary.validatorRejectionsTotal,
+          attemptsTotal: telemetrySummary.validatorAttemptsTotal,
+          maxRetriesCount: telemetrySummary.validatorMaxRetriesCount,
+          thresholdExceeded: telemetrySummary.validatorRejectionRate > 0.005
+        },
         timestamp: new Date().toISOString()
       };
       
@@ -3121,10 +3131,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error('[Telemetry] Client telemetry error:', error);
-      res.status(500).json({ 
+      res.status(500).json({
         message: 'Failed to process client telemetry',
-        error: error.message 
+        error: error.message
       });
+    }
+  });
+
+  // POST /api/telemetry/validation - Client-side validation events
+  app.post('/api/telemetry/validation', async (req, res) => {
+    try {
+      const { event, metrics } = req.body;
+
+      if (!event || !metrics) {
+        return res.status(400).json({ error: 'event and metrics required' });
+      }
+
+      telemetryService.recordEvent({
+        category: 'validation',
+        event,
+        metrics,
+        severity: event === 'max_retries_exceeded' ? 'error' : 'info',
+        sessionId: metrics.sessionId,
+        userId: (req as any).user?.claims?.sub
+      });
+
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error('[Telemetry] Validation event error:', error);
+      res.status(500).json({ error: error.message });
     }
   });
 

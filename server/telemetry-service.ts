@@ -8,7 +8,7 @@
 
 export interface TelemetryEvent {
   timestamp: Date;
-  category: 'generation' | 'display' | 'fallback' | 'websocket' | 'system';
+  category: 'generation' | 'display' | 'fallback' | 'websocket' | 'validation' | 'system';
   event: string;
   metrics: Record<string, any>;
   severity: 'info' | 'warning' | 'error' | 'critical';
@@ -56,7 +56,13 @@ export interface MetricsSummary {
     global: number;
     total: number;
   };
-  
+
+  // Validator metrics
+  validatorRejectionRate: number;  // Percentage
+  validatorRejectionsTotal: number;
+  validatorAttemptsTotal: number;
+  validatorMaxRetriesCount: number;
+
   // System Health Metrics
   websocketConnections: {
     active: number;
@@ -121,6 +127,11 @@ const ALERT_CONDITIONS = {
     threshold: 0.9, // 90% success rate minimum
     message: 'WebSocket ACK failure rate high',
     severity: 'warning' as const
+  },
+  VALIDATOR_REJECTION_RATE: {
+    threshold: 0.005,  // 0.5% max
+    message: 'Frame validator rejection rate too high',
+    severity: 'warning' as const
   }
 };
 
@@ -148,7 +159,10 @@ export class TelemetryService {
     heartbeatMissed: 0,
     morphCyclesCompleted: 0,
     morphCyclesStarted: 0,
-    schedulerTransitions: 0
+    schedulerTransitions: 0,
+    validatorAttempts: 0,       // Total validation attempts
+    validatorRejections: 0,     // Total rejections
+    validatorMaxRetries: 0      // Max retries exceeded count
   };
   
   // Latency tracking
@@ -290,7 +304,18 @@ export class TelemetryService {
         this.latencies.websocket.push(event.metrics.latencyMs);
       }
     }
-    
+
+    // Track validator metrics
+    if (event.category === 'validation') {
+      if (event.event === 'frame_validation_attempt') {
+        this.counters.validatorAttempts++;
+      } else if (event.event === 'frame_rejection') {
+        this.counters.validatorRejections++;
+      } else if (event.event === 'max_retries_exceeded') {
+        this.counters.validatorMaxRetries++;
+      }
+    }
+
     // Track system metrics
     if (event.category === 'system' && event.event === 'frame_buffer_update') {
       if (event.metrics.fresh !== undefined) this.frameBufferSizes.fresh = event.metrics.fresh;
@@ -425,7 +450,19 @@ export class TelemetryService {
         timestamp: new Date()
       });
     }
-    
+
+    // Check validator rejection rate
+    if (summary.validatorRejectionRate > ALERT_CONDITIONS.VALIDATOR_REJECTION_RATE.threshold) {
+      alerts.push({
+        condition: 'VALIDATOR_REJECTION_RATE',
+        message: ALERT_CONDITIONS.VALIDATOR_REJECTION_RATE.message,
+        severity: ALERT_CONDITIONS.VALIDATOR_REJECTION_RATE.severity,
+        value: summary.validatorRejectionRate,
+        threshold: ALERT_CONDITIONS.VALIDATOR_REJECTION_RATE.threshold,
+        timestamp: new Date()
+      });
+    }
+
     return alerts;
   }
   
@@ -486,16 +523,21 @@ export class TelemetryService {
     const totalHeartbeats = this.counters.heartbeatSuccess + this.counters.heartbeatMissed;
     const heartbeatRate = totalHeartbeats > 0 ? this.counters.heartbeatSuccess / totalHeartbeats : 1;
     
-    const morphCompletionRate = this.counters.morphCyclesStarted > 0 
-      ? this.counters.morphCyclesCompleted / this.counters.morphCyclesStarted 
+    const morphCompletionRate = this.counters.morphCyclesStarted > 0
+      ? this.counters.morphCyclesCompleted / this.counters.morphCyclesStarted
       : 1;
-    
+
     // Calculate WebSocket stability
     const totalConnections = this.counters.websocketConnects;
-    const stability = totalConnections > 0 
+    const stability = totalConnections > 0
       ? 1 - (this.counters.websocketDisconnects / totalConnections)
       : 1;
-    
+
+    // Calculate validator rejection rate
+    const validatorRejectionRate = this.counters.validatorAttempts > 0
+      ? this.counters.validatorRejections / this.counters.validatorAttempts
+      : 0;
+
     return {
       generationSuccessRate: this.counters.generationSuccess / Math.max(1, totalGenerations),
       generationFailureRate: this.counters.generationFailure / Math.max(1, totalGenerations),
@@ -527,6 +569,10 @@ export class TelemetryService {
       },
       ackSuccessRate: ackSuccessRate,
       heartbeatResponseRate: heartbeatRate,
+      validatorRejectionRate: validatorRejectionRate,
+      validatorRejectionsTotal: this.counters.validatorRejections,
+      validatorAttemptsTotal: this.counters.validatorAttempts,
+      validatorMaxRetriesCount: this.counters.validatorMaxRetries,
       memoryUsage: {
         eventBuffer: this.events.length,
         metricsMap: this.metrics.size,
@@ -611,7 +657,10 @@ export class TelemetryService {
       heartbeatMissed: 0,
       morphCyclesCompleted: 0,
       morphCyclesStarted: 0,
-      schedulerTransitions: 0
+      schedulerTransitions: 0,
+      validatorAttempts: 0,
+      validatorRejections: 0,
+      validatorMaxRetries: 0
     };
     this.latencies = {
       generation: [],

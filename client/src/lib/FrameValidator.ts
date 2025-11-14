@@ -44,11 +44,16 @@ export class FrameValidator {
    * @returns Validation result with rejection details
    */
   validate(frameIds: string[], currentSessionId: string): ValidationResult {
+    // Record validation attempt
+    this.sendTelemetry('frame_validation_attempt', {
+      frameCount: frameIds.length
+    });
+
     // Reset if session changed
     if (this.sessionId !== currentSessionId) {
       this.reset(currentSessionId);
     }
-    
+
     // CRITICAL: Deduplicate within current batch FIRST (same-batch repeats)
     const uniqueFrameIds = Array.from(new Set(frameIds));
     if (uniqueFrameIds.length < frameIds.length) {
@@ -72,11 +77,24 @@ export class FrameValidator {
           retryAttempt: this.retryCount,
           maxRetries: this.maxRetries,
         });
+
+        // Send telemetry
+        this.sendTelemetry('frame_rejection', {
+          duplicateCount: duplicates.length,
+          retryAttempt: this.retryCount,
+          maxRetries: this.maxRetries
+        });
       }
-      
+
       // Check if max retries exceeded
       if (this.retryCount > this.maxRetries) {
         console.error('[FrameValidator] 🚨 Max retries exceeded - pool may be exhausted');
+
+        this.sendTelemetry('max_retries_exceeded', {
+          retryCount: this.retryCount,
+          maxRetries: this.maxRetries
+        });
+
         return {
           valid: false,
           rejectedFrameIds: duplicates,
@@ -133,5 +151,29 @@ export class FrameValidator {
       maxRetries: this.maxRetries,
       sessionId: this.sessionId,
     };
+  }
+
+  /**
+   * Send telemetry event to server
+   */
+  private async sendTelemetry(event: string, metrics: Record<string, any>) {
+    if (!this.enableTelemetry) return;
+
+    try {
+      await fetch('/api/telemetry/validation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event,
+          metrics: {
+            ...metrics,
+            sessionId: this.sessionId
+          }
+        })
+      });
+    } catch (err) {
+      // Silent fail - don't block validation on telemetry errors
+      console.warn('[FrameValidator] Telemetry send failed:', err);
+    }
   }
 }
