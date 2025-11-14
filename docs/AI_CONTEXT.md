@@ -66,7 +66,7 @@ Key components:
 ## Blocking
 - ~~Need async generation queue (decouple from HTTP latency)~~ ✅ **COMPLETE** (commit 8f8aaf7 + Job #1)
 - ~~Need stable FrameValidator gating with retries~~ ✅ **COMPLETE** (FrameValidator implemented with maxRetries=2)
-- Need telemetry on validator_rejections > 0.5% ⏳ **IN PROGRESS** (Job #2 spec ready)
+- ~~Need telemetry on validator_rejections > 0.5%~~ ✅ **COMPLETE** (Job #2 - telemetry integration + alerting)
 
 ## Next Sprint
 - Predictive pre-generation (85–90% pool coverage)
@@ -83,9 +83,10 @@ Key components:
 # 4. Completed Work (Summary)
 
 - FrameValidator implemented (session-scoped, maxRetries=2)
+- FrameValidator telemetry integration (validation events, rejection rate, >0.5% alerting)
 - DB indexes verified
 - Style→Audio wizard transition issue addressed
-- Telemetry: fresh_count_raw, fresh_count_after_filter
+- Telemetry: fresh_count_raw, fresh_count_after_filter, validator metrics
 - Regression QA suites drafted
 - Async worker separation complete (standalone + embedded modes)
 - POOL_CONFIG consolidated (single source of truth)
