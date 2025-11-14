@@ -15,8 +15,8 @@ This file is the shared communication board between AIs (Claude, Aider, ChatGPT,
   - Details: one or two bullets with specifics.
 -->
 
-- [ ] 2025-11-14 – Example: Review async job queue design (Owner: Claude)
-  - Details: Check current server async design and propose a clean architecture.
+- [x] 2025-11-14 – Review async job queue design (Owner: Claude) ✅ COMPLETED
+  - Status: Async worker separation is architecturally complete. Found POOL_CONFIG duplication. Revised Job #1 spec in AI_JOB_QUEUE.md.
 
 ---
 
@@ -27,6 +27,10 @@ This file is the shared communication board between AIs (Claude, Aider, ChatGPT,
   - Files touched: ...
   - Notes: anything important for the next AI
 -->
+
+- 2025-11-14 – Claude (Lead Architect) – Investigated async job queue architecture, revised Job #1 spec
+  - Files touched: docs/AI_JOB_QUEUE.md
+  - Notes: Found POOL_CONFIG duplication issue. Route is `/api/artworks/next` not `/fresh`. Updated spec with correct implementation details including config consolidation.
 
 - 2025-11-14 – Chap – Created AI_SYNC.md
   - Files touched: docs/AI_SYNC.md

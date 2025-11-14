@@ -1,5 +1,5 @@
 # AI Job Queue — Algorhythmic
-_Last updated: 2025-11-14_
+_Last updated: 2025-11-14 (Revised by Claude)_
 
 This document tracks pending work items for the AI development team. Each job is assigned to a specific AI agent as defined in `AI_TEAM_BOOTSTRAP.txt`.
 
@@ -23,94 +23,117 @@ Spec:
 ### Job #1
 **Owner:** ChatGPT+Aider
 **Status:** pending
-**Title:** Wire POOL_CONFIG into the /api/artworks/fresh route
+**Title:** Consolidate POOL_CONFIG and eliminate magic numbers in routes
+
+**Context:**
+- `server/config/pool.config.ts` was created in async worker commit (8f8aaf7) but never used
+- `server/pool-monitor.ts:51` has its own local POOL_CONFIG with different parameters
+- `server/routes.ts:2136` has magic number: `combinedArtworks.length < 5`
+- Route is `/api/artworks/next` (not `/api/artworks/fresh`)
+- No job enqueueing happens in routes.ts (only sets `needsGeneration` flag)
+
+**Architectural Goal:**
+Create single source of truth for pool configuration to prevent drift.
 
 **Spec:**
 
-1. **Create `server/config/pool.config.ts`:**
+1. **Consolidate POOL_CONFIG in `server/config/pool.config.ts`:**
+
+   Merge both configs into one comprehensive object:
    ```typescript
    /**
-    * Pool management constants
-    * Tunable parameters for async generation triggers
+    * Pool management constants - Single source of truth
+    * Tunable parameters for async generation triggers and monitoring
     */
 
    export const POOL_CONFIG = {
-     // Minimum unseen artworks before triggering generation
-     MIN_POOL_THRESHOLD: 5,
+     // Route-level thresholds (for /api/artworks/next)
+     MIN_POOL_THRESHOLD: 5,        // Trigger needsGeneration flag
+     JOBS_PER_TRIGGER: 4,           // Jobs to enqueue when threshold hit
 
-     // Number of jobs to enqueue when threshold is hit
-     JOBS_PER_TRIGGER: 4,
+     // Monitor-level thresholds (for PoolMonitor)
+     PRE_GENERATION_THRESHOLD: 0.85,  // 85% coverage triggers pre-gen
+     CRITICAL_THRESHOLD: 0.95,        // 95% coverage = critical alert
+     TARGET_POOL_SIZE: 10,            // Target frames per session
+     MIN_POOL_SIZE: 2,                // Minimum frames (MorphEngine needs 2)
+     PRE_GEN_BATCH_SIZE: 5,           // Frames per pre-gen batch
 
-     // Pre-generation config (if not already defined elsewhere)
-     TARGET_POOL_COVERAGE: 0.85, // 85% coverage
+     // Timing and limits (from pool-monitor.ts)
+     MONITOR_INTERVAL_MS: 30000,           // 30s monitoring interval
+     CONSUMPTION_WINDOW_MS: 300000,        // 5min consumption tracking window
+     SESSION_INACTIVE_MS: 600000,          // 10min session timeout
+     PRE_GEN_COOLDOWN_MS: 60000,           // 1min cooldown between pre-gen
+     MAX_PRE_GEN_PER_HOUR: 50,             // Rate limiting
+     COST_PER_GENERATION: 0.02,            // USD per generation
+     MAX_HOURLY_SPEND: 1.00,               // USD spending cap
+
+     // Coverage and targeting
+     TARGET_POOL_COVERAGE: 0.85,      // 85% target coverage
    } as const;
    ```
 
-2. **Find the route that handles `/api/artworks/fresh`:**
-   - Location: `server/routes.ts` or similar route file
-   - Search for the endpoint that:
-     - Checks pool/unseen artwork count
-     - Enqueues generation jobs when pool is low
-     - Returns frames to the client
+2. **Update `server/pool-monitor.ts`:**
 
-3. **Import POOL_CONFIG at the top of the route file:**
+   a. Remove local POOL_CONFIG (lines 51-68 approx)
+
+   b. Add import at top:
    ```typescript
    import { POOL_CONFIG } from './config/pool.config';
    ```
 
-4. **Replace magic numbers with POOL_CONFIG constants:**
-   - Find where the route checks if pool is below threshold
-   - Replace hardcoded threshold (if any) with: `POOL_CONFIG.MIN_POOL_THRESHOLD`
-   - Replace hardcoded job count (if any) with: `POOL_CONFIG.JOBS_PER_TRIGGER`
+   c. Verify all POOL_CONFIG references still work (no name changes needed)
 
-   Example pattern to look for and update:
+3. **Update `server/routes.ts`:**
+
+   a. Add import at top (after other imports):
    ```typescript
-   // BEFORE (if using magic numbers):
-   if (unseenCount < 5) {
-     await queueService.enqueuePreGenerationJob(userId, sessionId, styles, 4, 'reason');
-   }
+   import { POOL_CONFIG } from './config/pool.config';
+   ```
+
+   b. Replace line 2136:
+   ```typescript
+   // BEFORE:
+   const needsGeneration = combinedArtworks.length < 5;
 
    // AFTER:
-   if (unseenCount < POOL_CONFIG.MIN_POOL_THRESHOLD) {
-     await queueService.enqueuePreGenerationJob(
-       userId,
-       sessionId,
-       styles,
-       POOL_CONFIG.JOBS_PER_TRIGGER,
-       'Fresh endpoint pool replenishment'
-     );
-   }
+   const needsGeneration = combinedArtworks.length < POOL_CONFIG.MIN_POOL_THRESHOLD;
    ```
 
-5. **Add logging for visibility:**
+   c. Optional: Add logging before line 2136:
    ```typescript
-   console.log(`[Fresh] Pool status: ${unseenCount}/${POOL_CONFIG.MIN_POOL_THRESHOLD} unseen frames`);
-
-   if (unseenCount < POOL_CONFIG.MIN_POOL_THRESHOLD) {
-     console.log(`[Fresh] Enqueueing ${POOL_CONFIG.JOBS_PER_TRIGGER} generation jobs`);
-     // ... enqueue logic
-   }
+   console.log(`[ArtworksNext] Pool check: ${combinedArtworks.length}/${POOL_CONFIG.MIN_POOL_THRESHOLD} frames`);
    ```
 
-6. **Verify the route returns immediately:**
-   - Ensure the route does NOT await generation completion
-   - Jobs should be enqueued asynchronously
-   - Response should return available frames or fallback frames with <1s latency
+4. **Verify no other magic numbers:**
 
-7. **Test locally:**
-   - Start server: `npm run dev`
-   - Call `/api/artworks/fresh` with a session that has low pool
-   - Verify console logs show pool threshold check
-   - Verify jobs are enqueued (check telemetry/logs)
-   - Verify route responds quickly (<1s)
+   Search for other hardcoded thresholds:
+   ```bash
+   grep -n "< 5\|< 2\|< 10" server/routes.ts server/pool-monitor.ts
+   ```
+
+   Replace any found with appropriate POOL_CONFIG constants.
+
+5. **Test changes:**
+
+   a. Start server: `npm run dev`
+
+   b. Check console for POOL_CONFIG import errors
+
+   c. Call `/api/artworks/next?sessionId=test-session&limit=20`
+
+   d. Verify response includes `needsGeneration` flag
+
+   e. Check logs show pool status with threshold
 
 **Acceptance Criteria:**
-- [ ] `server/config/pool.config.ts` exists with MIN_POOL_THRESHOLD=5 and JOBS_PER_TRIGGER=4
-- [ ] Route imports POOL_CONFIG
-- [ ] No magic numbers for pool threshold or job count in route
-- [ ] Logging shows pool status on each request
-- [ ] Route responds <1s even when pool is empty
-- [ ] Jobs are successfully enqueued when threshold is hit
+- [x] `server/config/pool.config.ts` exists (already done)
+- [ ] POOL_CONFIG is comprehensive (includes all params from both sources)
+- [ ] `pool-monitor.ts` imports centralized POOL_CONFIG
+- [ ] `pool-monitor.ts` has no local POOL_CONFIG definition
+- [ ] `routes.ts` imports POOL_CONFIG
+- [ ] `routes.ts:2136` uses `POOL_CONFIG.MIN_POOL_THRESHOLD` (no magic number)
+- [ ] Server starts without import errors
+- [ ] `/api/artworks/next` responds correctly with needsGeneration flag
 
 ---
 
