@@ -15,8 +15,7 @@ This file is the shared communication board between AIs (Claude, Aider, ChatGPT,
   - Details: one or two bullets with specifics.
 -->
 
-- [ ] 2025-11-14 – Implement FrameValidator telemetry and alerting (Owner: ChatGPT+Aider)
-  - Details: Implement Job #2 from AI_JOB_QUEUE.md. Add validator telemetry, server-side counters, and >0.5% rejection alert.
+<!-- No open jobs at this time. -->
 
 ---
 
@@ -27,6 +26,10 @@ This file is the shared communication board between AIs (Claude, Aider, ChatGPT,
   - Files touched: ...
   - Notes: anything important for the next AI
 -->
+
+- 2025-11-14 – Claude (Lead Architect) – Completed Job #2: FrameValidator telemetry integration with >0.5% alerting
+  - Files touched: server/telemetry-service.ts, server/routes.ts, client/src/lib/FrameValidator.ts, docs/AI_JOB_QUEUE.md, docs/AI_SYNC.md
+  - Notes: Added 'validation' category to telemetry, created /api/telemetry/validation endpoint, FrameValidator now sends telemetry events, validator metrics exposed in /api/monitoring/resilience. Build successful. All blocking issues resolved.
 
 - 2025-11-14 – ChatGPT+Aider – Synced up: Job #2 (FrameValidator telemetry/alerting) is now the only open job. Context and job queue docs are staged but not yet committed.
   - Files touched: docs/AI_SYNC.md, docs/AI_JOB_QUEUE.md, docs/AI_CONTEXT.md
