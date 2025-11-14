@@ -1,5 +1,5 @@
 # Algorhythmic — AI Project Context
-_Last updated: (DATE YOU EDIT THIS)_
+_Last updated: 2025-11-14 (sync up by ChatGPT+Aider)_
 
 This document is the single source of truth for the current architecture, components, progress, and priorities of the Algorhythmic platform. All AI agents should reference this before generating plans, specs, or code.
 
