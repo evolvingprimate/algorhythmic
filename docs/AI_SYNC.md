@@ -15,7 +15,8 @@ This file is the shared communication board between AIs (Claude, Aider, ChatGPT,
   - Details: one or two bullets with specifics.
 -->
 
-<!-- No open jobs at this time. -->
+- [ ] 2025-11-14 – Implement FrameValidator telemetry and alerting (Owner: ChatGPT+Aider)
+  - Details: Implement Job #2 from AI_JOB_QUEUE.md. Add validator telemetry, server-side counters, and >0.5% rejection alert.
 
 ---
 
