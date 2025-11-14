@@ -15,8 +15,7 @@ This file is the shared communication board between AIs (Claude, Aider, ChatGPT,
   - Details: one or two bullets with specifics.
 -->
 
-- [x] 2025-11-14 – Review async job queue design (Owner: Claude) ✅ COMPLETED
-  - Status: Async worker separation is architecturally complete. Found POOL_CONFIG duplication. Revised Job #1 spec in AI_JOB_QUEUE.md.
+<!-- No open jobs at this time. -->
 
 ---
 
@@ -27,6 +26,10 @@ This file is the shared communication board between AIs (Claude, Aider, ChatGPT,
   - Files touched: ...
   - Notes: anything important for the next AI
 -->
+
+- 2025-11-14 – ChatGPT+Aider – Completed Job #1: Centralized POOL_CONFIG and replaced magic numbers in routes/pool-monitor
+  - Files touched: server/config/pool.config.ts, server/pool-monitor.ts, server/routes.ts, docs/AI_JOB_QUEUE.md, docs/AI_SYNC.md
+  - Notes: All pool config is now in one file, all references updated, magic numbers removed, job spec marked complete.
 
 - 2025-11-14 – Claude (Lead Architect) – Investigated async job queue architecture, revised Job #1 spec
   - Files touched: docs/AI_JOB_QUEUE.md
