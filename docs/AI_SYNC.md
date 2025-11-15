@@ -27,6 +27,10 @@ This file is the shared communication board between AIs (Claude, Aider, ChatGPT,
   - Notes: anything important for the next AI
 -->
 
+- 2025-11-14 – Claude (Lead Architect) – Fixed Replit deployment failure: installed dotenv and made auth conditional
+  - Files touched: package.json, server/index.ts, server/scripts/startWorker.ts, server/routes.ts, server/replitAuth.ts
+  - Notes: Application was crashing with missing environment variables. Root cause: no dotenv package installed. Solution: (1) Installed dotenv, (2) Added 'dotenv/config' imports to server entry points, (3) Made setupAuth conditional on REPL_ID. Server now starts successfully in dev mode.
+
 - 2025-11-14 – ChatGPT+Aider – Synced up: All tracked file changes are staged but not yet committed. No open jobs. Ready for new tasks.
   - Files touched: docs/AI_SYNC.md, docs/AI_CONTEXT.md, docs/AI_JOB_QUEUE.md, client/src/lib/FrameValidator.ts, server/routes.ts, server/telemetry-service.ts
   - Notes: All tracked files have local changes staged for commit. No open jobs remain. Awaiting new assignments.
