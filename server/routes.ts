@@ -95,8 +95,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     next();
   });
 
-  // Setup Replit Auth
-  await setupAuth(app);
+  // Setup Replit Auth (only if REPL_ID is configured)
+  if (process.env.REPL_ID) {
+    await setupAuth(app);
+    console.log('[Auth] Replit Auth configured');
+  } else {
+    console.log('[Auth] Replit Auth skipped - no REPL_ID configured (dev mode)');
+  }
 
   // Initialize health monitor
   const healthMonitor = initializeHealthMonitor(storage);

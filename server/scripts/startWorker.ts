@@ -1,3 +1,6 @@
+// Load environment variables from .env file (must be first)
+import 'dotenv/config';
+
 import { queueService } from '../bootstrap';
 
 async function main() {
